@@ -7,6 +7,7 @@ DB_DIR = ROOT_DIR / "Database"
 CANDLE_DIR = DB_DIR / "Candle_Data"
 LIQ_DIR = DB_DIR / "Liquidation_Data"
 LEVELS_DIR = LIQ_DIR / "Levels"
+KEY_LEVELS_DIR = LIQ_DIR / "Key_Levels"
 SIGNALS_PATH = DB_DIR / "coinglass_aggregated_futures_signals.parquet"
 SNAPSHOTS_PATH = LIQ_DIR / "liquidation_snapshots.parquet"
 
@@ -100,6 +101,26 @@ if level_files:
     print(f"\nTotal Discrete Levels across all assets: {total_levels:,}")
 else:
     print("No asset-partitioned level files found in Database/Liquidation_Data/Levels/")
+
+# -------------------------------------------------------------------
+# 5. Asset-Partitioned Key Liquidation Levels (Ranked Strike Barriers)
+# -------------------------------------------------------------------
+print("\n5. KEY LIQUIDATION LEVELS (ASSET PARTITIONED)")
+print("---------------------------------------------------------------------")
+key_level_files = sorted(list(KEY_LEVELS_DIR.glob("*.parquet")))
+if key_level_files:
+    total_key_levels = 0
+    for kf in key_level_files:
+        kdf = pd.read_parquet(kf)
+        total_key_levels += len(kdf)
+        exs = kdf['exchange'].value_counts().to_dict() if 'exchange' in kdf.columns else {}
+        sides = kdf['side'].value_counts().to_dict() if 'side' in kdf.columns else {}
+        levs = kdf['leverage_tier'].value_counts().to_dict() if 'leverage_tier' in kdf.columns else {}
+        tfs = kdf['lookback_tf'].value_counts().to_dict() if 'lookback_tf' in kdf.columns else {}
+        print(f"[{kf.stem:16s}] {len(kdf):,} barriers | Ex: {exs} | Sides: {sides} | Lev: {levs} | TFs: {tfs}")
+    print(f"\nTotal Key Strike Barriers across all assets: {total_key_levels:,}")
+else:
+    print("No asset-partitioned key level files found in Database/Liquidation_Data/Key_Levels/")
 
 print("\n=====================================================================")
 print("                   AUDIT COMPLETED SUCCESSFULLY                      ")

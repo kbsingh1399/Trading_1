@@ -48,6 +48,7 @@ DB_DIR = ROOT_DIR / "Database"
 CANDLE_DIR = DB_DIR / "Candle_Data"
 LIQ_DIR = DB_DIR / "Liquidation_Data"
 LEVELS_DIR = LIQ_DIR / "Levels"
+KEY_LEVELS_DIR = LIQ_DIR / "Key_Levels"
 
 OUTPUT_SIGNALS_PARQUET = DB_DIR / "coinglass_aggregated_futures_signals.parquet"
 SNAPSHOTS_PARQUET = LIQ_DIR / "liquidation_snapshots.parquet"
@@ -67,11 +68,11 @@ logging.basicConfig(
 logger = logging.getLogger("DataCollector")
 
 
-def load_capability_registry() -> tuple[dict, list, list, list]:
+def load_capability_registry() -> tuple[dict, list, list, list, dict]:
     """Load the verified mutual asset capability registry."""
     if not REGISTRY_FILE.exists():
         logger.error(f"Capability registry missing at: {REGISTRY_FILE}")
-        return {}, [], [], []
+        return {}, [], [], [], {}
 
     with open(REGISTRY_FILE, "r", encoding="utf-8") as f:
         reg = json.load(f)
@@ -80,10 +81,12 @@ def load_capability_registry() -> tuple[dict, list, list, list]:
     fp_symbols = []
     liq_level_symbols = []
     liq_snap_symbols = []
+    liq_exchanges_map = {}
 
     for category, assets in reg.items():
         for sym, meta in assets.items():
             mt5_map[sym] = meta["mt5"]
+            liq_exchanges_map[sym] = meta.get("liq_exchanges", ["Binance"])
             if meta.get("footprint", False):
                 fp_symbols.append(sym)
             if meta.get("liq_levels", False):
@@ -91,10 +94,10 @@ def load_capability_registry() -> tuple[dict, list, list, list]:
             if meta.get("liq_snapshots", False):
                 liq_snap_symbols.append(sym)
 
-    return mt5_map, fp_symbols, liq_level_symbols, liq_snap_symbols
+    return mt5_map, fp_symbols, liq_level_symbols, liq_snap_symbols, liq_exchanges_map
 
 
-MT5_ASSET_MAP, FP_TARGET_SYMBOLS, LIQ_LEVEL_SYMBOLS, LIQ_SNAP_SYMBOLS = load_capability_registry()
+MT5_ASSET_MAP, FP_TARGET_SYMBOLS, LIQ_LEVEL_SYMBOLS, LIQ_SNAP_SYMBOLS, LIQ_EXCHANGES_MAP = load_capability_registry()
 
 
 def get_current_ip() -> str:
@@ -472,7 +475,7 @@ def extract_footprint_chunk(page, symbols_chunk: list) -> dict:
 
 
 def extract_single_liquidation_state(page, symbol: str, mt5_symbol: str, tf_label: str) -> dict:
-    """Extract macro snapshot and discrete strike levels for a specific timeframe."""
+    """Extract macro snapshot, discrete strike levels, and ranked key barriers for a specific timeframe."""
     js_extractor = """
     ({ symbol, mt5Symbol, tfLabel }) => {
         const nextEl = document.getElementById('__next');
@@ -535,6 +538,43 @@ def extract_single_liquidation_state(page, symbol: str, mt5_symbol: str, tf_labe
             nfbBias = nfbMatch[3].trim();
         }
 
+        // Strength by distance
+        const sbdMatch = bodyText.match(/Strength by distance[\\s\\S]*?Shorts\\s*([\\d,]+)[\\s\\S]*?Longs\\s*([\\d,]+)[\\s\\S]*?0[–-]1%\\s*([\\d,]+)\\s*[·•]\\s*([\\d,]+)[\\s\\S]*?1[–-]2%\\s*([\\d,]+)\\s*[·•]\\s*([\\d,]+)[\\s\\S]*?2[–-]3%\\s*([\\d,]+)\\s*[·•]\\s*([\\d,]+)[\\s\\S]*?3[–-]5%\\s*([\\d,]+)\\s*[·•]\\s*([\\d,]+)[\\s\\S]*?5[–-]10%\\s*([\\d,]+)\\s*[·•]\\s*([\\d,]+)/i);
+        let sbd = {};
+        if (sbdMatch) {
+            sbd = {
+                sbd_shorts_tot: parseFloat(sbdMatch[1].replace(/,/g, '')),
+                sbd_longs_tot: parseFloat(sbdMatch[2].replace(/,/g, '')),
+                sbd_0_1_short: parseFloat(sbdMatch[3].replace(/,/g, '')),
+                sbd_0_1_long: parseFloat(sbdMatch[4].replace(/,/g, '')),
+                sbd_1_2_short: parseFloat(sbdMatch[5].replace(/,/g, '')),
+                sbd_1_2_long: parseFloat(sbdMatch[6].replace(/,/g, '')),
+                sbd_2_3_short: parseFloat(sbdMatch[7].replace(/,/g, '')),
+                sbd_2_3_long: parseFloat(sbdMatch[8].replace(/,/g, '')),
+                sbd_3_5_short: parseFloat(sbdMatch[9].replace(/,/g, '')),
+                sbd_3_5_long: parseFloat(sbdMatch[10].replace(/,/g, '')),
+                sbd_5_10_short: parseFloat(sbdMatch[11].replace(/,/g, '')),
+                sbd_5_10_long: parseFloat(sbdMatch[12].replace(/,/g, ''))
+            };
+        }
+
+        // By leverage tier
+        const levMatch = bodyText.match(/By leverage tier[\\s\\S]*?Shorts\\s*([\\d,]+)[\\s\\S]*?Longs\\s*([\\d,]+)[\\s\\S]*?Total\\s*([\\d,]+)[\\s\\S]*?High leverage\\s*([\\d,]+)\\s*[·•]\\s*([\\d,]+)[\\s\\S]*?Mid leverage\\s*([\\d,]+)\\s*[·•]\\s*([\\d,]+)[\\s\\S]*?Low leverage\\s*([\\d,]+)\\s*[·•]\\s*([\\d,]+)/i);
+        let levTotals = {};
+        if (levMatch) {
+            levTotals = {
+                lev_shorts_tot: parseFloat(levMatch[1].replace(/,/g, '')),
+                lev_longs_tot: parseFloat(levMatch[2].replace(/,/g, '')),
+                lev_tot: parseFloat(levMatch[3].replace(/,/g, '')),
+                high_lev_short: parseFloat(levMatch[4].replace(/,/g, '')),
+                high_lev_long: parseFloat(levMatch[5].replace(/,/g, '')),
+                mid_lev_short: parseFloat(levMatch[6].replace(/,/g, '')),
+                mid_lev_long: parseFloat(levMatch[7].replace(/,/g, '')),
+                low_lev_short: parseFloat(levMatch[8].replace(/,/g, '')),
+                low_lev_long: parseFloat(levMatch[9].replace(/,/g, ''))
+            };
+        }
+
         // Granularity volume thresholds
         const granThr = m.GRAN_THR || [0, 1000, 2500];
 
@@ -576,6 +616,32 @@ def extract_single_liquidation_state(page, symbol: str, mt5_symbol: str, tf_labe
             }
         }
 
+        // Key Liquidation Levels Table (Parsed directly from the table widget)
+        const keyLevels = [];
+        const allDivs = Array.from(document.querySelectorAll('div'));
+        const keyDiv = allDivs.find(d => (d.innerText || '').startsWith('Key liquidation levels') && (d.innerText || '').includes('Within'));
+        if (keyDiv) {
+            const lines = keyDiv.innerText.split('\\n').map(l => l.trim()).filter(Boolean);
+            let currentSideRank = { short: 1, long: 1 };
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+                const parts = line.split('\\t').map(x => x.trim()).filter(Boolean);
+                if (parts.length >= 5 && (parts[0] === 'Short' || parts[0] === 'Long')) {
+                    const s = parts[0].toLowerCase();
+                    keyLevels.push({
+                        side: s,
+                        rank: currentSideRank[s]++,
+                        price: parseFloat(parts[1].replace(/,/g, '')),
+                        distance_pct: parseFloat(parts[2].replace('%', '').replace('+', '')),
+                        leverage_tier: parts[3].toLowerCase().replace(' leverage', ''),
+                        strength: parseFloat(parts[4]),
+                        range_filter: '±8%',
+                        last_price: curPrice
+                    });
+                }
+            }
+        }
+
         const snapshot = {
             exchange: p.ex || 'Binance',
             symbol: symbol,
@@ -596,26 +662,26 @@ def extract_single_liquidation_state(page, symbol: str, mt5_symbol: str, tf_labe
             near_field_long_pct: nfbLongPct,
             near_field_short_pct: nfbShortPct,
             near_field_bias: nfbBias,
-            active_levels_count: activeLevels.length
+            ...sbd,
+            ...levTotals,
+            active_levels_count: activeLevels.length,
+            key_levels_count: keyLevels.length
         };
 
-        return { snapshot, levels: activeLevels };
+        return { snapshot, levels: activeLevels, key_levels: keyLevels };
     }
     """
     return page.evaluate(js_extractor, {"symbol": symbol, "mt5Symbol": mt5_symbol, "tfLabel": tf_label})
 
 
-def harvest_asset_liquidations(page, symbol: str, mt5_symbol: str, is_deep_level: bool = True) -> tuple[list, list]:
-    """Harvest liquidation snapshots and multi-timeframe discrete levels for an asset."""
+def harvest_asset_liquidations(page, symbol: str, mt5_symbol: str, target_exchanges: list = None, is_deep_level: bool = True) -> tuple[list, list, list]:
+    """Harvest liquidation snapshots, multi-timeframe discrete levels, and key levels for an asset across exchanges."""
     snapshots = []
     levels = []
+    key_levels = []
 
-    # Auto-healing: click Retry if present
-    retry_btn = page.locator("button:has-text('Retry')")
-    if retry_btn.count() > 0:
-        logger.info(f"[{symbol}] Retry button detected. Clicking to heal...")
-        retry_btn.click()
-        time.sleep(2)
+    if not target_exchanges:
+        target_exchanges = ["Binance"]
 
     timeframes = [
         {"label": "30D-15m", "kw": "30D"},
@@ -623,29 +689,69 @@ def harvest_asset_liquidations(page, symbol: str, mt5_symbol: str, is_deep_level
         {"label": "3D-1m", "kw": "3D"}
     ] if is_deep_level else [{"label": "30D-15m", "kw": "30D"}]
 
-    for tf in timeframes:
-        # Click timeframe tab
+    for ex in target_exchanges:
+        logger.info(f"[{symbol}] Switching exchange to {ex}...")
+        # Set exchange in localStorage and navigate
         page.evaluate(f"""
             () => {{
-                const allLi = Array.from(document.querySelectorAll('li'));
-                const el = allLi.find(x => (x.innerText || '').includes('{tf['kw']}'));
-                if (el) el.click();
+                const current = JSON.parse(localStorage.getItem('liqLevelsPrefs') || '{{}}');
+                current.ex = '{ex}';
+                current.sym = '{symbol}USDT';
+                localStorage.setItem('liqLevelsPrefs', JSON.stringify(current));
             }}
         """)
-        time.sleep(1.2)
+        try:
+            page.goto(f"https://www.coinglass.com/liquidation-levels?symbol={symbol}", timeout=15000)
+            time.sleep(2.5)
+        except Exception as e:
+            logger.warning(f"[{symbol}] Navigation error on exchange {ex}: {e}")
 
-        extracted = extract_single_liquidation_state(page, symbol, mt5_symbol, tf["label"])
-        if extracted and extracted.get("snapshot"):
-            snap = extracted["snapshot"]
-            snapshots.append(snap)
-            if is_deep_level:
-                for lvl in extracted.get("levels", []):
-                    lvl["symbol"] = symbol
-                    lvl["exchange"] = snap["exchange"]
-                    lvl["lookback_tf"] = tf["label"]
-                    levels.append(lvl)
+        # Auto-healing: click Retry if present
+        retry_btn = page.locator("button:has-text('Retry')")
+        if retry_btn.count() > 0:
+            logger.info(f"[{symbol} - {ex}] Retry button detected. Clicking to heal...")
+            try:
+                retry_btn.click()
+                time.sleep(2)
+            except Exception:
+                pass
 
-    return snapshots, levels
+        for tf in timeframes:
+            # Click timeframe tab
+            try:
+                page.evaluate(f"""
+                    () => {{
+                        const allLi = Array.from(document.querySelectorAll('li'));
+                        const el = allLi.find(x => (x.innerText || '').includes('{tf['kw']}'));
+                        if (el) el.click();
+                    }}
+                """)
+                time.sleep(1.2)
+            except Exception as e:
+                logger.warning(f"[{symbol} - {ex}] Failed to click TF tab {tf['kw']}: {e}")
+
+            extracted = extract_single_liquidation_state(page, symbol, mt5_symbol, tf["label"])
+            if extracted and extracted.get("snapshot"):
+                snap = extracted["snapshot"]
+                snapshots.append(snap)
+                
+                # Discrete strike levels
+                if is_deep_level:
+                    for lvl in extracted.get("levels", []):
+                        lvl["symbol"] = symbol
+                        lvl["exchange"] = snap["exchange"]
+                        lvl["lookback_tf"] = tf["label"]
+                        levels.append(lvl)
+
+                # Key liquidation levels table
+                for kl in extracted.get("key_levels", []):
+                    kl["symbol"] = symbol
+                    kl["mt5_symbol"] = mt5_symbol
+                    kl["exchange"] = snap["exchange"]
+                    kl["lookback_tf"] = tf["label"]
+                    key_levels.append(kl)
+
+    return snapshots, levels, key_levels
 
 
 def upsert_liquidation_snapshots(snapshots: list):
@@ -706,6 +812,42 @@ def upsert_asset_levels(symbol: str, levels: list):
     logger.info(f"[{symbol}] Saved {parquet_path.name}: {len(combined_df)} discrete strike levels")
 
 
+def upsert_asset_key_levels(symbol: str, key_levels: list):
+    """Persist asset-partitioned key liquidation levels (ranked barriers) to Parquet."""
+    if not key_levels:
+        return
+
+    KEY_LEVELS_DIR.mkdir(parents=True, exist_ok=True)
+    parquet_path = KEY_LEVELS_DIR / f"{symbol}_key_levels.parquet"
+    now_utc = datetime.now(timezone.utc).isoformat()
+
+    for kl in key_levels:
+        kl["snapshot_time_utc"] = now_utc
+        kl["dumped_at_utc"] = now_utc
+
+    new_df = pd.DataFrame(key_levels)
+
+    if parquet_path.exists():
+        try:
+            existing_df = pd.read_parquet(parquet_path)
+            combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+            combined_df = combined_df.drop_duplicates(
+                subset=["snapshot_time_utc", "exchange", "lookback_tf", "side", "rank", "price"],
+                keep="last"
+            )
+        except Exception as e:
+            logger.warning(f"[{symbol}] Failed to merge existing key levels ({e}). Writing new data.")
+            combined_df = new_df
+    else:
+        combined_df = new_df
+
+    if "rank" in combined_df.columns:
+        combined_df = combined_df.sort_values(by=["lookback_tf", "side", "rank"]).reset_index(drop=True)
+
+    combined_df.to_parquet(parquet_path, index=False, engine="pyarrow")
+    logger.info(f"[{symbol}] Saved {parquet_path.name}: {len(combined_df)} key strike barriers")
+
+
 def run_cycle(context) -> dict:
     """Execute a single full collection cycle across footprint and liquidation streams."""
     # -----------------------------------------------------------------------
@@ -734,31 +876,35 @@ def run_cycle(context) -> dict:
     fp_page.evaluate("() => window.__cg_term.pickPair('BTC', 'agg-perp')")
 
     # -----------------------------------------------------------------------
-    # Step 2: Liquidation Intelligence (Snapshots & Discrete Strike Levels)
+    # Step 2: Liquidation Intelligence (Snapshots, Discrete Levels, Key Levels)
     # -----------------------------------------------------------------------
     liq_page = get_liquidation_tab(context)
     all_snapshots = []
     total_levels_count = 0
+    total_key_levels_count = 0
 
     # 2A. Deep Strike Levels (Multi-TF 3D/7D/30D) for top priority assets
     priority_level_assets = [s for s in ["BTC", "ETH", "SOL", "XRP", "XAU"] if s in LIQ_LEVEL_SYMBOLS]
     for sym in priority_level_assets:
-        logger.info(f"[Liquidations] Harvesting multi-TF levels for {sym}...")
-        liq_page.goto(f"https://www.coinglass.com/liquidation-levels?symbol={sym}", timeout=15000)
-        time.sleep(2)
-        snaps, levels = harvest_asset_liquidations(liq_page, sym, MT5_ASSET_MAP.get(sym, ""), is_deep_level=True)
+        exs = LIQ_EXCHANGES_MAP.get(sym, ["Binance", "Bybit"])
+        logger.info(f"[Liquidations] Harvesting multi-TF levels & key barriers for {sym} across {exs}...")
+        snaps, levels, key_lvls = harvest_asset_liquidations(liq_page, sym, MT5_ASSET_MAP.get(sym, ""), target_exchanges=exs, is_deep_level=True)
         all_snapshots.extend(snaps)
         upsert_asset_levels(sym, levels)
+        upsert_asset_key_levels(sym, key_lvls)
         total_levels_count += len(levels)
+        total_key_levels_count += len(key_lvls)
 
     # 2B. Macro Liquidation Snapshots for Forex & Secondary Assets
     macro_only_assets = [s for s in LIQ_SNAP_SYMBOLS if s not in priority_level_assets]
     for sym in macro_only_assets[:4]:  # Harvest top macro assets per cycle
-        logger.info(f"[Liquidations] Harvesting macro snapshot for {sym}...")
-        liq_page.goto(f"https://www.coinglass.com/liquidation-levels?symbol={sym}", timeout=15000)
-        time.sleep(2)
-        snaps, _ = harvest_asset_liquidations(liq_page, sym, MT5_ASSET_MAP.get(sym, ""), is_deep_level=False)
+        exs = LIQ_EXCHANGES_MAP.get(sym, ["Bybit"])
+        logger.info(f"[Liquidations] Harvesting macro snapshot for {sym} ({exs})...")
+        snaps, _, key_lvls = harvest_asset_liquidations(liq_page, sym, MT5_ASSET_MAP.get(sym, ""), target_exchanges=exs, is_deep_level=False)
         all_snapshots.extend(snaps)
+        if key_lvls:
+            upsert_asset_key_levels(sym, key_lvls)
+            total_key_levels_count += len(key_lvls)
 
     upsert_liquidation_snapshots(all_snapshots)
 
@@ -766,7 +912,8 @@ def run_cycle(context) -> dict:
         "signals_count": len(all_signals),
         "candles_updated": len(FP_TARGET_SYMBOLS),
         "liquidation_snapshots_count": len(all_snapshots),
-        "liquidation_levels_count": total_levels_count
+        "liquidation_levels_count": total_levels_count,
+        "key_levels_count": total_key_levels_count
     }
 
 
@@ -777,6 +924,7 @@ def run_continuous_collector():
     CANDLE_DIR.mkdir(parents=True, exist_ok=True)
     LIQ_DIR.mkdir(parents=True, exist_ok=True)
     LEVELS_DIR.mkdir(parents=True, exist_ok=True)
+    KEY_LEVELS_DIR.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as p:
         try:
