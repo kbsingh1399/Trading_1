@@ -1,0 +1,19 @@
+# Windows system files
+desktop.ini
+Thumbs.db
+$RECYCLE.BIN/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+.pytest_cache/
+
+# Environment and editor files
+.env
+.venv/
+env/
+venv/
+.vscode/
+.idea/
