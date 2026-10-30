@@ -1,0 +1,45 @@
+{
+  "Cryptos": {
+    "BTC": { "mt5": "BTCUSD.pi", "desc": "Bitcoin / US Dollar", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "ETH": { "mt5": "ETHUSD.pi", "desc": "Ethereum / US Dollar", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "SOL": { "mt5": "SOLUSD.p", "desc": "Solana / US Dollar", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "XRP": { "mt5": "XRPUSD.pi", "desc": "Ripple / US Dollar", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "DOGE": { "mt5": "DOGUSD.p", "desc": "Dogecoin / US Dollar", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "BNB": { "mt5": "BNBUSD.p", "desc": "Binance Coin", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "ADA": { "mt5": "ADAUSD.p", "desc": "Cardano / USD", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "LINK": { "mt5": "LNKUSD.p", "desc": "Chainlink / USD", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "AVAX": { "mt5": "AVXUSD.p", "desc": "Avalanche / USD", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "LTC": { "mt5": "LTCUSD.pi", "desc": "Litecoin / USD", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "DOT": { "mt5": "DOTUSD.pi", "desc": "Polkadot / USD", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "BCH": { "mt5": "BCHUSD.p", "desc": "Bitcoin Cash / USD", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "NEAR": { "mt5": "NERUSD.p", "desc": "NEAR Protocol / USD", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "TRX": { "mt5": "TRXUSD.p", "desc": "TRON / USD", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "UNI": { "mt5": "UNIUSD.p", "desc": "Uniswap / USD", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "AAVE": { "mt5": "AVEUSD.p", "desc": "Aave / USD", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "FIL": { "mt5": "FILUSD.p", "desc": "Filecoin / USD", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "CRV": { "mt5": "CRVUSD.p", "desc": "Curve DAO / USD", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "ATOM": { "mt5": "ATMUSD.p", "desc": "Cosmos / USD", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "ALGO": { "mt5": "ALGUSD.p", "desc": "Algorand / USD", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "AXS": { "mt5": "AXSUSD.p", "desc": "Axie Infinity / USD", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "BAT": { "mt5": "BATUSD.p", "desc": "Basic Attention Token", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "CHZ": { "mt5": "CHZUSD.p", "desc": "Chiliz / USD", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "AR": { "mt5": "ARWUSD.p", "desc": "Arweave / USD", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "COMP": { "mt5": "COMUSD.p", "desc": "Compound / USD", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "1INCH": { "mt5": "INCUSD.p", "desc": "1inch Network / USD", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "SUSHI": { "mt5": "XSIUSD.p", "desc": "SushiSwap / USD", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "SNX": { "mt5": "SNXUSD.p", "desc": "Synthetix / USD", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "NEO": { "mt5": "NEOUSD.p", "desc": "Neo / USD", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "ZEC": { "mt5": "ZECUSD.p", "desc": "Zcash / USD", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "HBAR": { "mt5": "BARUSD.p", "desc": "Hedera / USD", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] }
+  },
+  "Metals_Commodities": {
+    "XAU": { "mt5": "XAUUSD.pi", "desc": "Gold / US Dollar", "footprint": true, "liq_snapshots": true, "liq_levels": true, "liq_exchanges": ["Binance", "Bybit"] },
+    "XAG": { "mt5": "XAGUSD.pi", "desc": "Silver / US Dollar", "footprint": true, "liq_snapshots": true, "liq_levels": false, "liq_exchanges": ["Binance"] },
+    "COPPER": { "mt5": "COPPER.p", "desc": "Copper / US Dollar", "footprint": true, "liq_snapshots": true, "liq_levels": false, "liq_exchanges": ["Binance"] },
+    "GAS": { "mt5": "GAS.p", "desc": "Natural Gas / USD", "footprint": true, "liq_snapshots": false, "liq_levels": false, "liq_exchanges": [] }
+  },
+  "Forex": {
+    "EURUSD": { "mt5": "EURUSD.pi", "desc": "Euro / US Dollar", "footprint": false, "liq_snapshots": true, "liq_levels": false, "liq_exchanges": ["Bybit"] },
+    "GBPUSD": { "mt5": "GBPUSD.pi", "desc": "Great Britain Pound / USD", "footprint": false, "liq_snapshots": true, "liq_levels": false, "liq_exchanges": ["Bybit"] }
+  }
+}

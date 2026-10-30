@@ -6,16 +6,16 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 DB_DIR = ROOT_DIR / "Database"
 CANDLE_DIR = DB_DIR / "Candle_Data"
 LIQ_DIR = DB_DIR / "Liquidation_Data"
+LEVELS_DIR = LIQ_DIR / "Levels"
 SIGNALS_PATH = DB_DIR / "coinglass_aggregated_futures_signals.parquet"
 SNAPSHOTS_PATH = LIQ_DIR / "liquidation_snapshots.parquet"
-LEVELS_PATH = LIQ_DIR / "liquidation_levels.parquet"
 
 print("=====================================================================")
 print("             COINGLASS MASTER DATASET AUDIT REPORT                  ")
 print("=====================================================================")
 
 # -------------------------------------------------------------------
-# 1. Candle Datasets (31 MT5 Assets)
+# 1. Candle Datasets (Mutual Intersection Assets)
 # -------------------------------------------------------------------
 candle_files = sorted(list(CANDLE_DIR.glob("*.parquet")))
 print(f"\n1. 15-MINUTE CANDLE DATASETS ({len(candle_files)} ASSETS)")
@@ -47,7 +47,7 @@ for f in candle_files:
     else:
         t0 = df["open_time_utc"].iloc[0][:10]
         t1 = df["open_time_utc"].iloc[-1][:10]
-        print(f"[{sym:5s}] OK: {n} bars | Window: {t0} -> {t1} | Total Vol: {df['total_volume'].sum():,.0f} | Nulls: 0")
+        print(f"[{sym:6s}] OK: {n} bars | Window: {t0} -> {t1} | Total Vol: {df['total_volume'].sum():,.0f} | Nulls: 0")
 
 print(f"Candles Audited: {total_candles:,} | Failures: {len(failed_candles)}")
 
@@ -71,30 +71,35 @@ print("\n3. LIQUIDATION MACRO SNAPSHOTS")
 print("---------------------------------------------------------------------")
 if SNAPSHOTS_PATH.exists():
     snap_df = pd.read_parquet(SNAPSHOTS_PATH)
-    print(f"Total Snapshots: {len(snap_df)} | Symbols: {list(snap_df['symbol'].unique())} | Exchanges: {list(snap_df['exchange'].unique())}")
+    print(f"Total Snapshots: {len(snap_df)} | Symbols: {list(snap_df['symbol'].unique())} | Lookbacks: {list(snap_df['lookback_tf'].unique())}")
     last_snap = snap_df.iloc[-1]
-    print(f"Last Price: {last_snap['last_price']:,.1f}")
-    print(f"Nearest Short Magnet: {last_snap['short_magnet_zone']} ({last_snap['short_magnet_dist_pct']:+.2f}%, Str: {last_snap['short_magnet_strength']})")
-    print(f"Nearest Long Magnet:  {last_snap['long_magnet_zone']} ({last_snap['long_magnet_dist_pct']:+.2f}%, Str: {last_snap['long_magnet_strength']})")
-    print(f"CLLD: {last_snap['clld_current']:+,.0f} ({last_snap['clld_sentiment']}, Turn: {last_snap['clld_turn_time']})")
-    print(f"Near-Field Bias: {last_snap['near_field_bias']} (Longs: {last_snap['near_field_long_pct']}%, Shorts: {last_snap['near_field_short_pct']}%)")
+    print(f"Latest Snapshot ({last_snap['symbol']} - {last_snap['lookback_tf']}):")
+    print(f"  Last Price: {last_snap['last_price']:,.1f}")
+    print(f"  Nearest Short Magnet: {last_snap['short_magnet_zone']} ({last_snap['short_magnet_dist_pct']:+.2f}%, Str: {last_snap['short_magnet_strength']})")
+    print(f"  Nearest Long Magnet:  {last_snap['long_magnet_zone']} ({last_snap['long_magnet_dist_pct']:+.2f}%, Str: {last_snap['long_magnet_strength']})")
+    print(f"  CLLD: {last_snap['clld_current']} ({last_snap['clld_sentiment']}, Turn: {last_snap['clld_turn_time']})")
+    print(f"  Near-Field Bias: {last_snap['near_field_bias']} (Longs: {last_snap['near_field_long_pct']}%, Shorts: {last_snap['near_field_short_pct']}%)")
 else:
     print("Liquidation Snapshots dataset not found.")
 
 # -------------------------------------------------------------------
-# 4. Liquidation Discrete Strike Levels Dataset
+# 4. Asset-Partitioned Liquidation Strike Levels
 # -------------------------------------------------------------------
-print("\n4. LIQUIDATION DISCRETE STRIKE LEVELS")
+print("\n4. LIQUIDATION DISCRETE STRIKE LEVELS (ASSET PARTITIONED)")
 print("---------------------------------------------------------------------")
-if LEVELS_PATH.exists():
-    lvl_df = pd.read_parquet(LEVELS_PATH)
-    print(f"Total Discrete Levels: {len(lvl_df):,} | Active: {lvl_df['is_active'].sum():,} | Swept: {(~lvl_df['is_active']).sum():,}")
-    print(f"Side Split: {lvl_df['side'].value_counts().to_dict()}")
-    print(f"Leverage Tiers: {lvl_df['leverage_tier'].value_counts().to_dict()}")
-    print(f"Price Range: ${lvl_df['price'].min():,.1f} -> ${lvl_df['price'].max():,.1f}")
-    print(f"Distance Range: {lvl_df['distance_pct'].min():+.2f}% -> {lvl_df['distance_pct'].max():+.2f}%")
+level_files = sorted(list(LEVELS_DIR.glob("*.parquet")))
+if level_files:
+    total_levels = 0
+    for lf in level_files:
+        ldf = pd.read_parquet(lf)
+        total_levels += len(ldf)
+        tfs = ldf['lookback_tf'].value_counts().to_dict() if 'lookback_tf' in ldf.columns else {}
+        levs = ldf['leverage_tier'].value_counts().to_dict() if 'leverage_tier' in ldf.columns else {}
+        tiers = ldf['tier_level'].value_counts().to_dict() if 'tier_level' in ldf.columns else {}
+        print(f"[{lf.stem:12s}] {len(ldf):,} levels | TFs: {tfs} | Lev: {levs} | Tiers: {tiers}")
+    print(f"\nTotal Discrete Levels across all assets: {total_levels:,}")
 else:
-    print("Liquidation Levels dataset not found.")
+    print("No asset-partitioned level files found in Database/Liquidation_Data/Levels/")
 
 print("\n=====================================================================")
 print("                   AUDIT COMPLETED SUCCESSFULLY                      ")

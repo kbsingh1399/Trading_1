@@ -1,8 +1,8 @@
 """
 CoinGlass Master Data Collector (Footprint Signals, 15m Candles, & Liquidation Data)
 ------------------------------------------------------------------------------------
-Automates continuous, multi-stream data collection across the 31 cryptocurrency
-assets supported by your Blueberry Markets MT5 trading account:
+Automates continuous, multi-stream data collection across the mutual intersection of
+assets supported by both Blueberry Markets MT5 and CoinGlass:
 
 Data Streams Collected:
 1. Footprint Order-Flow Signals:
@@ -12,15 +12,18 @@ Data Streams Collected:
    - Full OHLC, Volume (Buy/Sell/Total), Delta, Cumulative Delta, Trades,
      Avg Trade Size, Buy/Sell Ratio, POC Price/Volume/Delta, Open Interest (Open/Close/Change)
    - Stored in: `Database/Candle_Data/<SYMBOL>.parquet` (Deduplicated Upsert)
+   - Scope: 35 assets (31 Cryptos + Gold XAU, Silver XAG, Copper COPPER, Natural Gas GAS)
 3. Liquidation Intelligence (Snapshots & Discrete Strike Levels):
    - Macro Snapshots: Nearest Short/Long Magnet Zones, CLLD (Cumulative Delta),
      Sentiment turns, Near-field balance, Distance bands, and Leverage breakdown.
      Stored in: `Database/Liquidation_Data/liquidation_snapshots.parquet`
-   - Granular Strike Levels: Exact liquidation trigger prices, sides, distance %,
-     leverage tiers, volume, strength ratings, and active status.
-     Stored in: `Database/Liquidation_Data/liquidation_levels.parquet`
+   - Discrete Strike Levels (Multi-Timeframe & Multi-Exchange):
+     Exact liquidation trigger prices, sides, distance %, leverage tiers (High/Mid/Low),
+     granularity tiers (Tier 1/2/3), volumes, and strength ratings.
+     Partitioned asset-wise: `Database/Liquidation_Data/Levels/<SYMBOL>_levels.parquet`
 4. Reliability & Network:
    - Automated Cloudflare WARP IP rotation after every cycle.
+   - Auto-retry healing for canvas/DOM timeouts.
    - 2-minute configurable rest interval between cycles.
 """
 
@@ -31,65 +34,30 @@ import json
 import logging
 import subprocess
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 import requests
 import pandas as pd
 from playwright.sync_api import sync_playwright
 
 # ---------------------------------------------------------------------------
-# Configuration & MT5 Asset Mapping
+# Configuration & Registry Loading
 # ---------------------------------------------------------------------------
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DB_DIR = ROOT_DIR / "Database"
 CANDLE_DIR = DB_DIR / "Candle_Data"
 LIQ_DIR = DB_DIR / "Liquidation_Data"
+LEVELS_DIR = LIQ_DIR / "Levels"
 
 OUTPUT_SIGNALS_PARQUET = DB_DIR / "coinglass_aggregated_futures_signals.parquet"
 SNAPSHOTS_PARQUET = LIQ_DIR / "liquidation_snapshots.parquet"
-LEVELS_PARQUET = LIQ_DIR / "liquidation_levels.parquet"
 
 WARP_CLI = Path(r"C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe")
 CDP_URL = "http://127.0.0.1:9222"
 CYCLE_REST_SECONDS = 120  # 2 minutes rest between cycles
 CHUNK_SIZE = 10           # Assets per in-page batch chunk
 
-# Verified mapping: CoinGlass symbol -> Blueberry Markets MT5 ticker
-MT5_ASSET_MAP = {
-    "BTC": "BTCUSD.pi",
-    "ETH": "ETHUSD.pi",
-    "SOL": "SOLUSD.p",
-    "XRP": "XRPUSD.pi",
-    "DOGE": "DOGUSD.p",
-    "BNB": "BNBUSD.p",
-    "ADA": "ADAUSD.p",
-    "LINK": "LNKUSD.p",
-    "AVAX": "AVXUSD.p",
-    "LTC": "LTCUSD.pi",
-    "DOT": "DOTUSD.pi",
-    "BCH": "BCHUSD.p",
-    "NEAR": "NERUSD.p",
-    "TRX": "TRXUSD.p",
-    "UNI": "UNIUSD.p",
-    "AAVE": "AVEUSD.p",
-    "FIL": "FILUSD.p",
-    "CRV": "CRVUSD.p",
-    "ATOM": "ATMUSD.p",
-    "ALGO": "ALGUSD.p",
-    "AXS": "AXSUSD.p",
-    "BAT": "BATUSD.p",
-    "CHZ": "CHZUSD.p",
-    "AR": "ARWUSD.p",
-    "COMP": "COMUSD.p",
-    "1INCH": "INCUSD.p",
-    "SUSHI": "XSIUSD.p",
-    "SNX": "SNXUSD.p",
-    "NEO": "NEOUSD.p",
-    "ZEC": "ZECUSD.p",
-    "HBAR": "BARUSD.p"
-}
-
-TARGET_SYMBOLS = list(MT5_ASSET_MAP.keys())
+REGISTRY_FILE = DB_DIR / "mutual_asset_capability_registry.json"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -97,6 +65,36 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 logger = logging.getLogger("DataCollector")
+
+
+def load_capability_registry() -> tuple[dict, list, list, list]:
+    """Load the verified mutual asset capability registry."""
+    if not REGISTRY_FILE.exists():
+        logger.error(f"Capability registry missing at: {REGISTRY_FILE}")
+        return {}, [], [], []
+
+    with open(REGISTRY_FILE, "r", encoding="utf-8") as f:
+        reg = json.load(f)
+
+    mt5_map = {}
+    fp_symbols = []
+    liq_level_symbols = []
+    liq_snap_symbols = []
+
+    for category, assets in reg.items():
+        for sym, meta in assets.items():
+            mt5_map[sym] = meta["mt5"]
+            if meta.get("footprint", False):
+                fp_symbols.append(sym)
+            if meta.get("liq_levels", False):
+                liq_level_symbols.append(sym)
+            if meta.get("liq_snapshots", False):
+                liq_snap_symbols.append(sym)
+
+    return mt5_map, fp_symbols, liq_level_symbols, liq_snap_symbols
+
+
+MT5_ASSET_MAP, FP_TARGET_SYMBOLS, LIQ_LEVEL_SYMBOLS, LIQ_SNAP_SYMBOLS = load_capability_registry()
 
 
 def get_current_ip() -> str:
@@ -264,7 +262,7 @@ def upsert_candle_parquet(symbol: str, mt5_symbol: str, new_candles: list):
 
     combined_df = combined_df.sort_values(by="open_time_ms", ascending=True).reset_index(drop=True)
     combined_df["cumulative_delta"] = combined_df["delta"].cumsum()
-    combined_df["dumped_at_utc"] = datetime.utcnow().isoformat()
+    combined_df["dumped_at_utc"] = datetime.now(timezone.utc).isoformat()
 
     lead_cols = ["symbol", "mt5_symbol", "timeframe", "open_time_ms", "close_time_ms", "open_time_utc", "close_time_utc", "open", "high", "low", "close"]
     other_cols = [c for c in combined_df.columns if c not in lead_cols]
@@ -278,14 +276,14 @@ def upsert_candle_parquet(symbol: str, mt5_symbol: str, new_candles: list):
 
 
 def dump_signals_parquet(signals: list):
-    """Persist aggregated signals across all MT5 assets."""
+    """Persist aggregated signals across all mutual assets."""
     if not signals:
         logger.warning("Empty signal set received. Skipping signals parquet write.")
         return
 
     DB_DIR.mkdir(parents=True, exist_ok=True)
     df = pd.DataFrame(signals)
-    df["dumped_at_utc"] = datetime.utcnow().isoformat()
+    df["dumped_at_utc"] = datetime.now(timezone.utc).isoformat()
 
     cols = ["symbol", "mt5_symbol"] + [c for c in df.columns if c not in ["symbol", "mt5_symbol"]]
     df = df[cols]
@@ -294,41 +292,39 @@ def dump_signals_parquet(signals: list):
         df = df.sort_values(by=["symbol", "time_ms"], ascending=[True, True]).reset_index(drop=True)
 
     df.to_parquet(OUTPUT_SIGNALS_PARQUET, index=False, engine="pyarrow")
-    logger.info(f"Signals Parquet updated: {OUTPUT_SIGNALS_PARQUET.name} ({len(df)} rows across {df['symbol'].nunique()} MT5 assets)")
+    logger.info(f"Signals Parquet updated: {OUTPUT_SIGNALS_PARQUET.name} ({len(df)} rows across {df['symbol'].nunique()} assets)")
 
 
 def extract_footprint_chunk(page, symbols_chunk: list) -> dict:
-    """In-page combined extraction: captures signals AND 15m order flow candles."""
+    """Extract Footprint signals and 15m order flow candles for a chunk of symbols."""
     combined_extract_js = """
-    async (args) => {
-        const { symbolsChunk, mt5Map } = args;
+    async ({ symbolsChunk, mt5Map }) => {
         const term = window.__cg_term;
         const result = { signals: [], candles: {} };
 
         for (const sym of symbolsChunk) {
             await new Promise((resolve) => {
+                let unsub = () => {};
+                let loadedOlder = false;
+
                 const timeout = setTimeout(() => {
                     unsub();
                     resolve();
-                }, 8000);
+                }, 4000);
 
-                let loadedOlder = false;
-
-                const unsub = term.subscribe(async () => {
-                    if (term.status === 'ready' && term.prefs.sym === sym && !term.D.err) {
+                unsub = term.subscribe(async (event) => {
+                    const sigSets = term.sigSets ? term.sigSets() : null;
+                    if (sigSets && sigSets.length === 3) {
                         if (!loadedOlder) {
                             loadedOlder = true;
                             try {
                                 await term.maybeOlder();
                             } catch (e) {}
                         }
+                        clearTimeout(timeout);
+                        unsub();
 
-                        const sigSets = term.sigSets();
-                        if (sigSets && sigSets.length === 3) {
-                            clearTimeout(timeout);
-                            unsub();
-
-                            // 1. Extract Signals across all bar types
+                            // 1. Extract Signals
                             for (const set of sigSets) {
                                 const X = set.X;
                                 for (const s of set.sigs) {
@@ -351,7 +347,7 @@ def extract_footprint_chunk(page, symbols_chunk: list) -> dict:
                                 }
                             }
 
-                            // 2. Extract 15m Order-Flow Candle Data from timeSet
+                            // 2. Extract 15m Order-Flow Candle Data
                             const timeSet = sigSets.find(s => s.bt === 'time');
                             if (timeSet && timeSet.X && timeSet.X.T) {
                                 const X = timeSet.X;
@@ -373,7 +369,7 @@ def extract_footprint_chunk(page, symbols_chunk: list) -> dict:
 
                                     const F = X.F ? X.F[i] : null;
                                     let buyVol = 0, sellVol = 0, buyTrades = 0, sellTrades = 0;
-                                    let maxVol = -1, pocIdx = -1;
+                                    let maxVol = 0, pocIdx = -1;
                                     let nB = 0, nS = 0;
 
                                     if (F && F.b && F.s) {
@@ -464,7 +460,6 @@ def extract_footprint_chunk(page, symbols_chunk: list) -> dict:
 
                             resolve();
                         }
-                    }
                 });
 
                 term.pickPair(sym, 'agg-perp');
@@ -476,17 +471,17 @@ def extract_footprint_chunk(page, symbols_chunk: list) -> dict:
     return page.evaluate(combined_extract_js, {"symbolsChunk": symbols_chunk, "mt5Map": MT5_ASSET_MAP})
 
 
-def extract_liquidation_data(page) -> dict:
-    """Extract macro liquidation snapshot and all active discrete strike levels."""
+def extract_single_liquidation_state(page, symbol: str, mt5_symbol: str, tf_label: str) -> dict:
+    """Extract macro snapshot and discrete strike levels for a specific timeframe."""
     js_extractor = """
-    () => {
+    ({ symbol, mt5Symbol, tfLabel }) => {
         const nextEl = document.getElementById('__next');
         const containerKey = Object.keys(nextEl).find(k => k.startsWith('__reactContainer$'));
         const rootFiber = nextEl[containerKey];
 
         let targetFiber = null;
         function walk(f, depth = 0) {
-            if (!f || depth > 60 || targetFiber) return;
+            if (!f || depth > 80 || targetFiber) return;
             try {
                 if (f.memoizedProps && f.memoizedProps.model && f.memoizedProps.ex) {
                     targetFiber = f;
@@ -499,7 +494,7 @@ def extract_liquidation_data(page) -> dict:
         walk(rootFiber);
         const p = targetFiber ? targetFiber.memoizedProps : null;
         const m = p ? p.model : null;
-        if (!m) return { error: "model_not_found" };
+        if (!m) return null;
 
         const curPrice = m.curPrice;
         const bodyText = document.body.innerText;
@@ -540,35 +535,8 @@ def extract_liquidation_data(page) -> dict:
             nfbBias = nfbMatch[3].trim();
         }
 
-        // Strength by Distance bands
-        let dist0_1_S = null, dist0_1_L = null;
-        let dist1_2_S = null, dist1_2_L = null;
-        let dist2_3_S = null, dist2_3_L = null;
-        let dist3_5_S = null, dist3_5_L = null;
-        let dist5_10_S = null, dist5_10_L = null;
-
-        const d0_1 = bodyText.match(/0–1%\\s*(\\d+)\\s*·\\s*(\\d+)/);
-        if (d0_1) { dist0_1_S = parseFloat(d0_1[1]); dist0_1_L = parseFloat(d0_1[2]); }
-        const d1_2 = bodyText.match(/1–2%\\s*(\\d+)\\s*·\\s*(\\d+)/);
-        if (d1_2) { dist1_2_S = parseFloat(d1_2[1]); dist1_2_L = parseFloat(d1_2[2]); }
-        const d2_3 = bodyText.match(/2–3%\\s*(\\d+)\\s*·\\s*(\\d+)/);
-        if (d2_3) { dist2_3_S = parseFloat(d2_3[1]); dist2_3_L = parseFloat(d2_3[2]); }
-        const d3_5 = bodyText.match(/3–5%\\s*(\\d+)\\s*·\\s*(\\d+)/);
-        if (d3_5) { dist3_5_S = parseFloat(d3_5[1]); dist3_5_L = parseFloat(d3_5[2]); }
-        const d5_10 = bodyText.match(/5–10%\\s*(\\d+)\\s*·\\s*(\\d+)/);
-        if (d5_10) { dist5_10_S = parseFloat(d5_10[1]); dist5_10_L = parseFloat(d5_10[2]); }
-
-        // Leverage Tiers
-        let highLev_S = null, highLev_L = null;
-        let midLev_S = null, midLev_L = null;
-        let lowLev_S = null, lowLev_L = null;
-
-        const hl = bodyText.match(/High leverage\\s*(\\d+)\\s*·\\s*(\\d+)/);
-        if (hl) { highLev_S = parseFloat(hl[1]); highLev_L = parseFloat(hl[2]); }
-        const ml = bodyText.match(/Mid leverage\\s*(\\d+)\\s*·\\s*(\\d+)/);
-        if (ml) { midLev_S = parseFloat(ml[1]); midLev_L = parseFloat(ml[2]); }
-        const ll = bodyText.match(/Low leverage\\s*(\\d+)\\s*·\\s*(\\d+)/);
-        if (ll) { lowLev_S = parseFloat(ll[1]); lowLev_L = parseFloat(ll[2]); }
+        // Granularity volume thresholds
+        const granThr = m.GRAN_THR || [0, 1000, 2500];
 
         // Active Segments
         const activeLevels = [];
@@ -590,11 +558,16 @@ def extract_liquidation_data(page) -> dict:
                 const weight = maxSz > 0 ? (sz / maxSz) : 0;
                 const strength = Math.round(weight * 1000) / 10;
 
+                let tierLevel = 1;
+                if (sz >= granThr[2]) tierLevel = 3;
+                else if (sz >= granThr[1]) tierLevel = 2;
+
                 activeLevels.push({
                     price: Math.round(px * 10) / 10,
                     volume: Math.round(sz * 100) / 100,
                     side: side,
                     leverage_tier: lev,
+                    tier_level: tierLevel,
                     distance_pct: Math.round(dist * 100) / 100,
                     strength: strength,
                     weight: Math.round(weight * 10000) / 10000,
@@ -605,11 +578,10 @@ def extract_liquidation_data(page) -> dict:
 
         const snapshot = {
             exchange: p.ex || 'Binance',
-            symbol: 'BTC',
-            mt5_symbol: 'BTCUSD.pi',
-            pair: p.sym || 'BTCUSDT',
-            lookback_tf: p.tf === 0 ? '3D-1m' : (p.tf === 1 ? '7D-3m' : '30D-15m'),
-            tier: 'Tier 1',
+            symbol: symbol,
+            mt5_symbol: mt5Symbol,
+            pair: p.sym || `${symbol}USDT`,
+            lookback_tf: tfLabel,
             last_price: curPrice,
             clld_current: clldVal,
             clld_sentiment: clldSentiment,
@@ -624,85 +596,129 @@ def extract_liquidation_data(page) -> dict:
             near_field_long_pct: nfbLongPct,
             near_field_short_pct: nfbShortPct,
             near_field_bias: nfbBias,
-            dist_0_1_short_strength: dist0_1_S,
-            dist_0_1_long_strength: dist0_1_L,
-            dist_1_2_short_strength: dist1_2_S,
-            dist_1_2_long_strength: dist1_2_L,
-            dist_2_3_short_strength: dist2_3_S,
-            dist_2_3_long_strength: dist2_3_L,
-            dist_3_5_short_strength: dist3_5_S,
-            dist_3_5_long_strength: dist3_5_L,
-            dist_5_10_short_strength: dist5_10_S,
-            dist_5_10_long_strength: dist5_10_L,
-            high_lev_short_strength: highLev_S,
-            high_lev_long_strength: highLev_L,
-            mid_lev_short_strength: midLev_S,
-            mid_lev_long_strength: midLev_L,
-            low_lev_short_strength: lowLev_S,
-            low_lev_long_strength: lowLev_L,
             active_levels_count: activeLevels.length
         };
 
         return { snapshot, levels: activeLevels };
     }
     """
-    return page.evaluate(js_extractor)
+    return page.evaluate(js_extractor, {"symbol": symbol, "mt5Symbol": mt5_symbol, "tfLabel": tf_label})
 
 
-def upsert_liquidation_data(liq_result: dict):
-    """Persist macro snapshots and discrete levels to Parquet."""
-    if not liq_result or "error" in liq_result:
+def harvest_asset_liquidations(page, symbol: str, mt5_symbol: str, is_deep_level: bool = True) -> tuple[list, list]:
+    """Harvest liquidation snapshots and multi-timeframe discrete levels for an asset."""
+    snapshots = []
+    levels = []
+
+    # Auto-healing: click Retry if present
+    retry_btn = page.locator("button:has-text('Retry')")
+    if retry_btn.count() > 0:
+        logger.info(f"[{symbol}] Retry button detected. Clicking to heal...")
+        retry_btn.click()
+        time.sleep(2)
+
+    timeframes = [
+        {"label": "30D-15m", "kw": "30D"},
+        {"label": "7D-3m", "kw": "7D"},
+        {"label": "3D-1m", "kw": "3D"}
+    ] if is_deep_level else [{"label": "30D-15m", "kw": "30D"}]
+
+    for tf in timeframes:
+        # Click timeframe tab
+        page.evaluate(f"""
+            () => {{
+                const allLi = Array.from(document.querySelectorAll('li'));
+                const el = allLi.find(x => (x.innerText || '').includes('{tf['kw']}'));
+                if (el) el.click();
+            }}
+        """)
+        time.sleep(1.2)
+
+        extracted = extract_single_liquidation_state(page, symbol, mt5_symbol, tf["label"])
+        if extracted and extracted.get("snapshot"):
+            snap = extracted["snapshot"]
+            snapshots.append(snap)
+            if is_deep_level:
+                for lvl in extracted.get("levels", []):
+                    lvl["symbol"] = symbol
+                    lvl["exchange"] = snap["exchange"]
+                    lvl["lookback_tf"] = tf["label"]
+                    levels.append(lvl)
+
+    return snapshots, levels
+
+
+def upsert_liquidation_snapshots(snapshots: list):
+    """Persist macro snapshots across all assets to Parquet."""
+    if not snapshots:
         return
 
     LIQ_DIR.mkdir(parents=True, exist_ok=True)
-    now_utc = datetime.utcnow().isoformat()
+    now_utc = datetime.now(timezone.utc).isoformat()
+    for s in snapshots:
+        s["snapshot_time_utc"] = now_utc
+        s["dumped_at_utc"] = now_utc
 
-    # 1. Macro Snapshot
-    snap = liq_result["snapshot"]
-    snap["snapshot_time_utc"] = now_utc
-    snap["dumped_at_utc"] = now_utc
-    snap_df = pd.DataFrame([snap])
+    snap_df = pd.DataFrame(snapshots)
 
     if SNAPSHOTS_PARQUET.exists():
         try:
             existing_snap = pd.read_parquet(SNAPSHOTS_PARQUET)
-            combined_snap = pd.concat([existing_snap, snap_df], ignore_index=True)
-            combined_snap = combined_snap.drop_duplicates(subset=["snapshot_time_utc", "symbol", "exchange"], keep="last")
+            combined = pd.concat([existing_snap, snap_df], ignore_index=True)
+            combined = combined.drop_duplicates(subset=["snapshot_time_utc", "symbol", "exchange", "lookback_tf"], keep="last")
         except Exception as e:
-            logger.warning(f"Failed to merge existing snapshots: {e}")
-            combined_snap = snap_df
+            logger.warning(f"Failed to merge existing snapshots ({e}). Writing new data.")
+            combined = snap_df
     else:
-        combined_snap = snap_df
+        combined = snap_df
 
-    combined_snap.to_parquet(SNAPSHOTS_PARQUET, index=False, engine="pyarrow")
-    logger.info(f"Liquidation Snapshot saved: {SNAPSHOTS_PARQUET.name} ({len(combined_snap)} total snapshots)")
+    combined.to_parquet(SNAPSHOTS_PARQUET, index=False, engine="pyarrow")
+    logger.info(f"Liquidation Snapshots saved: {SNAPSHOTS_PARQUET.name} ({len(combined)} total rows across {combined['symbol'].nunique()} assets)")
 
-    # 2. Granular Strike Levels
-    levels = liq_result["levels"]
+
+def upsert_asset_levels(symbol: str, levels: list):
+    """Persist asset-partitioned discrete strike levels to Parquet."""
+    if not levels:
+        return
+
+    LEVELS_DIR.mkdir(parents=True, exist_ok=True)
+    parquet_path = LEVELS_DIR / f"{symbol}_levels.parquet"
+    now_utc = datetime.now(timezone.utc).isoformat()
+
     for lvl in levels:
         lvl["snapshot_time_utc"] = now_utc
-        lvl["symbol"] = snap["symbol"]
-        lvl["exchange"] = snap["exchange"]
-        lvl["lookback_tf"] = snap["lookback_tf"]
-        lvl["tier"] = snap["tier"]
         lvl["dumped_at_utc"] = now_utc
 
-    levels_df = pd.DataFrame(levels)
-    levels_df.to_parquet(LEVELS_PARQUET, index=False, engine="pyarrow")
-    logger.info(f"Liquidation Levels saved: {LEVELS_PARQUET.name} ({len(levels_df)} discrete strike levels)")
+    new_df = pd.DataFrame(levels)
+
+    if parquet_path.exists():
+        try:
+            existing_df = pd.read_parquet(parquet_path)
+            combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+            combined_df = combined_df.drop_duplicates(subset=["snapshot_time_utc", "exchange", "lookback_tf", "price"], keep="last")
+        except Exception as e:
+            logger.warning(f"[{symbol}] Failed to merge existing levels ({e}). Writing new data.")
+            combined_df = new_df
+    else:
+        combined_df = new_df
+
+    combined_df.to_parquet(parquet_path, index=False, engine="pyarrow")
+    logger.info(f"[{symbol}] Saved {parquet_path.name}: {len(combined_df)} discrete strike levels")
 
 
 def run_cycle(context) -> dict:
     """Execute a single full collection cycle across footprint and liquidation streams."""
+    # -----------------------------------------------------------------------
+    # Step 1: Footprint Signals & 15m Candles across all 35 mutual assets
+    # -----------------------------------------------------------------------
     fp_page = get_coinglass_tab(context)
     ensure_terminal_ready(fp_page)
 
     all_signals = []
-    total_chunks = (len(TARGET_SYMBOLS) + CHUNK_SIZE - 1) // CHUNK_SIZE
+    total_chunks = (len(FP_TARGET_SYMBOLS) + CHUNK_SIZE - 1) // CHUNK_SIZE
 
-    # Step 1: Footprint Signals & 15m Candles across all 31 MT5 assets
-    for i in range(0, len(TARGET_SYMBOLS), CHUNK_SIZE):
-        chunk = TARGET_SYMBOLS[i:i + CHUNK_SIZE]
+    for i in range(0, len(FP_TARGET_SYMBOLS), CHUNK_SIZE):
+        chunk = FP_TARGET_SYMBOLS[i:i + CHUNK_SIZE]
         chunk_num = i // CHUNK_SIZE + 1
         logger.info(f"[Footprint] Processing Chunk {chunk_num}/{total_chunks} ({chunk[0]}..{chunk[-1]})...")
 
@@ -717,16 +733,40 @@ def run_cycle(context) -> dict:
     dump_signals_parquet(all_signals)
     fp_page.evaluate("() => window.__cg_term.pickPair('BTC', 'agg-perp')")
 
+    # -----------------------------------------------------------------------
     # Step 2: Liquidation Intelligence (Snapshots & Discrete Strike Levels)
+    # -----------------------------------------------------------------------
     liq_page = get_liquidation_tab(context)
-    logger.info("[Liquidations] Extracting snapshot & key levels from active liquidation tab...")
-    liq_result = extract_liquidation_data(liq_page)
-    upsert_liquidation_data(liq_result)
+    all_snapshots = []
+    total_levels_count = 0
+
+    # 2A. Deep Strike Levels (Multi-TF 3D/7D/30D) for top priority assets
+    priority_level_assets = [s for s in ["BTC", "ETH", "SOL", "XRP", "XAU"] if s in LIQ_LEVEL_SYMBOLS]
+    for sym in priority_level_assets:
+        logger.info(f"[Liquidations] Harvesting multi-TF levels for {sym}...")
+        liq_page.goto(f"https://www.coinglass.com/liquidation-levels?symbol={sym}", timeout=15000)
+        time.sleep(2)
+        snaps, levels = harvest_asset_liquidations(liq_page, sym, MT5_ASSET_MAP.get(sym, ""), is_deep_level=True)
+        all_snapshots.extend(snaps)
+        upsert_asset_levels(sym, levels)
+        total_levels_count += len(levels)
+
+    # 2B. Macro Liquidation Snapshots for Forex & Secondary Assets
+    macro_only_assets = [s for s in LIQ_SNAP_SYMBOLS if s not in priority_level_assets]
+    for sym in macro_only_assets[:4]:  # Harvest top macro assets per cycle
+        logger.info(f"[Liquidations] Harvesting macro snapshot for {sym}...")
+        liq_page.goto(f"https://www.coinglass.com/liquidation-levels?symbol={sym}", timeout=15000)
+        time.sleep(2)
+        snaps, _ = harvest_asset_liquidations(liq_page, sym, MT5_ASSET_MAP.get(sym, ""), is_deep_level=False)
+        all_snapshots.extend(snaps)
+
+    upsert_liquidation_snapshots(all_snapshots)
 
     return {
         "signals_count": len(all_signals),
-        "candles_updated": len(TARGET_SYMBOLS),
-        "liquidation_levels_count": len(liq_result.get("levels", []))
+        "candles_updated": len(FP_TARGET_SYMBOLS),
+        "liquidation_snapshots_count": len(all_snapshots),
+        "liquidation_levels_count": total_levels_count
     }
 
 
@@ -736,6 +776,7 @@ def run_continuous_collector():
     DB_DIR.mkdir(parents=True, exist_ok=True)
     CANDLE_DIR.mkdir(parents=True, exist_ok=True)
     LIQ_DIR.mkdir(parents=True, exist_ok=True)
+    LEVELS_DIR.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as p:
         try:
@@ -755,7 +796,7 @@ def run_continuous_collector():
             try:
                 stats = run_cycle(context)
                 elapsed = round(time.time() - start_time, 1)
-                logger.info(f"Cycle #{cycle_count} completed in {elapsed}s: {stats['signals_count']} signals, {stats['candles_updated']} candle files, {stats['liquidation_levels_count']} liquidation levels.")
+                logger.info(f"Cycle #{cycle_count} completed in {elapsed}s: {stats['signals_count']} signals, {stats['candles_updated']} candle files, {stats['liquidation_snapshots_count']} snapshots, {stats['liquidation_levels_count']} liquidation levels.")
             except Exception as e:
                 logger.error(f"Error during cycle #{cycle_count}: {e}", exc_info=True)
 
