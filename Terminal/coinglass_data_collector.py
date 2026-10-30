@@ -1,23 +1,27 @@
 """
-CoinGlass Footprint Signal & 15m Order-Flow Candle Dumper (MT5 Combined Edition)
--------------------------------------------------------------------------------
-Simultaneously extracts complete order-flow footprint signals and 15-minute
-candle order-flow metrics exclusively for the 31 cryptocurrency assets supported
-by your Blueberry Markets MT5 account.
+CoinGlass Master Data Collector (Footprint Signals, 15m Candles, & Liquidation Data)
+------------------------------------------------------------------------------------
+Automates continuous, multi-stream data collection across the 31 cryptocurrency
+assets supported by your Blueberry Markets MT5 trading account:
 
-Key Features:
-1. Combined In-Page Extraction: In a single page visit per asset, simultaneously
-   captures all signals (Absorption, Exhaustion, Divergence, Trapped Longs/Shorts)
-   AND complete 15-minute candle order-flow metrics (OHLC, volume, delta, trades,
-   OI, and POC).
-2. Asset-Wise Parquet Storage: Writes individual candle datasets to
-   `Database/Candle_Data/<SYMBOL>.parquet` with deduplicated upsert logic.
-3. Master Signal Parquet: Writes aggregated signals to
-   `Database/coinglass_aggregated_futures_signals.parquet`.
-4. Automated Sanity Verification: Audits timestamp monotonicity, OHLC constraints,
-   volume/delta mathematical integrity, and zero null counts on every save.
-5. Cloudflare WARP IP Rotation: Rotates outbound IP and re-keys tunnel after each cycle.
-6. Rest Interval: 2 minutes rest between consecutive cycles.
+Data Streams Collected:
+1. Footprint Order-Flow Signals:
+   - Trapped Longs, Trapped Shorts, Absorption, Exhaustion, Divergence
+   - Stored in: `Database/coinglass_aggregated_futures_signals.parquet`
+2. 15-Minute Order-Flow Candle Datasets:
+   - Full OHLC, Volume (Buy/Sell/Total), Delta, Cumulative Delta, Trades,
+     Avg Trade Size, Buy/Sell Ratio, POC Price/Volume/Delta, Open Interest (Open/Close/Change)
+   - Stored in: `Database/Candle_Data/<SYMBOL>.parquet` (Deduplicated Upsert)
+3. Liquidation Intelligence (Snapshots & Discrete Strike Levels):
+   - Macro Snapshots: Nearest Short/Long Magnet Zones, CLLD (Cumulative Delta),
+     Sentiment turns, Near-field balance, Distance bands, and Leverage breakdown.
+     Stored in: `Database/Liquidation_Data/liquidation_snapshots.parquet`
+   - Granular Strike Levels: Exact liquidation trigger prices, sides, distance %,
+     leverage tiers, volume, strength ratings, and active status.
+     Stored in: `Database/Liquidation_Data/liquidation_levels.parquet`
+4. Reliability & Network:
+   - Automated Cloudflare WARP IP rotation after every cycle.
+   - 2-minute configurable rest interval between cycles.
 """
 
 import sys
@@ -39,7 +43,12 @@ from playwright.sync_api import sync_playwright
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DB_DIR = ROOT_DIR / "Database"
 CANDLE_DIR = DB_DIR / "Candle_Data"
+LIQ_DIR = DB_DIR / "Liquidation_Data"
+
 OUTPUT_SIGNALS_PARQUET = DB_DIR / "coinglass_aggregated_futures_signals.parquet"
+SNAPSHOTS_PARQUET = LIQ_DIR / "liquidation_snapshots.parquet"
+LEVELS_PARQUET = LIQ_DIR / "liquidation_levels.parquet"
+
 WARP_CLI = Path(r"C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe")
 CDP_URL = "http://127.0.0.1:9222"
 CYCLE_REST_SECONDS = 120  # 2 minutes rest between cycles
@@ -87,7 +96,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S"
 )
-logger = logging.getLogger("CombinedDumper")
+logger = logging.getLogger("DataCollector")
 
 
 def get_current_ip() -> str:
@@ -133,6 +142,19 @@ def get_coinglass_tab(browser_context):
     logger.info("CoinGlass footprint tab not found in active tabs. Navigating new page...")
     page = browser_context.new_page()
     page.goto("https://www.coinglass.com/footprint?symbol=BTC", wait_until="networkidle")
+    time.sleep(3)
+    return page
+
+
+def get_liquidation_tab(browser_context):
+    """Locate the existing CoinGlass liquidation-levels tab, or open a new one if missing."""
+    for page in browser_context.pages:
+        if "coinglass.com/liquidation-levels" in page.url:
+            return page
+    
+    logger.info("Liquidation levels tab not found. Navigating new page...")
+    page = browser_context.new_page()
+    page.goto("https://www.coinglass.com/liquidation-levels?symbol=BTC", wait_until="networkidle")
     time.sleep(3)
     return page
 
@@ -233,7 +255,6 @@ def upsert_candle_parquet(symbol: str, mt5_symbol: str, new_candles: list):
         try:
             existing_df = pd.read_parquet(parquet_path)
             combined_df = pd.concat([existing_df, new_df], ignore_index=True)
-            # Deduplicate by open_time_ms, preserving the newest record
             combined_df = combined_df.drop_duplicates(subset=["open_time_ms"], keep="last")
         except Exception as e:
             logger.warning(f"[{symbol}] Failed to read existing parquet for merge ({e}). Writing new data.")
@@ -241,19 +262,14 @@ def upsert_candle_parquet(symbol: str, mt5_symbol: str, new_candles: list):
     else:
         combined_df = new_df
 
-    # Sort chronologically
     combined_df = combined_df.sort_values(by="open_time_ms", ascending=True).reset_index(drop=True)
-
-    # Recalculate smooth running cumulative delta across entire history
     combined_df["cumulative_delta"] = combined_df["delta"].cumsum()
     combined_df["dumped_at_utc"] = datetime.utcnow().isoformat()
 
-    # Reorder standard columns
     lead_cols = ["symbol", "mt5_symbol", "timeframe", "open_time_ms", "close_time_ms", "open_time_utc", "close_time_utc", "open", "high", "low", "close"]
     other_cols = [c for c in combined_df.columns if c not in lead_cols]
     combined_df = combined_df[lead_cols + other_cols]
 
-    # Verify sanity before persisting
     if verify_candle_sanity(combined_df, symbol):
         combined_df.to_parquet(parquet_path, index=False, engine="pyarrow")
         logger.info(f"[{symbol}] Saved {parquet_path.name}: {len(combined_df)} candles (range: {combined_df['open_time_utc'].iloc[0][:16]} -> {combined_df['open_time_utc'].iloc[-1][:16]})")
@@ -274,7 +290,6 @@ def dump_signals_parquet(signals: list):
     cols = ["symbol", "mt5_symbol"] + [c for c in df.columns if c not in ["symbol", "mt5_symbol"]]
     df = df[cols]
 
-    # Sort signals chronologically
     if "time_ms" in df.columns:
         df = df.sort_values(by=["symbol", "time_ms"], ascending=[True, True]).reset_index(drop=True)
 
@@ -282,7 +297,7 @@ def dump_signals_parquet(signals: list):
     logger.info(f"Signals Parquet updated: {OUTPUT_SIGNALS_PARQUET.name} ({len(df)} rows across {df['symbol'].nunique()} MT5 assets)")
 
 
-def extract_combined_chunk(page, symbols_chunk: list) -> dict:
+def extract_footprint_chunk(page, symbols_chunk: list) -> dict:
     """In-page combined extraction: captures signals AND 15m order flow candles."""
     combined_extract_js = """
     async (args) => {
@@ -380,9 +395,7 @@ def extract_combined_chunk(page, symbols_chunk: list) -> dict:
                                                 pocIdx = j;
                                             }
 
-                                            // Buy imbalance (3x diagonal test)
                                             if (j > 0 && s > 0 && b >= 3 * (F.s[j - 1] || 0)) nB++;
-                                            // Sell imbalance (3x diagonal test)
                                             if (j < numLevels - 1 && b > 0 && s >= 3 * (F.b[j + 1] || 0)) nS++;
                                         }
                                     }
@@ -463,41 +476,266 @@ def extract_combined_chunk(page, symbols_chunk: list) -> dict:
     return page.evaluate(combined_extract_js, {"symbolsChunk": symbols_chunk, "mt5Map": MT5_ASSET_MAP})
 
 
-def run_cycle(page) -> int:
-    """Execute a single full dump cycle across all 31 MT5 assets."""
-    ensure_terminal_ready(page)
+def extract_liquidation_data(page) -> dict:
+    """Extract macro liquidation snapshot and all active discrete strike levels."""
+    js_extractor = """
+    () => {
+        const nextEl = document.getElementById('__next');
+        const containerKey = Object.keys(nextEl).find(k => k.startsWith('__reactContainer$'));
+        const rootFiber = nextEl[containerKey];
+
+        let targetFiber = null;
+        function walk(f, depth = 0) {
+            if (!f || depth > 60 || targetFiber) return;
+            try {
+                if (f.memoizedProps && f.memoizedProps.model && f.memoizedProps.ex) {
+                    targetFiber = f;
+                    return;
+                }
+            } catch(e) {}
+            walk(f.child, depth + 1);
+            walk(f.sibling, depth);
+        }
+        walk(rootFiber);
+        const p = targetFiber ? targetFiber.memoizedProps : null;
+        const m = p ? p.model : null;
+        if (!m) return { error: "model_not_found" };
+
+        const curPrice = m.curPrice;
+        const bodyText = document.body.innerText;
+
+        // Magnet Zones
+        let shortMagZone = null, shortMagDist = null, shortMagStr = null;
+        const shortMagMatch = bodyText.match(/Nearest short magnet zone\\s*([\\d,\\.]+\\s*–\\s*[\\d,\\.]+)\\s*([+\\-\\d\\.]+%)\\s*·\\s*Strength\\s*(\\d+)/i);
+        if (shortMagMatch) {
+            shortMagZone = shortMagMatch[1].replace(/\\s+/g, ' ');
+            shortMagDist = parseFloat(shortMagMatch[2].replace('%', ''));
+            shortMagStr = parseFloat(shortMagMatch[3]);
+        }
+
+        let longMagZone = null, longMagDist = null, longMagStr = null;
+        const longMagMatch = bodyText.match(/Nearest long magnet zone\\s*([\\d,\\.]+\\s*–\\s*[\\d,\\.]+)\\s*([+\\-\\d\\.]+%)\\s*·\\s*Strength\\s*(\\d+)/i);
+        if (longMagMatch) {
+            longMagZone = longMagMatch[1].replace(/\\s+/g, ' ');
+            longMagDist = parseFloat(longMagMatch[2].replace('%', ''));
+            longMagStr = parseFloat(longMagMatch[3]);
+        }
+
+        // CLLD Card
+        let clldVal = null, clldSentiment = null, clldTurnTime = null, clld1hChange = null;
+        const clldMatch = bodyText.match(/CLLD\\s*·\\s*Cumulative Liquidation Levels Delta\\s*([−\\-\\+\\d,]+)\\s*(?:[▲▼]\\s*)?([A-Za-z]+ turn)\\s*([\\d\\-\\s:]+)\\s*More [^·]+·\\s*1h change\\s*([+\\-\\d,]+)/i);
+        if (clldMatch) {
+            clldVal = parseFloat(clldMatch[1].replace('−', '-').replace(/,/g, ''));
+            clldSentiment = clldMatch[2].trim();
+            clldTurnTime = clldMatch[3].trim();
+            clld1hChange = parseFloat(clldMatch[4].replace(/,/g, ''));
+        }
+
+        // Near-field balance
+        let nfbLongPct = null, nfbShortPct = null, nfbBias = null;
+        const nfbMatch = bodyText.match(/Near-field balance[^\\n]*\\s*Longs\\s*(\\d+)%[^\\n]*Shorts\\s*(\\d+)%[^\\n]*\\n([^\\n]+)/i);
+        if (nfbMatch) {
+            nfbLongPct = parseFloat(nfbMatch[1]);
+            nfbShortPct = parseFloat(nfbMatch[2]);
+            nfbBias = nfbMatch[3].trim();
+        }
+
+        // Strength by Distance bands
+        let dist0_1_S = null, dist0_1_L = null;
+        let dist1_2_S = null, dist1_2_L = null;
+        let dist2_3_S = null, dist2_3_L = null;
+        let dist3_5_S = null, dist3_5_L = null;
+        let dist5_10_S = null, dist5_10_L = null;
+
+        const d0_1 = bodyText.match(/0–1%\\s*(\\d+)\\s*·\\s*(\\d+)/);
+        if (d0_1) { dist0_1_S = parseFloat(d0_1[1]); dist0_1_L = parseFloat(d0_1[2]); }
+        const d1_2 = bodyText.match(/1–2%\\s*(\\d+)\\s*·\\s*(\\d+)/);
+        if (d1_2) { dist1_2_S = parseFloat(d1_2[1]); dist1_2_L = parseFloat(d1_2[2]); }
+        const d2_3 = bodyText.match(/2–3%\\s*(\\d+)\\s*·\\s*(\\d+)/);
+        if (d2_3) { dist2_3_S = parseFloat(d2_3[1]); dist2_3_L = parseFloat(d2_3[2]); }
+        const d3_5 = bodyText.match(/3–5%\\s*(\\d+)\\s*·\\s*(\\d+)/);
+        if (d3_5) { dist3_5_S = parseFloat(d3_5[1]); dist3_5_L = parseFloat(d3_5[2]); }
+        const d5_10 = bodyText.match(/5–10%\\s*(\\d+)\\s*·\\s*(\\d+)/);
+        if (d5_10) { dist5_10_S = parseFloat(d5_10[1]); dist5_10_L = parseFloat(d5_10[2]); }
+
+        // Leverage Tiers
+        let highLev_S = null, highLev_L = null;
+        let midLev_S = null, midLev_L = null;
+        let lowLev_S = null, lowLev_L = null;
+
+        const hl = bodyText.match(/High leverage\\s*(\\d+)\\s*·\\s*(\\d+)/);
+        if (hl) { highLev_S = parseFloat(hl[1]); highLev_L = parseFloat(hl[2]); }
+        const ml = bodyText.match(/Mid leverage\\s*(\\d+)\\s*·\\s*(\\d+)/);
+        if (ml) { midLev_S = parseFloat(ml[1]); midLev_L = parseFloat(ml[2]); }
+        const ll = bodyText.match(/Low leverage\\s*(\\d+)\\s*·\\s*(\\d+)/);
+        if (ll) { lowLev_S = parseFloat(ll[1]); lowLev_L = parseFloat(ll[2]); }
+
+        // Active Segments
+        const activeLevels = [];
+        let maxSz = 0;
+        for (let i = 0; i < m.nSeg; i++) {
+            if (!m.segHit || m.segHit[i] === 0) {
+                const sz = m.segSz ? m.segSz[i] : 0;
+                if (sz > maxSz) maxSz = sz;
+            }
+        }
+
+        for (let i = 0; i < m.nSeg; i++) {
+            if (!m.segHit || m.segHit[i] === 0) {
+                const px = m.segPx[i];
+                const sz = m.segSz[i];
+                const lev = m.segLev[i] === 0 ? 'high' : (m.segLev[i] === 1 ? 'mid' : 'low');
+                const side = m.segSide[i] === 1 ? 'short' : 'long';
+                const dist = ((px - curPrice) / curPrice) * 100;
+                const weight = maxSz > 0 ? (sz / maxSz) : 0;
+                const strength = Math.round(weight * 1000) / 10;
+
+                activeLevels.push({
+                    price: Math.round(px * 10) / 10,
+                    volume: Math.round(sz * 100) / 100,
+                    side: side,
+                    leverage_tier: lev,
+                    distance_pct: Math.round(dist * 100) / 100,
+                    strength: strength,
+                    weight: Math.round(weight * 10000) / 10000,
+                    is_active: true
+                });
+            }
+        }
+
+        const snapshot = {
+            exchange: p.ex || 'Binance',
+            symbol: 'BTC',
+            mt5_symbol: 'BTCUSD.pi',
+            pair: p.sym || 'BTCUSDT',
+            lookback_tf: p.tf === 0 ? '3D-1m' : (p.tf === 1 ? '7D-3m' : '30D-15m'),
+            tier: 'Tier 1',
+            last_price: curPrice,
+            clld_current: clldVal,
+            clld_sentiment: clldSentiment,
+            clld_turn_time: clldTurnTime,
+            clld_1h_change: clld1hChange,
+            short_magnet_zone: shortMagZone,
+            short_magnet_dist_pct: shortMagDist,
+            short_magnet_strength: shortMagStr,
+            long_magnet_zone: longMagZone,
+            long_magnet_dist_pct: longMagDist,
+            long_magnet_strength: longMagStr,
+            near_field_long_pct: nfbLongPct,
+            near_field_short_pct: nfbShortPct,
+            near_field_bias: nfbBias,
+            dist_0_1_short_strength: dist0_1_S,
+            dist_0_1_long_strength: dist0_1_L,
+            dist_1_2_short_strength: dist1_2_S,
+            dist_1_2_long_strength: dist1_2_L,
+            dist_2_3_short_strength: dist2_3_S,
+            dist_2_3_long_strength: dist2_3_L,
+            dist_3_5_short_strength: dist3_5_S,
+            dist_3_5_long_strength: dist3_5_L,
+            dist_5_10_short_strength: dist5_10_S,
+            dist_5_10_long_strength: dist5_10_L,
+            high_lev_short_strength: highLev_S,
+            high_lev_long_strength: highLev_L,
+            mid_lev_short_strength: midLev_S,
+            mid_lev_long_strength: midLev_L,
+            low_lev_short_strength: lowLev_S,
+            low_lev_long_strength: lowLev_L,
+            active_levels_count: activeLevels.length
+        };
+
+        return { snapshot, levels: activeLevels };
+    }
+    """
+    return page.evaluate(js_extractor)
+
+
+def upsert_liquidation_data(liq_result: dict):
+    """Persist macro snapshots and discrete levels to Parquet."""
+    if not liq_result or "error" in liq_result:
+        return
+
+    LIQ_DIR.mkdir(parents=True, exist_ok=True)
+    now_utc = datetime.utcnow().isoformat()
+
+    # 1. Macro Snapshot
+    snap = liq_result["snapshot"]
+    snap["snapshot_time_utc"] = now_utc
+    snap["dumped_at_utc"] = now_utc
+    snap_df = pd.DataFrame([snap])
+
+    if SNAPSHOTS_PARQUET.exists():
+        try:
+            existing_snap = pd.read_parquet(SNAPSHOTS_PARQUET)
+            combined_snap = pd.concat([existing_snap, snap_df], ignore_index=True)
+            combined_snap = combined_snap.drop_duplicates(subset=["snapshot_time_utc", "symbol", "exchange"], keep="last")
+        except Exception as e:
+            logger.warning(f"Failed to merge existing snapshots: {e}")
+            combined_snap = snap_df
+    else:
+        combined_snap = snap_df
+
+    combined_snap.to_parquet(SNAPSHOTS_PARQUET, index=False, engine="pyarrow")
+    logger.info(f"Liquidation Snapshot saved: {SNAPSHOTS_PARQUET.name} ({len(combined_snap)} total snapshots)")
+
+    # 2. Granular Strike Levels
+    levels = liq_result["levels"]
+    for lvl in levels:
+        lvl["snapshot_time_utc"] = now_utc
+        lvl["symbol"] = snap["symbol"]
+        lvl["exchange"] = snap["exchange"]
+        lvl["lookback_tf"] = snap["lookback_tf"]
+        lvl["tier"] = snap["tier"]
+        lvl["dumped_at_utc"] = now_utc
+
+    levels_df = pd.DataFrame(levels)
+    levels_df.to_parquet(LEVELS_PARQUET, index=False, engine="pyarrow")
+    logger.info(f"Liquidation Levels saved: {LEVELS_PARQUET.name} ({len(levels_df)} discrete strike levels)")
+
+
+def run_cycle(context) -> dict:
+    """Execute a single full collection cycle across footprint and liquidation streams."""
+    fp_page = get_coinglass_tab(context)
+    ensure_terminal_ready(fp_page)
+
     all_signals = []
     total_chunks = (len(TARGET_SYMBOLS) + CHUNK_SIZE - 1) // CHUNK_SIZE
 
+    # Step 1: Footprint Signals & 15m Candles across all 31 MT5 assets
     for i in range(0, len(TARGET_SYMBOLS), CHUNK_SIZE):
         chunk = TARGET_SYMBOLS[i:i + CHUNK_SIZE]
         chunk_num = i // CHUNK_SIZE + 1
-        logger.info(f"Processing Chunk {chunk_num}/{total_chunks} ({chunk[0]}..{chunk[-1]})...")
+        logger.info(f"[Footprint] Processing Chunk {chunk_num}/{total_chunks} ({chunk[0]}..{chunk[-1]})...")
 
-        chunk_result = extract_combined_chunk(page, chunk)
-        
-        # 1. Accumulate signals
+        chunk_result = extract_footprint_chunk(fp_page, chunk)
         signals = chunk_result.get("signals", [])
         all_signals.extend(signals)
 
-        # 2. Persist candle datasets immediately for each asset in chunk
         candles_dict = chunk_result.get("candles", {})
         for sym, bar_list in candles_dict.items():
             upsert_candle_parquet(sym, MT5_ASSET_MAP.get(sym, ""), bar_list)
 
-    # Persist updated master signals Parquet
     dump_signals_parquet(all_signals)
+    fp_page.evaluate("() => window.__cg_term.pickPair('BTC', 'agg-perp')")
 
-    # Restore view back to BTC
-    page.evaluate("() => window.__cg_term.pickPair('BTC', 'agg-perp')")
-    return len(all_signals)
+    # Step 2: Liquidation Intelligence (Snapshots & Discrete Strike Levels)
+    liq_page = get_liquidation_tab(context)
+    logger.info("[Liquidations] Extracting snapshot & key levels from active liquidation tab...")
+    liq_result = extract_liquidation_data(liq_page)
+    upsert_liquidation_data(liq_result)
+
+    return {
+        "signals_count": len(all_signals),
+        "candles_updated": len(TARGET_SYMBOLS),
+        "liquidation_levels_count": len(liq_result.get("levels", []))
+    }
 
 
 def run_continuous_collector():
-    """Main continuous loop: Combined Dump -> Rotate Cloudflare IP -> 2 min rest -> Repeat."""
-    logger.info("Initializing Targeted MT5 Combined Footprint & Candle Dumper...")
+    """Main continuous loop: Multi-stream Dump -> Rotate Cloudflare IP -> 2 min rest -> Repeat."""
+    logger.info("Initializing CoinGlass Master Data Collector...")
     DB_DIR.mkdir(parents=True, exist_ok=True)
     CANDLE_DIR.mkdir(parents=True, exist_ok=True)
+    LIQ_DIR.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as p:
         try:
@@ -508,25 +746,23 @@ def run_continuous_collector():
             sys.exit(1)
 
         context = browser.contexts[0] if browser.contexts else browser.new_context()
-        page = get_coinglass_tab(context)
-        logger.info(f"Connected to CoinGlass page: {page.title()}")
 
         cycle_count = 1
         while True:
-            logger.info(f"========== STARTING TARGETED MT5 COMBINED DUMP CYCLE #{cycle_count} ==========")
+            logger.info(f"========== STARTING MASTER DATA DUMP CYCLE #{cycle_count} ==========")
             start_time = time.time()
 
             try:
-                sig_count = run_cycle(page)
+                stats = run_cycle(context)
                 elapsed = round(time.time() - start_time, 1)
-                logger.info(f"Cycle #{cycle_count} completed in {elapsed}s: {sig_count} signals, 31 candle files updated.")
+                logger.info(f"Cycle #{cycle_count} completed in {elapsed}s: {stats['signals_count']} signals, {stats['candles_updated']} candle files, {stats['liquidation_levels_count']} liquidation levels.")
             except Exception as e:
                 logger.error(f"Error during cycle #{cycle_count}: {e}", exc_info=True)
 
-            # Step 2: Rotate Cloudflare IP after every cycle
+            # Rotate Cloudflare IP after every cycle
             rotate_cloudflare_ip()
 
-            # Step 1: 2 minutes rest before next cycle
+            # 2 minutes rest before next cycle
             logger.info(f"Resting for {CYCLE_REST_SECONDS} seconds (2 minutes) before starting cycle #{cycle_count + 1}...")
             time.sleep(CYCLE_REST_SECONDS)
             cycle_count += 1
