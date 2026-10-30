@@ -1,13 +1,15 @@
 """
-CoinGlass Footprint Signal Dumper & Continuous Collector
--------------------------------------------------------
-Automates extraction of order-flow footprint signals (time, volume, range bars)
-for all aggregated perpetual futures contracts on CoinGlass via CDP.
+CoinGlass Footprint Signal Dumper & Continuous Collector (Deep History Edition)
+-------------------------------------------------------------------------------
+Automates extraction of complete order-flow footprint signals across all 3 bar
+models (15m Time, Volume, and Range bars) for all aggregated perpetual futures
+contracts on CoinGlass via Chrome DevTools Protocol (CDP).
 
 Requirements satisfied:
-1. Continuous cycle dumping into Database/coinglass_aggregated_futures_signals.parquet.
-2. 2 minutes rest between consecutive dumping cycles.
-3. Automated IP rotation via Cloudflare WARP CLI after every cycle.
+1. Deep historical extraction incorporating maybeOlder() paging (e.g. 100+ BTC signals).
+2. Continuous cycle dumping into Database/coinglass_aggregated_futures_signals.parquet.
+3. 2 minutes rest between consecutive dumping cycles.
+4. Automated IP rotation via Cloudflare WARP CLI after every cycle.
 """
 
 import sys
@@ -33,7 +35,6 @@ WARP_CLI = Path(r"C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe")
 CDP_URL = "http://127.0.0.1:9222"
 CYCLE_REST_SECONDS = 120  # 2 minutes rest between cycles
 CHUNK_SIZE = 20
-PAGE_TIMEOUT_MS = 5000
 
 logging.basicConfig(
     level=logging.INFO,
@@ -64,15 +65,10 @@ def rotate_cloudflare_ip():
     logger.info(f"[Cloudflare WARP] Current outbound IP: {old_ip}. Initiating IP rotation...")
 
     try:
-        # Step 1: Disconnect
         subprocess.run([str(WARP_CLI), "disconnect"], capture_output=True, text=True, check=False)
         time.sleep(2)
-
-        # Step 2: Rotate tunnel keys
         subprocess.run([str(WARP_CLI), "tunnel", "rotate-keys"], capture_output=True, text=True, check=False)
         time.sleep(1)
-
-        # Step 3: Reconnect
         subprocess.run([str(WARP_CLI), "connect"], capture_output=True, text=True, check=False)
         time.sleep(4)
 
@@ -133,8 +129,8 @@ def ensure_terminal_ready(page):
     return ready
 
 
-def extract_all_signals(page) -> list:
-    """Run in-page multi-symbol signal extraction in chunks."""
+def extract_all_signals_deep(page) -> list:
+    """Run in-page multi-symbol signal extraction with deep historical paging."""
     ensure_terminal_ready(page)
 
     symbols = page.evaluate("""
@@ -148,10 +144,10 @@ def extract_all_signals(page) -> list:
     if not symbols:
         raise RuntimeError("No aggregated perpetual futures symbols discovered in catalog.")
 
-    logger.info(f"Targeting {len(symbols)} aggregated perpetual futures assets.")
+    logger.info(f"Targeting {len(symbols)} aggregated perpetual futures assets with deep history.")
     page.evaluate("() => { window.__allExtractedSignals = []; }")
 
-    chunk_fn = """
+    deep_chunk_fn = """
     async (symbolsChunk) => {
         const term = window.__cg_term;
         for (const sym of symbolsChunk) {
@@ -159,12 +155,23 @@ def extract_all_signals(page) -> list:
                 const timeout = setTimeout(() => {
                     unsub();
                     resolve();
-                }, 5000);
+                }, 7000);
 
-                const unsub = term.subscribe(() => {
+                let loadedOlder = false;
+
+                const unsub = term.subscribe(async () => {
                     if (term.status === 'ready' && term.prefs.sym === sym && !term.D.err) {
+                        if (!loadedOlder) {
+                            loadedOlder = true;
+                            try {
+                                await term.maybeOlder();
+                            } catch (e) {}
+                        }
+
                         const sigSets = term.sigSets();
-                        if (sigSets && sigSets.length > 0) {
+                        if (sigSets && sigSets.length === 3) {
+                            clearTimeout(timeout);
+                            unsub();
                             for (const set of sigSets) {
                                 const X = set.X;
                                 for (const s of set.sigs) {
@@ -185,8 +192,6 @@ def extract_all_signals(page) -> list:
                                     });
                                 }
                             }
-                            clearTimeout(timeout);
-                            unsub();
                             resolve();
                         }
                     }
@@ -199,11 +204,12 @@ def extract_all_signals(page) -> list:
     }
     """
 
+    total_chunks = (len(symbols) + CHUNK_SIZE - 1) // CHUNK_SIZE
     for i in range(0, len(symbols), CHUNK_SIZE):
         chunk = symbols[i:i + CHUNK_SIZE]
-        so_far = page.evaluate(chunk_fn, chunk)
-        logger.info(f"Processed chunk {i // CHUNK_SIZE + 1}/{(len(symbols) + CHUNK_SIZE - 1) // CHUNK_SIZE} "
-                    f"({chunk[0]}..{chunk[-1]}). Total signals so far: {so_far}")
+        so_far = page.evaluate(deep_chunk_fn, chunk)
+        chunk_num = i // CHUNK_SIZE + 1
+        logger.info(f"Chunk {chunk_num}/{total_chunks} ({chunk[0]}..{chunk[-1]}): {so_far} total signals.")
 
     # Restore view back to ETH
     page.evaluate("() => window.__cg_term.pickPair('ETH', 'agg-perp')")
@@ -222,7 +228,6 @@ def dump_to_parquet(signals: list):
     df = pd.DataFrame(signals)
     df["dumped_at_utc"] = datetime.utcnow().isoformat()
 
-    # Save snapshot
     df.to_parquet(OUTPUT_PARQUET, index=False, engine="pyarrow")
     logger.info(f"Parquet updated: {OUTPUT_PARQUET} ({len(df)} rows, {df['symbol'].nunique()} unique symbols)")
 
@@ -250,7 +255,7 @@ def run_continuous_collector():
             start_time = time.time()
 
             try:
-                signals = extract_all_signals(page)
+                signals = extract_all_signals_deep(page)
                 dump_to_parquet(signals)
                 elapsed = round(time.time() - start_time, 1)
                 logger.info(f"Cycle #{cycle_count} completed in {elapsed}s.")
