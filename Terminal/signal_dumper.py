@@ -1,15 +1,16 @@
 """
-CoinGlass Footprint Signal Dumper & Continuous Collector (Deep History Edition)
+CoinGlass Footprint Signal Dumper & Continuous Collector (MT5 Targeted Edition)
 -------------------------------------------------------------------------------
-Automates extraction of complete order-flow footprint signals across all 3 bar
-models (15m Time, Volume, and Range bars) for all aggregated perpetual futures
-contracts on CoinGlass via Chrome DevTools Protocol (CDP).
+Automates extraction of complete order-flow footprint signals exclusively for the
+31 cryptocurrency assets supported by your Blueberry Markets MT5 account.
 
-Requirements satisfied:
-1. Deep historical extraction incorporating maybeOlder() paging (e.g. 100+ BTC signals).
-2. Continuous cycle dumping into Database/coinglass_aggregated_futures_signals.parquet.
-3. 2 minutes rest between consecutive dumping cycles.
-4. Automated IP rotation via Cloudflare WARP CLI after every cycle.
+Key Features:
+1. Targeted Symbol Filter: Tracks exclusively the 31 MT5-tradable crypto assets.
+2. Direct MT5 Ticker Mapping: Attaches `mt5_symbol` (e.g. BTCUSD.pi, DOGUSD.p) to each record.
+3. Deep Historical Paging: Uses maybeOlder() to retrieve complete multi-bar signal depth.
+4. Continuous Cycle Dumping: Writes to Database/coinglass_aggregated_futures_signals.parquet.
+5. Cloudflare WARP IP Rotation: Automatically rotates IP after every cycle.
+6. Rest Interval: 2 minutes rest between consecutive dumping cycles.
 """
 
 import sys
@@ -26,7 +27,7 @@ import pandas as pd
 from playwright.sync_api import sync_playwright
 
 # ---------------------------------------------------------------------------
-# Configuration
+# Configuration & MT5 Asset Mapping
 # ---------------------------------------------------------------------------
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DB_DIR = ROOT_DIR / "Database"
@@ -34,7 +35,44 @@ OUTPUT_PARQUET = DB_DIR / "coinglass_aggregated_futures_signals.parquet"
 WARP_CLI = Path(r"C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe")
 CDP_URL = "http://127.0.0.1:9222"
 CYCLE_REST_SECONDS = 120  # 2 minutes rest between cycles
-CHUNK_SIZE = 20
+CHUNK_SIZE = 15
+
+# Verified mapping: CoinGlass symbol -> Blueberry Markets MT5 ticker
+MT5_ASSET_MAP = {
+    "BTC": "BTCUSD.pi",
+    "ETH": "ETHUSD.pi",
+    "SOL": "SOLUSD.p",
+    "XRP": "XRPUSD.pi",
+    "DOGE": "DOGUSD.p",
+    "BNB": "BNBUSD.p",
+    "ADA": "ADAUSD.p",
+    "LINK": "LNKUSD.p",
+    "AVAX": "AVXUSD.p",
+    "LTC": "LTCUSD.pi",
+    "DOT": "DOTUSD.pi",
+    "BCH": "BCHUSD.p",
+    "NEAR": "NERUSD.p",
+    "TRX": "TRXUSD.p",
+    "UNI": "UNIUSD.p",
+    "AAVE": "AVEUSD.p",
+    "FIL": "FILUSD.p",
+    "CRV": "CRVUSD.p",
+    "ATOM": "ATMUSD.p",
+    "ALGO": "ALGUSD.p",
+    "AXS": "AXSUSD.p",
+    "BAT": "BATUSD.p",
+    "CHZ": "CHZUSD.p",
+    "AR": "ARWUSD.p",
+    "COMP": "COMUSD.p",
+    "1INCH": "INCUSD.p",
+    "SUSHI": "XSIUSD.p",
+    "SNX": "SNXUSD.p",
+    "NEO": "NEOUSD.p",
+    "ZEC": "ZECUSD.p",
+    "HBAR": "BARUSD.p"
+}
+
+TARGET_SYMBOLS = list(MT5_ASSET_MAP.keys())
 
 logging.basicConfig(
     level=logging.INFO,
@@ -129,26 +167,15 @@ def ensure_terminal_ready(page):
     return ready
 
 
-def extract_all_signals_deep(page) -> list:
-    """Run in-page multi-symbol signal extraction with deep historical paging."""
+def extract_mt5_signals_deep(page) -> list:
+    """Run in-page signal extraction targeted exclusively to the 31 MT5 assets."""
     ensure_terminal_ready(page)
-
-    symbols = page.evaluate("""
-    () => {
-        const term = window.__cg_term;
-        const allPairs = term.pairs ? term.pairs() : [];
-        return allPairs.filter(p => p.m && p.m.id === 'agg-perp').map(p => p.s);
-    }
-    """)
-
-    if not symbols:
-        raise RuntimeError("No aggregated perpetual futures symbols discovered in catalog.")
-
-    logger.info(f"Targeting {len(symbols)} aggregated perpetual futures assets with deep history.")
+    logger.info(f"Targeting {len(TARGET_SYMBOLS)} MT5-tradable assets with deep history.")
     page.evaluate("() => { window.__allExtractedSignals = []; }")
 
     deep_chunk_fn = """
-    async (symbolsChunk) => {
+    async (args) => {
+        const { symbolsChunk, mt5Map } = args;
         const term = window.__cg_term;
         for (const sym of symbolsChunk) {
             await new Promise((resolve) => {
@@ -178,6 +205,7 @@ def extract_all_signals_deep(page) -> list:
                                     const text = term.sigText(s, X);
                                     window.__allExtractedSignals.push({
                                         symbol: sym,
+                                        mt5_symbol: mt5Map[sym] || '',
                                         market: 'agg-perp',
                                         bar_type: set.bt,
                                         bar_label: set.label,
@@ -204,22 +232,22 @@ def extract_all_signals_deep(page) -> list:
     }
     """
 
-    total_chunks = (len(symbols) + CHUNK_SIZE - 1) // CHUNK_SIZE
-    for i in range(0, len(symbols), CHUNK_SIZE):
-        chunk = symbols[i:i + CHUNK_SIZE]
-        so_far = page.evaluate(deep_chunk_fn, chunk)
+    total_chunks = (len(TARGET_SYMBOLS) + CHUNK_SIZE - 1) // CHUNK_SIZE
+    for i in range(0, len(TARGET_SYMBOLS), CHUNK_SIZE):
+        chunk = TARGET_SYMBOLS[i:i + CHUNK_SIZE]
+        so_far = page.evaluate(deep_chunk_fn, {"symbolsChunk": chunk, "mt5Map": MT5_ASSET_MAP})
         chunk_num = i // CHUNK_SIZE + 1
         logger.info(f"Chunk {chunk_num}/{total_chunks} ({chunk[0]}..{chunk[-1]}): {so_far} total signals.")
 
-    # Restore view back to ETH
-    page.evaluate("() => window.__cg_term.pickPair('ETH', 'agg-perp')")
+    # Restore view back to BTC
+    page.evaluate("() => window.__cg_term.pickPair('BTC', 'agg-perp')")
 
     all_signals = page.evaluate("() => window.__allExtractedSignals")
     return all_signals
 
 
 def dump_to_parquet(signals: list):
-    """Convert extracted records to a clean DataFrame and save to Parquet."""
+    """Convert extracted records to DataFrame and persist to Parquet."""
     if not signals:
         logger.warning("Empty signal set received. Skipping file write.")
         return
@@ -228,13 +256,17 @@ def dump_to_parquet(signals: list):
     df = pd.DataFrame(signals)
     df["dumped_at_utc"] = datetime.utcnow().isoformat()
 
+    # Reorder columns
+    cols = ['symbol', 'mt5_symbol'] + [c for c in df.columns if c not in ['symbol', 'mt5_symbol']]
+    df = df[cols]
+
     df.to_parquet(OUTPUT_PARQUET, index=False, engine="pyarrow")
-    logger.info(f"Parquet updated: {OUTPUT_PARQUET} ({len(df)} rows, {df['symbol'].nunique()} unique symbols)")
+    logger.info(f"Parquet updated: {OUTPUT_PARQUET} ({len(df)} rows, {df['symbol'].nunique()} unique MT5 assets)")
 
 
 def run_continuous_collector():
-    """Main execution loop: Dump -> Rotate Cloudflare IP -> 2 min rest -> Repeat."""
-    logger.info("Initializing CoinGlass Footprint Continuous Signal Collector...")
+    """Main execution loop: Dump 31 MT5 Assets -> Rotate Cloudflare IP -> 2 min rest -> Repeat."""
+    logger.info("Initializing Targeted MT5 Footprint Signal Collector...")
     DB_DIR.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as p:
@@ -251,11 +283,11 @@ def run_continuous_collector():
 
         cycle_count = 1
         while True:
-            logger.info(f"========== STARTING DUMPING CYCLE #{cycle_count} ==========")
+            logger.info(f"========== STARTING TARGETED MT5 DUMP CYCLE #{cycle_count} ==========")
             start_time = time.time()
 
             try:
-                signals = extract_all_signals_deep(page)
+                signals = extract_mt5_signals_deep(page)
                 dump_to_parquet(signals)
                 elapsed = round(time.time() - start_time, 1)
                 logger.info(f"Cycle #{cycle_count} completed in {elapsed}s.")
