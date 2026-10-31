@@ -310,6 +310,13 @@ def dump_signals_parquet(signals: list):
     df.to_parquet(OUTPUT_SIGNALS_PARQUET, index=False, engine="pyarrow")
     logger.info(f"Signals Parquet updated: {OUTPUT_SIGNALS_PARQUET.name} ({len(df)} rows across {df['symbol'].nunique()} assets)")
 
+    # Reactive Wake-Up Engine: Evaluate new CoinGlass signals immediately against MT5 live quotes
+    try:
+        from Terminal.reactive_trade_engine import scan_and_react_to_signals
+        scan_and_react_to_signals()
+    except Exception as e:
+        logger.warning(f"[Wakeup-Engine] Error during reactive trade formulation: {e}")
+
 
 async def extract_footprint_chunk(page, symbols_chunk: list) -> dict:
     """Extract Footprint signals and 15m order flow candles for a chunk of symbols."""
@@ -959,6 +966,13 @@ async def execute_liquidation_sweep(context, warp_lock: asyncio.Lock):
 
             if all_snapshots:
                 upsert_liquidation_snapshots(all_snapshots)
+
+            # Sync live MT5 ticks & basis differentials across all assets
+            try:
+                from Terminal.mt5_market_sync import sync_mt5_ticks
+                sync_mt5_ticks()
+            except Exception as e:
+                logger.warning(f"Error during MT5 ticks synchronization: {e}")
 
             logger.info(f"[Pipe 2: Liquidation] Sweep complete: {total_levels_count} discrete levels, {total_key_levels_count} barriers across {len(LIQ_LEVEL_SYMBOLS)} assets.")
         except Exception as e:
