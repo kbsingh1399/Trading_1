@@ -429,20 +429,32 @@ async def harvest_whale_orders_for_symbol(page, symbol: str) -> dict:
 
 
 async def sweep_all_cryptos(symbols: list = None) -> dict:
-    """Orchestrates full sweep across all active crypto assets."""
+    """Orchestrates full sweep across all active crypto assets with resilient CDP connection."""
     target_symbols = symbols or CRYPTO_SYMBOLS
     logger.info(f"Starting Whale Orders Dump across {len(target_symbols)} crypto assets: {target_symbols}")
     
     summary = {}
     async with async_playwright() as p:
-        browser = await p.chromium.connect_over_cdp("http://127.0.0.1:9222")
+        browser = None
+        for attempt in range(3):
+            try:
+                browser = await p.chromium.connect_over_cdp("http://127.0.0.1:9222", timeout=20000)
+                break
+            except Exception as e:
+                logger.warning(f"CDP connection attempt {attempt+1} busy: {e}. Waiting 10s...")
+                await asyncio.sleep(10)
+
+        if not browser:
+            logger.error("Could not establish CDP connection to browser after 3 attempts. Skipping pass.")
+            return {}
+
         ctx = browser.contexts[0]
         pages = [pg for pg in ctx.pages if "large-orderbook" in pg.url]
         page = pages[0] if pages else await ctx.new_page()
 
         for sym in target_symbols:
             try:
-                res = await harvest_whale_orders_for_symbol(page, sym)
+                res = await asyncio.wait_for(harvest_whale_orders_for_symbol(page, sym), timeout=40.0)
                 summary[sym] = res
                 logger.info(f"[{sym}] Complete: {res['open_orders_count']} open, {res['history_orders_count']} history")
             except Exception as e:

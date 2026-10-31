@@ -41,6 +41,10 @@ from playwright.async_api import async_playwright
 # Configuration & Registry Loading
 # ---------------------------------------------------------------------------
 ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+if str(ROOT_DIR / "Terminal") not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR / "Terminal"))
 DB_DIR = ROOT_DIR / "Database"
 CANDLE_DIR = DB_DIR / "Candle_Data"
 LIQ_DIR = DB_DIR / "Liquidation_Data"
@@ -314,7 +318,10 @@ def dump_signals_parquet(signals: list):
 
     # Reactive Wake-Up Engine: Evaluate new CoinGlass signals immediately against MT5 live quotes
     try:
-        from Terminal.reactive_trade_engine import scan_and_react_to_signals
+        try:
+            from Terminal.reactive_trade_engine import scan_and_react_to_signals
+        except ImportError:
+            from reactive_trade_engine import scan_and_react_to_signals
         scan_and_react_to_signals()
     except Exception as e:
         logger.warning(f"[Wakeup-Engine] Error during reactive trade formulation: {e}")
