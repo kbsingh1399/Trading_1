@@ -452,5 +452,29 @@ async def sweep_all_cryptos(symbols: list = None) -> dict:
     return summary
 
 
+async def daemon_loop(interval_seconds: int = 180):
+    logger.info(f"Starting Whale Orders Collector Daemon (Cycle Interval: {interval_seconds}s)")
+    while True:
+        try:
+            await sweep_all_cryptos()
+        except Exception as e:
+            logger.error(f"Error during whale sweep cycle: {e}")
+        logger.info(f"Whale sweep cycle complete. Sleeping {interval_seconds}s before next pass...")
+        await asyncio.sleep(interval_seconds)
+
+
 if __name__ == "__main__":
-    asyncio.run(sweep_all_cryptos())
+    import argparse
+    parser = argparse.ArgumentParser(description="CoinGlass Whale Orders Collector")
+    parser.add_argument("--daemon", action="store_true", help="Run continuously in background daemon loop")
+    parser.add_argument("--interval", type=int, default=180, help="Seconds between sweeps in daemon mode (default 180s)")
+    parser.add_argument("--symbol", type=str, default=None, help="Target a single symbol")
+    args = parser.parse_args()
+
+    if args.daemon:
+        asyncio.run(daemon_loop(args.interval))
+    elif args.symbol:
+        asyncio.run(sweep_all_cryptos([args.symbol.upper()]))
+    else:
+        asyncio.run(sweep_all_cryptos())
+
