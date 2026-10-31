@@ -1,0 +1,132 @@
+{
+  "us30": {
+    "code": "0",
+    "msg": "success",
+    "success": true
+  },
+  "oil": {
+    "code": "0",
+    "msg": "success",
+    "success": true
+  },
+  "brent": {
+    "code": "0",
+    "msg": "success",
+    "success": true
+  },
+  "wti": {
+    "code": "0",
+    "msg": "success",
+    "success": true
+  },
+  "natgas": {
+    "code": "0",
+    "msg": "success",
+    "success": true
+  },
+  "ger40": {
+    "code": "0",
+    "msg": "success",
+    "success": true
+  },
+  "dax": {
+    "code": "0",
+    "msg": "success",
+    "success": true
+  },
+  "uk100": {
+    "code": "0",
+    "msg": "success",
+    "success": true
+  },
+  "ftse": {
+    "code": "0",
+    "msg": "success",
+    "success": true
+  },
+  "jp225": {
+    "code": "0",
+    "msg": "success",
+    "success": true
+  },
+  "nikkei": {
+    "code": "0",
+    "msg": "success",
+    "success": true
+  },
+  "asx": {
+    "code": "0",
+    "msg": "success",
+    "success": true
+  },
+  "china50": {
+    "code": "0",
+    "msg": "success",
+    "success": true
+  },
+  "cac40": {
+    "code": "0",
+    "msg": "success",
+    "success": true
+  },
+  "platinum": {
+    "code": "0",
+    "msg": "success",
+    "success": true
+  },
+  "palladium": {
+    "code": "0",
+    "msg": "success",
+    "success": true
+  },
+  "aluminum": {
+    "code": "0",
+    "msg": "success",
+    "success": true
+  },
+  "nickel": {
+    "code": "0",
+    "msg": "success",
+    "success": true
+  },
+  "copper": {
+    "code": "0",
+    "msg": "success",
+    "success": true
+  },
+  "zinc": {
+    "code": "0",
+    "msg": "success",
+    "success": true
+  },
+  "lead": {
+    "code": "0",
+    "msg": "success",
+    "success": true
+  },
+  "usdjpy": {
+    "code": "0",
+    "msg": "success",
+    "success": true
+  },
+  "audusd": {
+    "code": "0",
+    "msg": "success",
+    "success": true
+  },
+  "usdcad": {
+    "code": "0",
+    "msg": "success",
+    "success": true
+  },
+  "usdchf": {
+    "code": "0",
+    "msg": "success",
+    "success": true
+  },
+  "nzdusd": {
+    "code": "0",
+    "msg": "success",
+    "success": true
+  }
+}

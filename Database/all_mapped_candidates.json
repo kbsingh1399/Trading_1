@@ -1,0 +1,422 @@
+{
+  "BTCUSD.pi": {
+    "cg_sym": "BTC",
+    "desc": "Bitcoin",
+    "class": "Cryptos"
+  },
+  "ETHUSD.pi": {
+    "cg_sym": "ETH",
+    "desc": "Ethereum",
+    "class": "Cryptos"
+  },
+  "SOLUSD.p": {
+    "cg_sym": "SOL",
+    "desc": "Solana",
+    "class": "Cryptos"
+  },
+  "LTCUSD.pi": {
+    "cg_sym": "LTC",
+    "desc": "Litecoin",
+    "class": "Cryptos"
+  },
+  "XRPUSD.pi": {
+    "cg_sym": "XRP",
+    "desc": "Ripple",
+    "class": "Cryptos"
+  },
+  "DOTUSD.pi": {
+    "cg_sym": "DOT",
+    "desc": "Polkadot",
+    "class": "Cryptos"
+  },
+  "ADAUSD.p": {
+    "cg_sym": "ADA",
+    "desc": "Cardano",
+    "class": "Cryptos"
+  },
+  "BCHUSD.p": {
+    "cg_sym": "BCH",
+    "desc": "Bitcoin Cash",
+    "class": "Cryptos"
+  },
+  "LNKUSD.p": {
+    "cg_sym": "LINK",
+    "desc": "Chainlink",
+    "class": "Cryptos"
+  },
+  "XLMUSD.p": {
+    "cg_sym": "XLM",
+    "desc": "Stellar Lumens",
+    "class": "Cryptos"
+  },
+  "AVXUSD.p": {
+    "cg_sym": "AVAX",
+    "desc": "Avalanche",
+    "class": "Cryptos"
+  },
+  "DOGUSD.p": {
+    "cg_sym": "DOGE",
+    "desc": "Dogecoin",
+    "class": "Cryptos"
+  },
+  "FILUSD.p": {
+    "cg_sym": "FIL",
+    "desc": "Filecoin",
+    "class": "Cryptos"
+  },
+  "GRTUSD.p": {
+    "cg_sym": "GRT",
+    "desc": "The Graph",
+    "class": "Cryptos"
+  },
+  "NERUSD.p": {
+    "cg_sym": "NEAR",
+    "desc": "NEAR Protocol",
+    "class": "Cryptos"
+  },
+  "TRXUSD.p": {
+    "cg_sym": "TRX",
+    "desc": "TRON",
+    "class": "Cryptos"
+  },
+  "UNIUSD.p": {
+    "cg_sym": "UNI",
+    "desc": "Uniswap",
+    "class": "Cryptos"
+  },
+  "VETUSD.p": {
+    "cg_sym": "VET",
+    "desc": "VeChain",
+    "class": "Cryptos"
+  },
+  "XMRUSD.p": {
+    "cg_sym": "XMR",
+    "desc": "Monero",
+    "class": "Cryptos"
+  },
+  "BNBUSD.p": {
+    "cg_sym": "BNB",
+    "desc": "Binance Coin",
+    "class": "Cryptos"
+  },
+  "AVEUSD.p": {
+    "cg_sym": "AAVE",
+    "desc": "Aave",
+    "class": "Cryptos"
+  },
+  "ALGUSD.p": {
+    "cg_sym": "ALGO",
+    "desc": "Algorand",
+    "class": "Cryptos"
+  },
+  "ATMUSD.p": {
+    "cg_sym": "ATOM",
+    "desc": "Cosmos",
+    "class": "Cryptos"
+  },
+  "AXSUSD.p": {
+    "cg_sym": "AXS",
+    "desc": "Axie Infinity",
+    "class": "Cryptos"
+  },
+  "CHZUSD.p": {
+    "cg_sym": "CHZ",
+    "desc": "Chiliz",
+    "class": "Cryptos"
+  },
+  "COMUSD.p": {
+    "cg_sym": "COMP",
+    "desc": "Compound",
+    "class": "Cryptos"
+  },
+  "EGLUSD.p": {
+    "cg_sym": "EGLD",
+    "desc": "MultiversX / Elrond",
+    "class": "Cryptos"
+  },
+  "FLWUSD.p": {
+    "cg_sym": "FLOW",
+    "desc": "Flow",
+    "class": "Cryptos"
+  },
+  "IOTUSD.p": {
+    "cg_sym": "IOTA",
+    "desc": "IOTA",
+    "class": "Cryptos"
+  },
+  "KSMUSD.p": {
+    "cg_sym": "KSM",
+    "desc": "Kusama",
+    "class": "Cryptos"
+  },
+  "NEOUSD.p": {
+    "cg_sym": "NEO",
+    "desc": "NEO",
+    "class": "Cryptos"
+  },
+  "XSIUSD.p": {
+    "cg_sym": "SUSHI",
+    "desc": "SushiSwap",
+    "class": "Cryptos"
+  },
+  "THTUSD.p": {
+    "cg_sym": "THETA",
+    "desc": "Theta Network",
+    "class": "Cryptos"
+  },
+  "XTZUSD.p": {
+    "cg_sym": "XTZ",
+    "desc": "Tezos",
+    "class": "Cryptos"
+  },
+  "ZECUSD.p": {
+    "cg_sym": "ZEC",
+    "desc": "Zcash",
+    "class": "Cryptos"
+  },
+  "MANUSD.p": {
+    "cg_sym": "MANA",
+    "desc": "Decentraland",
+    "class": "Cryptos"
+  },
+  "INCUSD.p": {
+    "cg_sym": "1INCH",
+    "desc": "1inch",
+    "class": "Cryptos"
+  },
+  "ARWUSD.p": {
+    "cg_sym": "AR",
+    "desc": "Arweave",
+    "class": "Cryptos"
+  },
+  "BATUSD.p": {
+    "cg_sym": "BAT",
+    "desc": "Basic Attention Token",
+    "class": "Cryptos"
+  },
+  "CELUSD.p": {
+    "cg_sym": "CELO",
+    "desc": "Celo",
+    "class": "Cryptos"
+  },
+  "CHRUSD.p": {
+    "cg_sym": "CHR",
+    "desc": "Chromia",
+    "class": "Cryptos"
+  },
+  "CRVUSD.p": {
+    "cg_sym": "CRV",
+    "desc": "Curve DAO",
+    "class": "Cryptos"
+  },
+  "ENJUSD.p": {
+    "cg_sym": "ENJ",
+    "desc": "Enjin Coin",
+    "class": "Cryptos"
+  },
+  "BARUSD.p": {
+    "cg_sym": "HBAR",
+    "desc": "Hedera Hashgraph",
+    "class": "Cryptos"
+  },
+  "LRCUSD.p": {
+    "cg_sym": "LRC",
+    "desc": "Loopring",
+    "class": "Cryptos"
+  },
+  "KAVUSD.p": {
+    "cg_sym": "KAVA",
+    "desc": "Kava",
+    "class": "Cryptos"
+  },
+  "KNCUSD.p": {
+    "cg_sym": "KNC",
+    "desc": "Kyber Network",
+    "class": "Cryptos"
+  },
+  "ONTUSD.p": {
+    "cg_sym": "ONT",
+    "desc": "Ontology",
+    "class": "Cryptos"
+  },
+  "QTMUSD.p": {
+    "cg_sym": "QTUM",
+    "desc": "Qtum",
+    "class": "Cryptos"
+  },
+  "SNDUSD.p": {
+    "cg_sym": "SAND",
+    "desc": "The Sandbox",
+    "class": "Cryptos"
+  },
+  "SKLUSD.p": {
+    "cg_sym": "SKL",
+    "desc": "SKALE",
+    "class": "Cryptos"
+  },
+  "SNXUSD.p": {
+    "cg_sym": "SNX",
+    "desc": "Synthetix",
+    "class": "Cryptos"
+  },
+  "STOUSD.p": {
+    "cg_sym": "STORJ",
+    "desc": "Storj",
+    "class": "Cryptos"
+  },
+  "SXPUSD.p": {
+    "cg_sym": "SXP",
+    "desc": "Solar / Swipe",
+    "class": "Cryptos"
+  },
+  "YFIUSD.p": {
+    "cg_sym": "YFI",
+    "desc": "yearn.finance",
+    "class": "Cryptos"
+  },
+  "ZILUSD.p": {
+    "cg_sym": "ZIL",
+    "desc": "Zilliqa",
+    "class": "Cryptos"
+  },
+  "ZRXUSD.p": {
+    "cg_sym": "ZRX",
+    "desc": "0x",
+    "class": "Cryptos"
+  },
+  "DSHUSD.p": {
+    "cg_sym": "DASH",
+    "desc": "Dash",
+    "class": "Cryptos"
+  },
+  "XAUUSD.pi": {
+    "cg_sym": "XAU",
+    "desc": "Gold",
+    "class": "Commodities_Metals"
+  },
+  "XAGUSD.pi": {
+    "cg_sym": "XAG",
+    "desc": "Silver",
+    "class": "Commodities_Metals"
+  },
+  "COPPER.p": {
+    "cg_sym": "COPPER",
+    "desc": "Copper",
+    "class": "Commodities_Metals"
+  },
+  "GAS.p": {
+    "cg_sym": "GAS",
+    "desc": "Natural Gas",
+    "class": "Commodities_Metals"
+  },
+  "USWTI.p": {
+    "cg_sym": "CL",
+    "desc": "WTI Crude Oil",
+    "class": "Commodities_Metals"
+  },
+  "UKBRENT.p": {
+    "cg_sym": "BRENT",
+    "desc": "Brent Crude Oil",
+    "class": "Commodities_Metals"
+  },
+  "ALUMINIUM.p": {
+    "cg_sym": "ALI",
+    "desc": "Aluminium",
+    "class": "Commodities_Metals"
+  },
+  "NICKEL.p": {
+    "cg_sym": "NI",
+    "desc": "Nickel",
+    "class": "Commodities_Metals"
+  },
+  "LEAD.p": {
+    "cg_sym": "PB",
+    "desc": "Lead",
+    "class": "Commodities_Metals"
+  },
+  "ZINC.p": {
+    "cg_sym": "ZN",
+    "desc": "Zinc",
+    "class": "Commodities_Metals"
+  },
+  "XPTUSD.pi": {
+    "cg_sym": "XPT",
+    "desc": "Platinum",
+    "class": "Commodities_Metals"
+  },
+  "XPDUSD.pi": {
+    "cg_sym": "XPD",
+    "desc": "Palladium",
+    "class": "Commodities_Metals"
+  },
+  "EURUSD.pi": {
+    "cg_sym": "EURUSD",
+    "desc": "Euro / US Dollar",
+    "class": "Forex"
+  },
+  "GBPUSD.pi": {
+    "cg_sym": "GBPUSD",
+    "desc": "British Pound / US Dollar",
+    "class": "Forex"
+  },
+  "USDJPY.pi": {
+    "cg_sym": "USDJPY",
+    "desc": "US Dollar / Japanese Yen",
+    "class": "Forex"
+  },
+  "AUDUSD.pi": {
+    "cg_sym": "AUDUSD",
+    "desc": "Australian Dollar / US Dollar",
+    "class": "Forex"
+  },
+  "USDCAD.pi": {
+    "cg_sym": "USDCAD",
+    "desc": "US Dollar / Canadian Dollar",
+    "class": "Forex"
+  },
+  "USDCHF.pi": {
+    "cg_sym": "USDCHF",
+    "desc": "US Dollar / Swiss Franc",
+    "class": "Forex"
+  },
+  "NZDUSD.pi": {
+    "cg_sym": "NZDUSD",
+    "desc": "New Zealand Dollar / US Dollar",
+    "class": "Forex"
+  },
+  "SP500.p": {
+    "cg_sym": "SP500",
+    "desc": "US SPX 500",
+    "class": "Indices"
+  },
+  "NAS100.p": {
+    "cg_sym": "NAS100",
+    "desc": "US Tech 100 Nasdaq",
+    "class": "Indices"
+  },
+  "DJ30.p": {
+    "cg_sym": "DJ30",
+    "desc": "Wall Street 30 Dow",
+    "class": "Indices"
+  },
+  "GER30.p": {
+    "cg_sym": "GER30",
+    "desc": "DAX 40 Germany",
+    "class": "Indices"
+  },
+  "UK100.p": {
+    "cg_sym": "UK100",
+    "desc": "UK 100 FTSE",
+    "class": "Indices"
+  },
+  "JP225.p": {
+    "cg_sym": "JP225",
+    "desc": "Nikkei 225 Japan",
+    "class": "Indices"
+  },
+  "AU200.p": {
+    "cg_sym": "AU200",
+    "desc": "Australia 200 Cash",
+    "class": "Indices"
+  }
+}

@@ -68,11 +68,11 @@ logging.basicConfig(
 logger = logging.getLogger("DataCollector")
 
 
-def load_capability_registry() -> tuple[dict, list, list, list, dict]:
+def load_capability_registry() -> tuple[dict, list, list, list, dict, dict]:
     """Load the verified mutual asset capability registry."""
     if not REGISTRY_FILE.exists():
         logger.error(f"Capability registry missing at: {REGISTRY_FILE}")
-        return {}, [], [], [], {}
+        return {}, [], [], [], {}, {}
 
     with open(REGISTRY_FILE, "r", encoding="utf-8") as f:
         reg = json.load(f)
@@ -82,11 +82,30 @@ def load_capability_registry() -> tuple[dict, list, list, list, dict]:
     liq_level_symbols = []
     liq_snap_symbols = []
     liq_exchanges_map = {}
+    liq_contracts_map = {}
 
     for category, assets in reg.items():
         for sym, meta in assets.items():
             mt5_map[sym] = meta["mt5"]
-            liq_exchanges_map[sym] = meta.get("liq_exchanges", ["Binance"])
+            
+            # Build target exchanges
+            exs = []
+            if meta.get("primary_exchange"):
+                exs.append(meta["primary_exchange"])
+            if meta.get("alt_exchange"):
+                exs.append(meta["alt_exchange"])
+            if not exs:
+                exs = meta.get("liq_exchanges", ["Binance"])
+            liq_exchanges_map[sym] = exs
+
+            # Build contract map per exchange
+            c_map = {}
+            if meta.get("primary_exchange") and meta.get("liq_contract"):
+                c_map[meta["primary_exchange"]] = meta["liq_contract"]
+            if meta.get("alt_exchange") and meta.get("alt_contract"):
+                c_map[meta["alt_exchange"]] = meta["alt_contract"]
+            liq_contracts_map[sym] = c_map
+
             if meta.get("footprint", False):
                 fp_symbols.append(sym)
             if meta.get("liq_levels", False):
@@ -94,10 +113,10 @@ def load_capability_registry() -> tuple[dict, list, list, list, dict]:
             if meta.get("liq_snapshots", False):
                 liq_snap_symbols.append(sym)
 
-    return mt5_map, fp_symbols, liq_level_symbols, liq_snap_symbols, liq_exchanges_map
+    return mt5_map, fp_symbols, liq_level_symbols, liq_snap_symbols, liq_exchanges_map, liq_contracts_map
 
 
-MT5_ASSET_MAP, FP_TARGET_SYMBOLS, LIQ_LEVEL_SYMBOLS, LIQ_SNAP_SYMBOLS, LIQ_EXCHANGES_MAP = load_capability_registry()
+MT5_ASSET_MAP, FP_TARGET_SYMBOLS, LIQ_LEVEL_SYMBOLS, LIQ_SNAP_SYMBOLS, LIQ_EXCHANGES_MAP, LIQ_CONTRACTS_MAP = load_capability_registry()
 
 
 def get_current_ip() -> str:
@@ -674,7 +693,7 @@ def extract_single_liquidation_state(page, symbol: str, mt5_symbol: str, tf_labe
     return page.evaluate(js_extractor, {"symbol": symbol, "mt5Symbol": mt5_symbol, "tfLabel": tf_label})
 
 
-def harvest_asset_liquidations(page, symbol: str, mt5_symbol: str, target_exchanges: list = None, is_deep_level: bool = True) -> tuple[list, list, list]:
+def harvest_asset_liquidations(page, symbol: str, mt5_symbol: str, target_exchanges: list = None, is_deep_level: bool = True, contracts_override: dict = None) -> tuple[list, list, list]:
     """Harvest liquidation snapshots, multi-timeframe discrete levels, and key levels for an asset across exchanges."""
     snapshots = []
     levels = []
@@ -683,6 +702,8 @@ def harvest_asset_liquidations(page, symbol: str, mt5_symbol: str, target_exchan
     if not target_exchanges:
         target_exchanges = ["Binance"]
 
+    c_map = contracts_override or LIQ_CONTRACTS_MAP.get(symbol, {})
+
     timeframes = [
         {"label": "30D-15m", "kw": "30D"},
         {"label": "7D-3m", "kw": "7D"},
@@ -690,13 +711,14 @@ def harvest_asset_liquidations(page, symbol: str, mt5_symbol: str, target_exchan
     ] if is_deep_level else [{"label": "30D-15m", "kw": "30D"}]
 
     for ex in target_exchanges:
-        logger.info(f"[{symbol}] Switching exchange to {ex}...")
+        contract_sym = c_map.get(ex, f"{symbol}USDT")
+        logger.info(f"[{symbol}] Switching exchange to {ex} (contract: {contract_sym})...")
         # Set exchange in localStorage and navigate
         page.evaluate(f"""
             () => {{
                 const current = JSON.parse(localStorage.getItem('liqLevelsPrefs') || '{{}}');
                 current.ex = '{ex}';
-                current.sym = '{symbol}USDT';
+                current.sym = '{contract_sym}';
                 localStorage.setItem('liqLevelsPrefs', JSON.stringify(current));
             }}
         """)
@@ -883,8 +905,8 @@ def run_cycle(context) -> dict:
     total_levels_count = 0
     total_key_levels_count = 0
 
-    # 2A. Deep Strike Levels (Multi-TF 3D/7D/30D) for top priority assets
-    priority_level_assets = [s for s in ["BTC", "ETH", "SOL", "XRP", "XAU"] if s in LIQ_LEVEL_SYMBOLS]
+    # 2A. Deep Strike Levels (Multi-TF 3D/7D/30D) for top priority mutual assets
+    priority_level_assets = [s for s in ["BTC", "ETH", "SOL", "XRP", "XAU", "XAG", "COPPER", "GAS", "SP500", "NAS100", "US30", "EURUSD", "GBPUSD", "USDJPY"] if s in LIQ_LEVEL_SYMBOLS]
     for sym in priority_level_assets:
         exs = LIQ_EXCHANGES_MAP.get(sym, ["Binance", "Bybit"])
         logger.info(f"[Liquidations] Harvesting multi-TF levels & key barriers for {sym} across {exs}...")

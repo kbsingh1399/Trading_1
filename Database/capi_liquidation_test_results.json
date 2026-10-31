@@ -1,0 +1,86 @@
+{
+  "BTC": {
+    "code": "0",
+    "msg": "success",
+    "success": true,
+    "dataSample": null
+  },
+  "XAU": {
+    "code": "0",
+    "msg": "success",
+    "success": true,
+    "dataSample": null
+  },
+  "XAU_MEXC": {
+    "code": "0",
+    "msg": "success",
+    "success": true,
+    "dataSample": null
+  },
+  "EURUSD_BYBIT": {
+    "code": "0",
+    "msg": "success",
+    "success": true,
+    "dataSample": null
+  },
+  "EURUSD_BITGET": {
+    "code": "0",
+    "msg": "success",
+    "success": true,
+    "dataSample": null
+  },
+  "EURUSD_GATE": {
+    "code": "40001",
+    "msg": "liquidation levels price/OI series unavailable",
+    "success": false,
+    "dataSample": null
+  },
+  "USDJPY_BITGET": {
+    "code": "40001",
+    "msg": "liquidation levels price/OI series unavailable",
+    "success": false,
+    "dataSample": null
+  },
+  "USDJPY_DYDX": {
+    "code": "40001",
+    "msg": "liquidation levels instrument unavailable",
+    "success": false,
+    "dataSample": null
+  },
+  "SP500_BITGET": {
+    "code": "0",
+    "msg": "success",
+    "success": true,
+    "dataSample": null
+  },
+  "SP500_TRADEXYZ": {
+    "code": "0",
+    "msg": "success",
+    "success": true,
+    "dataSample": null
+  },
+  "NAS100_GATE": {
+    "code": "0",
+    "msg": "success",
+    "success": true,
+    "dataSample": null
+  },
+  "NAS100_MEXC": {
+    "code": "0",
+    "msg": "success",
+    "success": true,
+    "dataSample": null
+  },
+  "NAS100_LBANK": {
+    "code": "0",
+    "msg": "success",
+    "success": true,
+    "dataSample": null
+  },
+  "XAG_BINANCE": {
+    "code": "0",
+    "msg": "success",
+    "success": true,
+    "dataSample": null
+  }
+}
