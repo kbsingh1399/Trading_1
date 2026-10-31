@@ -278,7 +278,7 @@ def scan_and_react_to_signals():
         # Append to live alerts jsonl
         with open(ALERTS_JSONL, "a", encoding="utf-8") as f:
             for t in formulated_trades:
-                f.write(json.dumps(t) + "\n")
+                f.write(json.dumps(t, default=str) + "\n")
 
         logger.info(f"Saved {len(formulated_trades)} active MT5 trade tickets into {ACTIVE_SETUPS_PARQUET.name}")
 
