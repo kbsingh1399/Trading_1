@@ -56,6 +56,7 @@ MAGIC_NUMBER = 888123
 MAX_CONCURRENT_POSITIONS = 2
 MAX_ALLOWED_SPREAD_PCT = 0.45       # Max 0.45% spread
 RISK_PERCENT = 0.01                 # 1.0% account risk
+HARD_MAX_LOSS_USD = 50.00           # Strict Hard Max Loss Ceiling per trade ($50.00)
 MIN_RR_RATIO = 1.5                  # Minimum 1.5:1 reward to risk
 
 logging.basicConfig(
@@ -100,7 +101,7 @@ def calculate_lot_size(
     if loss_per_lot <= 0:
         return 0.0, 0.0
 
-    calculated_lots = risk_dollars / loss_per_lot
+    calculated_lots = min(risk_dollars, HARD_MAX_LOSS_USD) / loss_per_lot
 
     # Round to volume_step
     step = info.volume_step if info.volume_step > 0 else 0.01
@@ -108,6 +109,16 @@ def calculate_lot_size(
     final_lots = max(info.volume_min, min(info.volume_max, rounded_lots))
 
     actual_loss_usd = round(final_lots * loss_per_lot, 2)
+
+    # HARD CEILING: Strictly enforce $50.00 maximum dollar loss
+    while actual_loss_usd > HARD_MAX_LOSS_USD and final_lots > info.volume_min:
+        final_lots = round(final_lots - step, 2)
+        actual_loss_usd = round(final_lots * loss_per_lot, 2)
+
+    if actual_loss_usd > HARD_MAX_LOSS_USD:
+        # Minimum lot size exceeds $50 hard limit
+        return 0.0, 0.0
+
     return final_lots, actual_loss_usd
 
 
@@ -156,6 +167,7 @@ class CryptoLiveTrader:
     def manage_open_positions(self):
         """
         Manages active positions:
+        - HARD CIRCUIT BREAKER: Closes position immediately if loss approaches -$50.00 hard limit.
         - If profit reaches +1R (halfway to TP1 or equal to initial risk distance),
           moves SL to break-even (entry + small buffer) to guarantee zero loss.
         """
@@ -166,7 +178,33 @@ class CryptoLiveTrader:
         for pos in open_pos:
             mt5_sym = pos["symbol"]
             info = mt5.symbol_info(mt5_sym)
-            if not info:
+            tick = mt5.symbol_info_tick(mt5_sym)
+            if not info or not tick:
+                continue
+
+            # 1. HARD LOSS CIRCUIT BREAKER ($50 limit)
+            if pos["profit"] <= -48.00:
+                logger.warning(f"[{mt5_sym}] [CIRCUIT-BREAKER] Position #{pos['ticket']} hit hard loss threshold (${pos['profit']:.2f} <= -$48.00). Executing emergency market close!")
+                close_type = mt5.ORDER_TYPE_SELL if pos["type"] == "BUY" else mt5.ORDER_TYPE_BUY
+                close_price = tick.bid if pos["type"] == "BUY" else tick.ask
+                close_req = {
+                    "action": mt5.TRADE_ACTION_DEAL,
+                    "position": pos["ticket"],
+                    "symbol": mt5_sym,
+                    "volume": pos["volume"],
+                    "type": close_type,
+                    "price": close_price,
+                    "deviation": 30,
+                    "magic": self.magic,
+                    "comment": "CG_HARD_50USD_STOP",
+                    "type_time": mt5.ORDER_TIME_GTC,
+                    "type_filling": mt5.ORDER_FILLING_IOC
+                }
+                close_res = mt5.order_send(close_req)
+                if close_res and close_res.retcode == mt5.TRADE_RETCODE_DONE:
+                    logger.info(f"[{mt5_sym}] Emergency market close completed for Ticket #{pos['ticket']}!")
+                else:
+                    logger.error(f"[{mt5_sym}] Emergency market close failed: {close_res.comment if close_res else 'Unknown'}")
                 continue
 
             point = info.point
@@ -455,6 +493,9 @@ class CryptoLiveTrader:
             }
             check = mt5.order_check(req)
             if check.retcode == 0:
+                if ticket.get("risk_usd", 0) > HARD_MAX_LOSS_USD:
+                    logger.warning(f"[{mt5_sym}] Ticket risk exceeds $50.00 cap (${ticket.get('risk_usd'):.2f}). Order rejected.")
+                    return False
                 ticket["stop_loss"] = sl
                 ticket["take_profit_1"] = tp
                 ticket["lots"] = lots
