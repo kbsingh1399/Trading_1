@@ -6,8 +6,10 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 DB_DIR = ROOT_DIR / "Database"
 CANDLE_DIR = DB_DIR / "Candle_Data"
 LIQ_DIR = DB_DIR / "Liquidation_Data"
-LEVELS_DIR = LIQ_DIR / "Levels"
 KEY_LEVELS_DIR = LIQ_DIR / "Key_Levels"
+MAGNET_ZONES_DIR = LIQ_DIR / "Magnet_Zones"
+LEVERAGE_TIERS_DIR = LIQ_DIR / "Leverage_Tiers"
+NEAR_FIELD_DIR = LIQ_DIR / "Near_Field_Balance"
 SIGNALS_PATH = DB_DIR / "coinglass_aggregated_futures_signals.parquet"
 SNAPSHOTS_PATH = LIQ_DIR / "liquidation_snapshots.parquet"
 
@@ -84,28 +86,9 @@ else:
     print("Liquidation Snapshots dataset not found.")
 
 # -------------------------------------------------------------------
-# 4. Asset-Partitioned Liquidation Strike Levels
+# 4. Asset-Partitioned Key Liquidation Levels (Ranked Strike Barriers)
 # -------------------------------------------------------------------
-print("\n4. LIQUIDATION DISCRETE STRIKE LEVELS (ASSET PARTITIONED)")
-print("---------------------------------------------------------------------")
-level_files = sorted(list(LEVELS_DIR.glob("*.parquet")))
-if level_files:
-    total_levels = 0
-    for lf in level_files:
-        ldf = pd.read_parquet(lf)
-        total_levels += len(ldf)
-        tfs = ldf['lookback_tf'].value_counts().to_dict() if 'lookback_tf' in ldf.columns else {}
-        levs = ldf['leverage_tier'].value_counts().to_dict() if 'leverage_tier' in ldf.columns else {}
-        tiers = ldf['tier_level'].value_counts().to_dict() if 'tier_level' in ldf.columns else {}
-        print(f"[{lf.stem:12s}] {len(ldf):,} levels | TFs: {tfs} | Lev: {levs} | Tiers: {tiers}")
-    print(f"\nTotal Discrete Levels across all assets: {total_levels:,}")
-else:
-    print("No asset-partitioned level files found in Database/Liquidation_Data/Levels/")
-
-# -------------------------------------------------------------------
-# 5. Asset-Partitioned Key Liquidation Levels (Ranked Strike Barriers)
-# -------------------------------------------------------------------
-print("\n5. KEY LIQUIDATION LEVELS (ASSET PARTITIONED)")
+print("\n4. KEY LIQUIDATION LEVELS (ASSET PARTITIONED)")
 print("---------------------------------------------------------------------")
 key_level_files = sorted(list(KEY_LEVELS_DIR.glob("*.parquet")))
 if key_level_files:
@@ -121,6 +104,34 @@ if key_level_files:
     print(f"\nTotal Key Strike Barriers across all assets: {total_key_levels:,}")
 else:
     print("No asset-partitioned key level files found in Database/Liquidation_Data/Key_Levels/")
+
+# -------------------------------------------------------------------
+# 5. Asset-Partitioned Magnet Zones (Top 3 Bands per Side)
+# -------------------------------------------------------------------
+print("\n5. MAGNET ZONES (ASSET PARTITIONED)")
+print("---------------------------------------------------------------------")
+magnet_files = sorted(list(MAGNET_ZONES_DIR.glob("*.parquet")))
+if magnet_files:
+    total_magnet_zones = 0
+    for mf in magnet_files:
+        mdf = pd.read_parquet(mf)
+        total_magnet_zones += len(mdf)
+        sides = mdf['side'].value_counts().to_dict() if 'side' in mdf.columns else {}
+        exs = mdf['exchange'].value_counts().to_dict() if 'exchange' in mdf.columns else {}
+        tfs = mdf['lookback_tf'].value_counts().to_dict() if 'lookback_tf' in mdf.columns else {}
+        print(f"[{mf.stem:16s}] {len(mdf):,} bands | Ex: {exs} | Sides: {sides} | TFs: {tfs}")
+    print(f"\nTotal Magnet Zones across all assets: {total_magnet_zones:,}")
+else:
+    print("No asset-partitioned magnet zone files found in Database/Liquidation_Data/Magnet_Zones/")
+
+# -------------------------------------------------------------------
+# 6. Asset-Partitioned Leverage Tiers & Near-Field Balance
+# -------------------------------------------------------------------
+print("\n6. LEVERAGE TIERS & NEAR-FIELD BALANCE")
+print("---------------------------------------------------------------------")
+lev_files = sorted(list(LEVERAGE_TIERS_DIR.glob("*.parquet")))
+near_files = sorted(list(NEAR_FIELD_DIR.glob("*.parquet")))
+print(f"Leverage Tier files: {len(lev_files)} | Near-Field Balance files: {len(near_files)}")
 
 print("\n=====================================================================")
 print("                   AUDIT COMPLETED SUCCESSFULLY                      ")

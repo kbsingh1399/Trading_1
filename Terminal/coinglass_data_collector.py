@@ -44,8 +44,10 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 DB_DIR = ROOT_DIR / "Database"
 CANDLE_DIR = DB_DIR / "Candle_Data"
 LIQ_DIR = DB_DIR / "Liquidation_Data"
-LEVELS_DIR = LIQ_DIR / "Levels"
 KEY_LEVELS_DIR = LIQ_DIR / "Key_Levels"
+MAGNET_ZONES_DIR = LIQ_DIR / "Magnet_Zones"
+LEVERAGE_TIERS_DIR = LIQ_DIR / "Leverage_Tiers"
+NEAR_FIELD_DIR = LIQ_DIR / "Near_Field_Balance"
 
 OUTPUT_SIGNALS_PARQUET = DB_DIR / "coinglass_aggregated_futures_signals.parquet"
 SNAPSHOTS_PARQUET = LIQ_DIR / "liquidation_snapshots.parquet"
@@ -495,87 +497,236 @@ async def extract_footprint_chunk(page, symbols_chunk: list) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Liquidation Intelligence Helpers
+# Liquidation Intelligence Helpers (Multi-Exchange & Multi-TF Architecture)
 # ---------------------------------------------------------------------------
-async def switch_liquidation_pair(page, symbol: str, target_contract: str, target_exchange: str = "Binance") -> bool:
-    """Robust native pair selection via CoinGlass UI symbol switcher, with fallback to URL navigation."""
-    try:
-        btn = page.locator("button.ll-symBtn")
-        if await btn.count() > 0:
-            cur_text = (await btn.inner_text()).strip()
-            norm_target = target_contract.lower().replace("_", "").replace("-", "")
-            norm_cur = cur_text.lower().replace("_", "").replace("-", "")
-            norm_ex = target_exchange.lower()
+async def discover_perpetual_exchanges(page) -> list[dict]:
+    """Discover all available perpetual contracts and exchanges for the current asset."""
+    btn = page.locator("button.ll-symBtn").first
+    if await btn.count() == 0:
+        return []
 
-            # If already on the correct exchange and contract, no switch needed
-            if norm_target in norm_cur and (norm_ex in norm_cur or norm_ex == "binance"):
-                return True
+    menu = page.locator(".ll-menu").first
+    if await menu.count() == 0 or not await menu.is_visible():
+        await btn.click()
+        await asyncio.sleep(0.5)
 
-            await btn.click()
-            await asyncio.sleep(0.8)
+    exchanges = await page.evaluate('''() => {
+        const menu = document.querySelector('.ll-menu');
+        if (!menu) return [];
+        const list = [];
+        let curEx = '';
+        Array.from(menu.children).forEach(el => {
+            if (el.classList.contains('grp')) {
+                curEx = el.innerText.trim();
+            } else if (el.tagName === 'BUTTON') {
+                const txt = el.innerText.trim();
+                const lines = txt.split('\\n').map(s => s.trim()).filter(Boolean);
+                const con = lines[0] || '';
+                const typ = lines[1] || '';
+                if (typ.toLowerCase().includes('perpetual')) {
+                    list.push({ exchange: curEx, contract: con, contract_type: typ });
+                }
+            }
+        });
+        return list;
+    }''')
 
-            inp = page.locator("input[aria-label='Search trading pairs'], input[placeholder*='Search' i]").first
-            if await inp.count() > 0 and await inp.is_visible():
-                search_key = symbol.lower()
-                await inp.fill(search_key)
-                await asyncio.sleep(1.2)
+    if await menu.is_visible():
+        await btn.click()
+        await asyncio.sleep(0.3)
 
-                # Match target contract button
-                target_btn = page.locator("button").filter(has_text=target_contract)
-                if await target_btn.count() == 0:
-                    target_btn = page.locator("button").filter(has_text=symbol)
+    return exchanges
 
-                if await target_btn.count() > 0:
-                    await target_btn.first.click()
-                    await asyncio.sleep(3.5)
-                    return True
 
-        # Fallback to direct navigation and localStorage
-        await page.evaluate(f"""
-            () => {{
-                const current = JSON.parse(localStorage.getItem('liqLevelsPrefs') || '{{}}');
-                current.ex = '{target_exchange}';
-                current.sym = '{target_contract}';
-                localStorage.setItem('liqLevelsPrefs', JSON.stringify(current));
-            }}
-        """)
-        await page.goto(f"https://www.coinglass.com/liquidation-levels?symbol={symbol}", timeout=15000)
-        await asyncio.sleep(3.0)
-        return True
-    except Exception as e:
-        logger.warning(f"[{symbol}] Error during pair switch to {target_exchange} ({target_contract}): {e}")
+async def switch_liquidation_exchange(page, target_exchange: str, target_contract: str = None) -> bool:
+    """Natively switches to target exchange and contract via CoinGlass .ll-menu."""
+    btn = page.locator("button.ll-symBtn").first
+    if await btn.count() == 0:
         return False
 
+    cur_text = (await btn.inner_text()).upper()
+    if target_exchange.upper() in cur_text and (not target_contract or target_contract.upper() in cur_text):
+        return True
 
-async def extract_single_liquidation_state(page, symbol: str, mt5_symbol: str, tf_label: str) -> dict:
-    """Extract macro snapshot, discrete strike levels, and ranked key barriers for a specific timeframe."""
-    js_extractor = """
-    ({ symbol, mt5Symbol, tfLabel }) => {
-        const nextEl = document.getElementById('__next');
-        const containerKey = Object.keys(nextEl).find(k => k.startsWith('__reactContainer$'));
-        const rootFiber = nextEl[containerKey];
+    menu = page.locator(".ll-menu").first
+    if await menu.count() == 0 or not await menu.is_visible():
+        await btn.click()
+        await asyncio.sleep(0.5)
 
-        let targetFiber = null;
-        function walk(f, depth = 0) {
-            if (!f || depth > 80 || targetFiber) return;
-            try {
-                if (f.memoizedProps && f.memoizedProps.model && f.memoizedProps.ex) {
-                    targetFiber = f;
-                    return;
+    switched = await page.evaluate('''({ targetEx, targetCon }) => {
+        const menu = document.querySelector('.ll-menu');
+        if (!menu) return { success: false, reason: "no menu" };
+
+        let curEx = '';
+        let matchedBtn = null;
+        for (const el of Array.from(menu.children)) {
+            if (el.classList.contains('grp')) {
+                curEx = el.innerText.trim().toUpperCase();
+            } else if (el.tagName === 'BUTTON') {
+                if (curEx === targetEx.toUpperCase()) {
+                    const txt = el.innerText.toUpperCase();
+                    if (!targetCon || txt.includes(targetCon.toUpperCase())) {
+                        matchedBtn = el;
+                        break;
+                    }
                 }
-            } catch(e) {}
-            walk(f.child, depth + 1);
-            walk(f.sibling, depth);
+            }
         }
-        walk(rootFiber);
-        const p = targetFiber ? targetFiber.memoizedProps : null;
-        const m = p ? p.model : null;
-        if (!m) return null;
 
-        const curPrice = m.curPrice;
+        if (matchedBtn) {
+            matchedBtn.click();
+            return { success: true };
+        }
+        return { success: false, reason: "not found" };
+    }''', {"targetEx": target_exchange, "targetCon": target_contract})
+
+    if switched.get("success"):
+        await asyncio.sleep(2.5)
+        return True
+    return False
+
+
+async def extract_liquidation_data_point(
+    page,
+    symbol: str,
+    mt5_symbol: str,
+    exchange: str,
+    contract: str,
+    tf_label: str,
+    range_filters: list = None
+) -> dict:
+    """
+    Extracts all 4 core intelligence tables and macro snapshot for a given exchange and lookback timeframe:
+    1. Key liquidation levels across range filters ('±1%' to '±8%')
+    2. Top 3 Shorts & Longs Magnet Zones
+    3. Leverage Tiers strength breakdown
+    4. Near-field balance (±3% longs vs shorts and 24h shift)
+    5. Macro snapshot metrics
+    """
+    if range_filters is None:
+        range_filters = ['±1%', '±2%', '±3%', '±4%', '±5%', '±6%', '±7%', '±8%']
+
+    state = await page.evaluate('''() => {
         const bodyText = document.body.innerText;
+        const allDivs = Array.from(document.querySelectorAll('div'));
 
-        // Magnet Zones
+        // Price
+        let curPrice = null;
+        const priceMatch = bodyText.match(/Last price\\s*([\\d,\\.]+)/i);
+        if (priceMatch) curPrice = parseFloat(priceMatch[1].replace(/,/g, ''));
+
+        // 1. Magnet Zones (Top 3 Shorts + Top 3 Longs)
+        const magnetZones = [];
+        const mzDiv = allDivs.find(d => (d.innerText || '').startsWith('Magnet zones\\nWhere leveraged positions'));
+        if (mzDiv) {
+            const lines = mzDiv.innerText.split('\\n').map(x => x.trim()).filter(Boolean);
+            const shortsIdx = lines.indexOf('Shorts get liquidated');
+            const longsIdx = lines.indexOf('Longs get liquidated');
+
+            function parseBlock(startIdx, endIdx, side) {
+                let i = startIdx + 1;
+                while (i + 4 <= endIdx) {
+                    const rank = parseInt(lines[i]);
+                    const zoneStr = lines[i+1];
+                    const distStr = lines[i+2];
+                    const scoreStr = lines[i+3];
+                    const widthStr = lines[i+4];
+
+                    if (!isNaN(rank) && zoneStr && (zoneStr.includes('\u2013') || zoneStr.includes('-')) && distStr && distStr.includes('%')) {
+                        const delim = zoneStr.includes('\u2013') ? '\u2013' : '-';
+                        const parts = zoneStr.split(delim).map(s => parseFloat(s.replace(/,/g, '').trim()));
+                        const distPct = parseFloat(distStr.replace('%', '').trim());
+                        const score = parseFloat(scoreStr.replace(/,/g, '').trim());
+                        const widthPct = parseFloat(widthStr.replace(/width/i, '').replace('%', '').trim());
+
+                        magnetZones.push({
+                            side: side,
+                            rank: rank,
+                            zone_label: zoneStr.replace(/\\s+/g, ' '),
+                            price_low: Math.min(...parts),
+                            price_high: Math.max(...parts),
+                            distance_pct: distPct,
+                            strength: score,
+                            width_pct: widthPct
+                        });
+                        i += 5;
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+
+            if (shortsIdx >= 0 && longsIdx > shortsIdx) {
+                parseBlock(shortsIdx, longsIdx, 'short');
+                parseBlock(longsIdx, lines.length, 'long');
+            }
+        }
+
+        // 2. Leverage Tiers
+        const leverageTiers = [];
+        let levTotals = {};
+        const levDiv = allDivs.find(d => (d.innerText || '').startsWith('By leverage tier\\nOpen-level strength'));
+        if (levDiv) {
+            const text = levDiv.innerText;
+            const lines = text.split('\\n').map(s => s.trim()).filter(Boolean);
+            const mTot = text.match(/Shorts\\s*([\\d,]+)[\\s\\S]*?Longs\\s*([\\d,]+)[\\s\\S]*?Total\\s*([\\d,]+)/i);
+            if (mTot) {
+                levTotals = {
+                    total_shorts: parseInt(mTot[1].replace(/,/g, '')),
+                    total_longs: parseInt(mTot[2].replace(/,/g, '')),
+                    total_aggregate: parseInt(mTot[3].replace(/,/g, ''))
+                };
+            }
+
+            ['High leverage', 'Mid leverage', 'Low leverage'].forEach(tier => {
+                const idx = lines.indexOf(tier);
+                if (idx >= 0) {
+                    const slice = lines.slice(idx, idx + 6).join(' ');
+                    const match = slice.match(new RegExp(tier + '\\\\s*([\\\\d,]+)\\\\s*[·•]\\\\s*([\\\\d,]+)', 'i'));
+                    if (match) {
+                        leverageTiers.push({
+                            tier: tier.replace(' leverage', '').toLowerCase(),
+                            short_strength: parseInt(match[1].replace(/,/g, '')),
+                            long_strength: parseInt(match[2].replace(/,/g, '')),
+                            ...levTotals
+                        });
+                    }
+                }
+            });
+        }
+
+        // 3. Near-field balance
+        let nearField = null;
+        const nfbDiv = allDivs.find(d => (d.innerText || '').startsWith('Near-field balance\\nOpen strength'));
+        if (nfbDiv) {
+            const text = nfbDiv.innerText;
+            const lines = text.split('\\n').map(s => s.trim()).filter(Boolean);
+            const mLong = text.match(/Longs\\s*([\\d\\.]+)%\\s*[·•]?\\s*([\\d,]+)?/i);
+            const mShort = text.match(/Shorts\\s*([\\d\\.]+)%\\s*[·•]?\\s*([\\d,]+)?/i);
+            const descLine = lines.find(l => l.includes('Balanced:') || l.includes('Dominant') || l.includes('short share') || l.includes('vs 24h ago'));
+            const mShift = text.match(/short share\\s*([+\\-\\d\\.]+)\\s*pts/i);
+
+            nearField = {
+                longs_pct: mLong ? parseFloat(mLong[1]) : null,
+                longs_count: (mLong && mLong[2]) ? parseInt(mLong[2].replace(/,/g, '')) : null,
+                shorts_pct: mShort ? parseFloat(mShort[1]) : null,
+                shorts_count: (mShort && mShort[2]) ? parseInt(mShort[2].replace(/,/g, '')) : null,
+                shift_24h_pts: mShift ? parseFloat(mShift[1]) : null,
+                status_desc: descLine || null
+            };
+        }
+
+        // 4. CLLD & Snapshot metrics
+        let clldVal = null, clldSentiment = null, clldTurnTime = null, clld1hChange = null;
+        const clldMatch = bodyText.match(/CLLD\\s*·\\s*Cumulative Liquidation Levels Delta\\s*([−\\-\\+\\d,]+)\\s*(?:[▲▼]\\s*)?([A-Za-z]+ turn)\\s*([\\d\\-\\s:]+)\\s*More [^·]+·\\s*1h change\\s*([+\\-\\d,]+)/i);
+        if (clldMatch) {
+            clldVal = parseFloat(clldMatch[1].replace('−', '-').replace(/,/g, ''));
+            clldSentiment = clldMatch[2].trim();
+            clldTurnTime = clldMatch[3].trim();
+            clld1hChange = parseFloat(clldMatch[4].replace(/,/g, ''));
+        }
+
+        // Nearest magnet zones
         let shortMagZone = null, shortMagDist = null, shortMagStr = null;
         const shortMagMatch = bodyText.match(/Nearest short magnet zone\\s*([\\d,\\.]+\\s*–\\s*[\\d,\\.]+)\\s*([+\\-\\d\\.]+%)\\s*·\\s*Strength\\s*(\\d+)/i);
         if (shortMagMatch) {
@@ -592,197 +743,218 @@ async def extract_single_liquidation_state(page, symbol: str, mt5_symbol: str, t
             longMagStr = parseFloat(longMagMatch[3]);
         }
 
-        // CLLD Card
-        let clldVal = null, clldSentiment = null, clldTurnTime = null, clld1hChange = null;
-        const clldMatch = bodyText.match(/CLLD\\s*·\\s*Cumulative Liquidation Levels Delta\\s*([−\\-\\+\\d,]+)\\s*(?:[▲▼]\\s*)?([A-Za-z]+ turn)\\s*([\\d\\-\\s:]+)\\s*More [^·]+·\\s*1h change\\s*([+\\-\\d,]+)/i);
-        if (clldMatch) {
-            clldVal = parseFloat(clldMatch[1].replace('−', '-').replace(/,/g, ''));
-            clldSentiment = clldMatch[2].trim();
-            clldTurnTime = clldMatch[3].trim();
-            clld1hChange = parseFloat(clldMatch[4].replace(/,/g, ''));
-        }
+        return {
+            curPrice,
+            magnetZones,
+            leverageTiers,
+            nearField,
+            clldVal,
+            clldSentiment,
+            clldTurnTime,
+            clld1hChange,
+            shortMagZone,
+            shortMagDist,
+            shortMagStr,
+            longMagZone,
+            longMagDist,
+            longMagStr
+        };
+    }''')
 
-        // Near-field balance
-        let nfbLongPct = null, nfbShortPct = null, nfbBias = null;
-        const nfbMatch = bodyText.match(/Near-field balance[^\\n]*\\s*Longs\\s*(\\d+)%[^\\n]*Shorts\\s*(\\d+)%[^\\n]*\\n([^\\n]+)/i);
-        if (nfbMatch) {
-            nfbLongPct = parseFloat(nfbMatch[1]);
-            nfbShortPct = parseFloat(nfbMatch[2]);
-            nfbBias = nfbMatch[3].trim();
-        }
+    cur_price = state.get("curPrice")
 
-        // Strength by distance
-        const sbdMatch = bodyText.match(/Strength by distance[\\s\\S]*?Shorts\\s*([\\d,]+)[\\s\\S]*?Longs\\s*([\\d,]+)[\\s\\S]*?0[–-]1%\\s*([\\d,]+)\\s*[·•]\\s*([\\d,]+)[\\s\\S]*?1[–-]2%\\s*([\\d,]+)\\s*[·•]\\s*([\\d,]+)[\\s\\S]*?2[–-]3%\\s*([\\d,]+)\\s*[·•]\\s*([\\d,]+)[\\s\\S]*?3[–-]5%\\s*([\\d,]+)\\s*[·•]\\s*([\\d,]+)[\\s\\S]*?5[–-]10%\\s*([\\d,]+)\\s*[·•]\\s*([\\d,]+)/i);
-        let sbd = {};
-        if (sbdMatch) {
-            sbd = {
-                sbd_shorts_tot: parseFloat(sbdMatch[1].replace(/,/g, '')),
-                sbd_longs_tot: parseFloat(sbdMatch[2].replace(/,/g, '')),
-                sbd_0_1_short: parseFloat(sbdMatch[3].replace(/,/g, '')),
-                sbd_0_1_long: parseFloat(sbdMatch[4].replace(/,/g, '')),
-                sbd_1_2_short: parseFloat(sbdMatch[5].replace(/,/g, '')),
-                sbd_1_2_long: parseFloat(sbdMatch[6].replace(/,/g, '')),
-                sbd_2_3_short: parseFloat(sbdMatch[7].replace(/,/g, '')),
-                sbd_2_3_long: parseFloat(sbdMatch[8].replace(/,/g, '')),
-                sbd_3_5_short: parseFloat(sbdMatch[9].replace(/,/g, '')),
-                sbd_3_5_long: parseFloat(sbdMatch[10].replace(/,/g, '')),
-                sbd_5_10_short: parseFloat(sbdMatch[11].replace(/,/g, '')),
-                sbd_5_10_long: parseFloat(sbdMatch[12].replace(/,/g, ''))
-            };
-        }
+    # Extract Key liquidation levels across range filters
+    key_levels = []
+    for rf in range_filters:
+        await page.evaluate(f'''() => {{
+            const tabs = Array.from(document.querySelectorAll('.tab-inner-label'));
+            const target = tabs.find(t => (t.innerText || '').trim() === '{rf}');
+            if (target) target.click();
+        }}''')
+        await asyncio.sleep(0.25)
 
-        // Leverage totals
-        const levTotals = {};
-        const levKeys = ['highLevShorts', 'midLevShorts', 'lowLevShorts', 'highLevLongs', 'midLevLongs', 'lowLevLongs'];
-        levKeys.forEach(k => {
-            if (m[k] !== undefined) levTotals[k] = m[k];
-        });
-
-        // 1. Discrete strike levels
-        const activeLevels = [];
-        if (m.levels && Array.isArray(m.levels)) {
-            m.levels.forEach(lvl => {
-                const px = lvl.p;
-                const side = px > curPrice ? 'short' : 'long';
-                const distPct = curPrice > 0 ? ((px - curPrice) / curPrice) * 100 : 0;
-                const levMap = { 0: 'high', 1: 'mid', 2: 'low' };
-                activeLevels.push({
-                    price: px,
-                    side: side,
-                    distance_pct: distPct,
-                    leverage_tier: levMap[lvl.l] || 'mid',
-                    tier_level: lvl.t !== undefined ? (lvl.t + 1) : 1,
-                    volume: lvl.v || null,
-                    strength: lvl.s || null
-                });
-            });
-        }
-
-        // 2. Key liquidation levels table
-        const keyLevels = [];
-        const table = document.querySelector('table');
-        if (table) {
-            const rows = table.querySelectorAll('tbody tr');
-            const currentSideRank = { 'short': 1, 'long': 1 };
-            for (const r of rows) {
+        rows = await page.evaluate(f'''() => {{
+            const table = document.querySelector('table');
+            if (!table) return [];
+            const currentSideRank = {{ 'short': 1, 'long': 1 }};
+            const trs = Array.from(table.querySelectorAll('tbody tr'));
+            const res = [];
+            for (const r of trs) {{
                 const cells = r.querySelectorAll('td');
-                if (cells.length >= 5) {
+                if (cells.length >= 5) {{
                     const parts = Array.from(cells).map(c => c.innerText.trim());
                     const s = parts[0].toLowerCase();
-                    keyLevels.push({
+                    res.push({{
                         side: s,
                         rank: currentSideRank[s]++,
                         price: parseFloat(parts[1].replace(/,/g, '')),
                         distance_pct: parseFloat(parts[2].replace('%', '').replace('+', '')),
                         leverage_tier: parts[3].toLowerCase().replace(' leverage', ''),
                         strength: parseFloat(parts[4]),
-                        range_filter: '±8%',
-                        last_price: curPrice
-                    });
-                }
-            }
-        }
+                        range_filter: '{rf}'
+                    }});
+                }}
+            }}
+            return res;
+        }}''')
 
-        const snapshot = {
-            exchange: p.ex || 'Binance',
-            symbol: symbol,
-            mt5_symbol: mt5Symbol,
-            pair: p.sym || `${symbol}USDT`,
-            lookback_tf: tfLabel,
-            last_price: curPrice,
-            clld_current: clldVal,
-            clld_sentiment: clldSentiment,
-            clld_turn_time: clldTurnTime,
-            clld_1h_change: clld1hChange,
-            short_magnet_zone: shortMagZone,
-            short_magnet_dist_pct: shortMagDist,
-            short_magnet_strength: shortMagStr,
-            long_magnet_zone: longMagZone,
-            long_magnet_dist_pct: longMagDist,
-            long_magnet_strength: longMagStr,
-            near_field_long_pct: nfbLongPct,
-            near_field_short_pct: nfbShortPct,
-            near_field_bias: nfbBias,
-            ...sbd,
-            ...levTotals,
-            active_levels_count: activeLevels.length,
-            key_levels_count: keyLevels.length
-        };
+        for r in rows:
+            r["symbol"] = symbol
+            r["mt5_symbol"] = mt5_symbol
+            r["exchange"] = exchange
+            r["contract"] = contract
+            r["lookback_tf"] = tf_label
+            r["last_price"] = cur_price
+            key_levels.append(r)
 
-        return { snapshot, levels: activeLevels, key_levels: keyLevels };
+    # Tag magnet zones
+    magnet_zones = []
+    for mz in state.get("magnetZones", []):
+        mz["symbol"] = symbol
+        mz["mt5_symbol"] = mt5_symbol
+        mz["exchange"] = exchange
+        mz["contract"] = contract
+        mz["lookback_tf"] = tf_label
+        magnet_zones.append(mz)
+
+    # Tag leverage tiers
+    leverage_tiers = []
+    for lt in state.get("leverageTiers", []):
+        lt["symbol"] = symbol
+        lt["mt5_symbol"] = mt5_symbol
+        lt["exchange"] = exchange
+        lt["contract"] = contract
+        lt["lookback_tf"] = tf_label
+        leverage_tiers.append(lt)
+
+    # Tag near field
+    near_field = None
+    if state.get("nearField"):
+        near_field = state["nearField"]
+        near_field["symbol"] = symbol
+        near_field["mt5_symbol"] = mt5_symbol
+        near_field["exchange"] = exchange
+        near_field["contract"] = contract
+        near_field["lookback_tf"] = tf_label
+
+    # Consolidated Snapshot
+    snapshot = {
+        "symbol": symbol,
+        "mt5_symbol": mt5_symbol,
+        "exchange": exchange,
+        "pair": contract,
+        "lookback_tf": tf_label,
+        "last_price": cur_price,
+        "clld_current": state.get("clldVal"),
+        "clld_sentiment": state.get("clldSentiment"),
+        "clld_turn_time": state.get("clldTurnTime"),
+        "clld_1h_change": state.get("clld1hChange"),
+        "short_magnet_zone": state.get("shortMagZone"),
+        "short_magnet_dist_pct": state.get("shortMagDist"),
+        "short_magnet_strength": state.get("shortMagStr"),
+        "long_magnet_zone": state.get("longMagZone"),
+        "long_magnet_dist_pct": state.get("longMagDist"),
+        "long_magnet_strength": state.get("longMagStr"),
+        "near_field_long_pct": near_field.get("longs_pct") if near_field else None,
+        "near_field_short_pct": near_field.get("shorts_pct") if near_field else None,
+        "near_field_bias": near_field.get("status_desc") if near_field else None,
+        "magnet_zones_count": len(magnet_zones),
+        "key_levels_count": len(key_levels)
     }
+
+    return {
+        "snapshot": snapshot,
+        "key_levels": key_levels,
+        "magnet_zones": magnet_zones,
+        "leverage_tiers": leverage_tiers,
+        "near_field": near_field
+    }
+
+
+async def harvest_asset_liquidations(
+    page,
+    symbol: str,
+    mt5_symbol: str,
+    target_exchanges: list = None,
+    timeframes: list = None,
+    range_filters: list = None
+) -> tuple[list, list, list, list, list]:
     """
-    return await page.evaluate(js_extractor, {"symbol": symbol, "mt5Symbol": mt5_symbol, "tfLabel": tf_label})
+    Sweeps an asset across all requested exchanges and lookback timeframes:
+    - 3D - 1m, 7D - 3m, 30D - 15m
+    - Ranges: ±1% up to ±8%
+    Returns: (snapshots, key_levels, magnet_zones, leverage_tiers, near_fields)
+    """
+    if timeframes is None:
+        timeframes = [
+            {"label": "3D - 1m", "kw": "3D"},
+            {"label": "7D - 3m", "kw": "7D"},
+            {"label": "30D - 15m", "kw": "30D"}
+        ]
 
+    # Navigate to symbol page if not already there
+    cur_url = page.url
+    if f"symbol={symbol}" not in cur_url:
+        await page.goto(f"https://www.coinglass.com/liquidation-levels?symbol={symbol}", timeout=20000)
+        await asyncio.sleep(2.5)
 
-async def harvest_asset_liquidations(page, symbol: str, mt5_symbol: str, target_exchanges: list = None, is_deep_level: bool = True, contracts_override: dict = None) -> tuple[list, list, list]:
-    """Harvest liquidation snapshots, multi-timeframe discrete levels, and key levels for an asset across exchanges."""
-    snapshots = []
-    levels = []
-    key_levels = []
+    # Auto-discover exchanges if not strictly passed
+    discovered = await discover_perpetual_exchanges(page)
+    ex_map = {d["exchange"].upper(): d["contract"] for d in discovered}
 
-    if not target_exchanges:
-        target_exchanges = ["Binance"]
+    if not target_exchanges or target_exchanges == ["all"]:
+        # Prioritize major liquid exchanges
+        major_order = ["BINANCE", "BYBIT", "OKX", "GATE", "MEXC", "HYPERLIQUID", "BITGET"]
+        selected_exs = [ex for ex in major_order if ex in ex_map]
+        if not selected_exs and discovered:
+            selected_exs = list(ex_map.keys())[:3]
+    else:
+        selected_exs = [ex.upper() for ex in target_exchanges if ex.upper() in ex_map]
+        if not selected_exs:
+            selected_exs = list(ex_map.keys())[:1] if ex_map else ["BINANCE"]
 
-    c_map = contracts_override or LIQ_CONTRACTS_MAP.get(symbol, {})
+    all_snapshots = []
+    all_key_levels = []
+    all_magnet_zones = []
+    all_leverage_tiers = []
+    all_near_fields = []
 
-    timeframes = [
-        {"label": "30D-15m", "kw": "30D"},
-        {"label": "7D-3m", "kw": "7D"},
-        {"label": "3D-1m", "kw": "3D"}
-    ] if is_deep_level else [{"label": "30D-15m", "kw": "30D"}]
-
-    for ex in target_exchanges:
-        contract_sym = c_map.get(ex, f"{symbol}USDT")
-        logger.info(f"[{symbol}] Switching exchange to {ex} (contract: {contract_sym})...")
-        await switch_liquidation_pair(page, symbol=symbol, target_contract=contract_sym, target_exchange=ex)
-
-        # Auto-healing: click Retry if present
-        retry_btn = page.locator("button:has-text('Retry')")
-        if await retry_btn.count() > 0:
-            logger.info(f"[{symbol} - {ex}] Retry button detected. Clicking to heal...")
-            try:
-                await retry_btn.click()
-                await asyncio.sleep(2)
-            except Exception:
-                pass
+    for ex in selected_exs:
+        contract = ex_map.get(ex, f"{symbol}USDT")
+        logger.info(f"[{symbol}] Switching exchange to {ex} ({contract})...")
+        await switch_liquidation_exchange(page, target_exchange=ex, target_contract=contract)
 
         for tf in timeframes:
             # Click timeframe tab
             try:
-                await page.evaluate(f"""
-                    () => {{
-                        const allLi = Array.from(document.querySelectorAll('li'));
-                        const el = allLi.find(x => (x.innerText || '').includes('{tf['kw']}'));
-                        if (el) el.click();
-                    }}
-                """)
-                await asyncio.sleep(1.2)
+                await page.evaluate(f'''() => {{
+                    const allLi = Array.from(document.querySelectorAll('li'));
+                    const el = allLi.find(x => (x.innerText || '').includes('{tf['kw']}'));
+                    if (el) el.click();
+                }}''')
+                await asyncio.sleep(1.0)
             except Exception as e:
                 logger.warning(f"[{symbol} - {ex}] Failed to click TF tab {tf['kw']}: {e}")
 
-            extracted = await extract_single_liquidation_state(page, symbol, mt5_symbol, tf["label"])
-            if extracted and extracted.get("snapshot"):
-                snap = extracted["snapshot"]
-                snapshots.append(snap)
-                
-                # Discrete strike levels
-                if is_deep_level:
-                    for lvl in extracted.get("levels", []):
-                        lvl["symbol"] = symbol
-                        lvl["exchange"] = snap["exchange"]
-                        lvl["lookback_tf"] = tf["label"]
-                        levels.append(lvl)
+            data = await extract_liquidation_data_point(
+                page,
+                symbol=symbol,
+                mt5_symbol=mt5_symbol,
+                exchange=ex,
+                contract=contract,
+                tf_label=tf["label"],
+                range_filters=range_filters
+            )
 
-                # Key liquidation levels table
-                for kl in extracted.get("key_levels", []):
-                    kl["symbol"] = symbol
-                    kl["mt5_symbol"] = mt5_symbol
-                    kl["exchange"] = snap["exchange"]
-                    kl["lookback_tf"] = tf["label"]
-                    key_levels.append(kl)
+            if data.get("snapshot"):
+                all_snapshots.append(data["snapshot"])
+            all_key_levels.extend(data.get("key_levels", []))
+            all_magnet_zones.extend(data.get("magnet_zones", []))
+            all_leverage_tiers.extend(data.get("leverage_tiers", []))
+            if data.get("near_field"):
+                all_near_fields.append(data["near_field"])
 
-    return snapshots, levels, key_levels
+    return all_snapshots, all_key_levels, all_magnet_zones, all_leverage_tiers, all_near_fields
 
 
 def upsert_liquidation_snapshots(snapshots: list):
@@ -810,37 +982,7 @@ def upsert_liquidation_snapshots(snapshots: list):
         combined = snap_df
 
     combined.to_parquet(SNAPSHOTS_PARQUET, index=False, engine="pyarrow")
-    logger.info(f"Liquidation Snapshots saved: {SNAPSHOTS_PARQUET.name} ({len(combined)} total rows across {combined['symbol'].nunique()} assets)")
-
-
-def upsert_asset_levels(symbol: str, levels: list):
-    """Persist asset-partitioned discrete strike levels to Parquet."""
-    if not levels:
-        return
-
-    LEVELS_DIR.mkdir(parents=True, exist_ok=True)
-    parquet_path = LEVELS_DIR / f"{symbol}_levels.parquet"
-    now_utc = datetime.now(timezone.utc).isoformat()
-
-    for lvl in levels:
-        lvl["snapshot_time_utc"] = now_utc
-        lvl["dumped_at_utc"] = now_utc
-
-    new_df = pd.DataFrame(levels)
-
-    if parquet_path.exists():
-        try:
-            existing_df = pd.read_parquet(parquet_path)
-            combined_df = pd.concat([existing_df, new_df], ignore_index=True)
-            combined_df = combined_df.drop_duplicates(subset=["snapshot_time_utc", "exchange", "lookback_tf", "price"], keep="last")
-        except Exception as e:
-            logger.warning(f"[{symbol}] Failed to merge existing levels ({e}). Writing new data.")
-            combined_df = new_df
-    else:
-        combined_df = new_df
-
-    combined_df.to_parquet(parquet_path, index=False, engine="pyarrow")
-    logger.info(f"[{symbol}] Saved {parquet_path.name}: {len(combined_df)} discrete strike levels")
+    logger.info(f"Liquidation Snapshots saved: {SNAPSHOTS_PARQUET.name} ({len(combined)} rows across {combined['symbol'].nunique()} assets)")
 
 
 def upsert_asset_key_levels(symbol: str, key_levels: list):
@@ -863,7 +1005,7 @@ def upsert_asset_key_levels(symbol: str, key_levels: list):
             existing_df = pd.read_parquet(parquet_path)
             combined_df = pd.concat([existing_df, new_df], ignore_index=True)
             combined_df = combined_df.drop_duplicates(
-                subset=["snapshot_time_utc", "exchange", "lookback_tf", "side", "rank", "price"],
+                subset=["snapshot_time_utc", "exchange", "lookback_tf", "range_filter", "side", "rank", "price"],
                 keep="last"
             )
         except Exception as e:
@@ -873,10 +1015,112 @@ def upsert_asset_key_levels(symbol: str, key_levels: list):
         combined_df = new_df
 
     if "rank" in combined_df.columns:
+        combined_df = combined_df.sort_values(by=["lookback_tf", "range_filter", "side", "rank"]).reset_index(drop=True)
+
+    combined_df.to_parquet(parquet_path, index=False, engine="pyarrow")
+    logger.info(f"[{symbol}] Saved {parquet_path.name}: {len(combined_df)} ranked strike barriers")
+
+
+def upsert_asset_magnet_zones(symbol: str, magnet_zones: list):
+    """Persist asset-partitioned Top 3 Short & Long Magnet Zones to Parquet."""
+    if not magnet_zones:
+        return
+
+    MAGNET_ZONES_DIR.mkdir(parents=True, exist_ok=True)
+    parquet_path = MAGNET_ZONES_DIR / f"{symbol}_magnet_zones.parquet"
+    now_utc = datetime.now(timezone.utc).isoformat()
+
+    for mz in magnet_zones:
+        mz["snapshot_time_utc"] = now_utc
+        mz["dumped_at_utc"] = now_utc
+
+    new_df = pd.DataFrame(magnet_zones)
+
+    if parquet_path.exists():
+        try:
+            existing_df = pd.read_parquet(parquet_path)
+            combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+            combined_df = combined_df.drop_duplicates(
+                subset=["snapshot_time_utc", "exchange", "lookback_tf", "side", "rank"],
+                keep="last"
+            )
+        except Exception as e:
+            logger.warning(f"[{symbol}] Failed to merge existing magnet zones ({e}). Writing new data.")
+            combined_df = new_df
+    else:
+        combined_df = new_df
+
+    if "rank" in combined_df.columns:
         combined_df = combined_df.sort_values(by=["lookback_tf", "side", "rank"]).reset_index(drop=True)
 
     combined_df.to_parquet(parquet_path, index=False, engine="pyarrow")
-    logger.info(f"[{symbol}] Saved {parquet_path.name}: {len(combined_df)} key strike barriers")
+    logger.info(f"[{symbol}] Saved {parquet_path.name}: {len(combined_df)} magnet zone bands")
+
+
+def upsert_asset_leverage_tiers(symbol: str, leverage_tiers: list):
+    """Persist asset-partitioned leverage tier breakdown to Parquet."""
+    if not leverage_tiers:
+        return
+
+    LEVERAGE_TIERS_DIR.mkdir(parents=True, exist_ok=True)
+    parquet_path = LEVERAGE_TIERS_DIR / f"{symbol}_leverage_tiers.parquet"
+    now_utc = datetime.now(timezone.utc).isoformat()
+
+    for lt in leverage_tiers:
+        lt["snapshot_time_utc"] = now_utc
+        lt["dumped_at_utc"] = now_utc
+
+    new_df = pd.DataFrame(leverage_tiers)
+
+    if parquet_path.exists():
+        try:
+            existing_df = pd.read_parquet(parquet_path)
+            combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+            combined_df = combined_df.drop_duplicates(
+                subset=["snapshot_time_utc", "exchange", "lookback_tf", "tier"],
+                keep="last"
+            )
+        except Exception as e:
+            logger.warning(f"[{symbol}] Failed to merge existing leverage tiers ({e}). Writing new data.")
+            combined_df = new_df
+    else:
+        combined_df = new_df
+
+    combined_df.to_parquet(parquet_path, index=False, engine="pyarrow")
+    logger.info(f"[{symbol}] Saved {parquet_path.name}: {len(combined_df)} leverage tier records")
+
+
+def upsert_asset_near_field(symbol: str, near_field_list: list):
+    """Persist asset-partitioned near-field balance to Parquet."""
+    if not near_field_list:
+        return
+
+    NEAR_FIELD_DIR.mkdir(parents=True, exist_ok=True)
+    parquet_path = NEAR_FIELD_DIR / f"{symbol}_near_field.parquet"
+    now_utc = datetime.now(timezone.utc).isoformat()
+
+    for nf in near_field_list:
+        nf["snapshot_time_utc"] = now_utc
+        nf["dumped_at_utc"] = now_utc
+
+    new_df = pd.DataFrame(near_field_list)
+
+    if parquet_path.exists():
+        try:
+            existing_df = pd.read_parquet(parquet_path)
+            combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+            combined_df = combined_df.drop_duplicates(
+                subset=["snapshot_time_utc", "exchange", "lookback_tf"],
+                keep="last"
+            )
+        except Exception as e:
+            logger.warning(f"[{symbol}] Failed to merge existing near-field balance ({e}). Writing new data.")
+            combined_df = new_df
+    else:
+        combined_df = new_df
+
+    combined_df.to_parquet(parquet_path, index=False, engine="pyarrow")
+    logger.info(f"[{symbol}] Saved {parquet_path.name}: {len(combined_df)} near-field balance records")
 
 
 # ---------------------------------------------------------------------------
@@ -930,51 +1174,63 @@ async def footprint_worker(context, warp_lock: asyncio.Lock):
         cycle_count += 1
 
 
-async def execute_liquidation_sweep(context, warp_lock: asyncio.Lock):
-    """Executes a full 44-asset liquidation dump, then immediately closes the tab."""
-    logger.info("[Pipe 2: Liquidation] Initiating scheduled liquidation sweep across all 44 assets...")
+async def execute_liquidation_sweep(context, warp_lock: asyncio.Lock, target_symbol: str = None):
+    """Executes a structured liquidation dump across assets, then immediately closes the tab."""
+    symbols_to_harvest = [target_symbol] if target_symbol else LIQ_LEVEL_SYMBOLS
+    logger.info(f"[Pipe 2: Liquidation] Initiating liquidation sweep across {len(symbols_to_harvest)} asset(s)...")
     async with warp_lock:
         liq_page = await context.new_page()
         try:
-            await liq_page.goto("https://www.coinglass.com/liquidation-levels?symbol=BTC", timeout=20000)
+            start_sym = symbols_to_harvest[0] if symbols_to_harvest else "BTC"
+            await liq_page.goto(f"https://www.coinglass.com/liquidation-levels?symbol={start_sym}", timeout=20000)
             await asyncio.sleep(3.0)
 
             all_snapshots = []
-            total_levels_count = 0
             total_key_levels_count = 0
+            total_magnet_zones_count = 0
+            total_leverage_tiers_count = 0
+            total_near_field_count = 0
 
-            for idx, sym in enumerate(LIQ_LEVEL_SYMBOLS, start=1):
+            for idx, sym in enumerate(symbols_to_harvest, start=1):
                 exs = LIQ_EXCHANGES_MAP.get(sym, ["Binance"])
                 mt5_sym = MT5_ASSET_MAP.get(sym, "")
-                logger.info(f"[Pipe 2: Liquidation] [{idx}/{len(LIQ_LEVEL_SYMBOLS)}] Harvesting {sym} ({mt5_sym}) on {exs}...")
+                logger.info(f"[Pipe 2: Liquidation] [{idx}/{len(symbols_to_harvest)}] Harvesting {sym} ({mt5_sym}) on {exs}...")
 
-                snaps, levels, key_lvls = await harvest_asset_liquidations(
+                snaps, key_lvls, mag_zones, lev_tiers, near_fields = await harvest_asset_liquidations(
                     liq_page,
                     sym,
                     mt5_sym,
-                    target_exchanges=exs,
-                    is_deep_level=True
+                    target_exchanges=exs
                 )
 
                 all_snapshots.extend(snaps)
-                if levels:
-                    upsert_asset_levels(sym, levels)
-                    total_levels_count += len(levels)
                 if key_lvls:
                     upsert_asset_key_levels(sym, key_lvls)
                     total_key_levels_count += len(key_lvls)
+                if mag_zones:
+                    upsert_asset_magnet_zones(sym, mag_zones)
+                    total_magnet_zones_count += len(mag_zones)
+                if lev_tiers:
+                    upsert_asset_leverage_tiers(sym, lev_tiers)
+                    total_leverage_tiers_count += len(lev_tiers)
+                if near_fields:
+                    upsert_asset_near_field(sym, near_fields)
+                    total_near_field_count += len(near_fields)
 
             if all_snapshots:
                 upsert_liquidation_snapshots(all_snapshots)
 
             # Sync live MT5 ticks & basis differentials across all assets
             try:
-                from Terminal.mt5_market_sync import sync_mt5_ticks
+                try:
+                    from Terminal.mt5_market_sync import sync_mt5_ticks
+                except ImportError:
+                    from mt5_market_sync import sync_mt5_ticks
                 sync_mt5_ticks()
             except Exception as e:
                 logger.warning(f"Error during MT5 ticks synchronization: {e}")
 
-            logger.info(f"[Pipe 2: Liquidation] Sweep complete: {total_levels_count} discrete levels, {total_key_levels_count} barriers across {len(LIQ_LEVEL_SYMBOLS)} assets.")
+            logger.info(f"[Pipe 2: Liquidation] Sweep complete: {total_key_levels_count} barriers, {total_magnet_zones_count} magnet zones across {len(LIQ_LEVEL_SYMBOLS)} assets.")
         except Exception as e:
             logger.error(f"[Pipe 2: Liquidation] Error during sweep: {e}", exc_info=True)
         finally:
@@ -1011,8 +1267,10 @@ async def main_collector(args):
     DB_DIR.mkdir(parents=True, exist_ok=True)
     CANDLE_DIR.mkdir(parents=True, exist_ok=True)
     LIQ_DIR.mkdir(parents=True, exist_ok=True)
-    LEVELS_DIR.mkdir(parents=True, exist_ok=True)
     KEY_LEVELS_DIR.mkdir(parents=True, exist_ok=True)
+    MAGNET_ZONES_DIR.mkdir(parents=True, exist_ok=True)
+    LEVERAGE_TIERS_DIR.mkdir(parents=True, exist_ok=True)
+    NEAR_FIELD_DIR.mkdir(parents=True, exist_ok=True)
 
     warp_lock = asyncio.Lock()
 
@@ -1028,8 +1286,9 @@ async def main_collector(args):
 
         # Mode A: Liquidation-only single sweep
         if args.liquidations_only:
-            logger.info("Executing liquidation-only one-shot dump across all 44 assets...")
-            await execute_liquidation_sweep(ctx, warp_lock)
+            target_str = f"for {args.symbol}" if args.symbol else "across all assets"
+            logger.info(f"Executing liquidation-only one-shot dump {target_str}...")
+            await execute_liquidation_sweep(ctx, warp_lock, target_symbol=args.symbol)
             logger.info("Liquidation one-shot dump complete. Exiting.")
             return
 
@@ -1084,6 +1343,7 @@ async def main_collector(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="CoinGlass Master Parallel Data Collector")
+    parser.add_argument("--symbol", type=str, default=None, help="Target specific symbol for collection (e.g. BTC)")
     parser.add_argument("--once", action="store_true", help="Run a single full collection cycle and exit")
     parser.add_argument("--liquidations-only", action="store_true", help="Harvest only liquidation data across all 44 assets, close tab, and exit")
     parser.add_argument("--footprint-only", action="store_true", help="Harvest only footprint candles and signals for one cycle and exit")
