@@ -693,6 +693,56 @@ def extract_single_liquidation_state(page, symbol: str, mt5_symbol: str, tf_labe
     return page.evaluate(js_extractor, {"symbol": symbol, "mt5Symbol": mt5_symbol, "tfLabel": tf_label})
 
 
+def switch_liquidation_pair(page, symbol: str, target_contract: str, target_exchange: str = "Binance") -> bool:
+    """Robust native pair selection via CoinGlass UI symbol switcher, with fallback to URL navigation."""
+    try:
+        btn = page.locator("button.ll-symBtn")
+        if btn.count() > 0:
+            cur_text = btn.inner_text().strip()
+            norm_target = target_contract.lower().replace("_", "").replace("-", "")
+            norm_cur = cur_text.lower().replace("_", "").replace("-", "")
+            norm_ex = target_exchange.lower()
+
+            # If already on the correct exchange and contract, no switch needed
+            if norm_target in norm_cur and (norm_ex in norm_cur or norm_ex == "binance"):
+                return True
+
+            btn.click()
+            time.sleep(0.8)
+
+            inp = page.locator("input[aria-label='Search trading pairs'], input[placeholder*='Search' i]").first
+            if inp.count() > 0 and inp.is_visible():
+                search_key = symbol.lower()
+                inp.fill(search_key)
+                time.sleep(1.2)
+
+                # Match target contract button
+                target_btn = page.locator("button").filter(has_text=target_contract)
+                if target_btn.count() == 0:
+                    target_btn = page.locator("button").filter(has_text=symbol)
+
+                if target_btn.count() > 0:
+                    target_btn.first.click()
+                    time.sleep(3.5)
+                    return True
+
+        # Fallback to direct navigation and localStorage
+        page.evaluate(f"""
+            () => {{
+                const current = JSON.parse(localStorage.getItem('liqLevelsPrefs') || '{{}}');
+                current.ex = '{target_exchange}';
+                current.sym = '{target_contract}';
+                localStorage.setItem('liqLevelsPrefs', JSON.stringify(current));
+            }}
+        """)
+        page.goto(f"https://www.coinglass.com/liquidation-levels?symbol={symbol}", timeout=15000)
+        time.sleep(3.0)
+        return True
+    except Exception as e:
+        logger.warning(f"[{symbol}] Error during pair switch to {target_exchange} ({target_contract}): {e}")
+        return False
+
+
 def harvest_asset_liquidations(page, symbol: str, mt5_symbol: str, target_exchanges: list = None, is_deep_level: bool = True, contracts_override: dict = None) -> tuple[list, list, list]:
     """Harvest liquidation snapshots, multi-timeframe discrete levels, and key levels for an asset across exchanges."""
     snapshots = []
@@ -713,20 +763,7 @@ def harvest_asset_liquidations(page, symbol: str, mt5_symbol: str, target_exchan
     for ex in target_exchanges:
         contract_sym = c_map.get(ex, f"{symbol}USDT")
         logger.info(f"[{symbol}] Switching exchange to {ex} (contract: {contract_sym})...")
-        # Set exchange in localStorage and navigate
-        page.evaluate(f"""
-            () => {{
-                const current = JSON.parse(localStorage.getItem('liqLevelsPrefs') || '{{}}');
-                current.ex = '{ex}';
-                current.sym = '{contract_sym}';
-                localStorage.setItem('liqLevelsPrefs', JSON.stringify(current));
-            }}
-        """)
-        try:
-            page.goto(f"https://www.coinglass.com/liquidation-levels?symbol={symbol}", timeout=15000)
-            time.sleep(2.5)
-        except Exception as e:
-            logger.warning(f"[{symbol}] Navigation error on exchange {ex}: {e}")
+        switch_liquidation_pair(page, symbol=symbol, target_contract=contract_sym, target_exchange=ex)
 
         # Auto-healing: click Retry if present
         retry_btn = page.locator("button:has-text('Retry')")
@@ -870,32 +907,35 @@ def upsert_asset_key_levels(symbol: str, key_levels: list):
     logger.info(f"[{symbol}] Saved {parquet_path.name}: {len(combined_df)} key strike barriers")
 
 
-def run_cycle(context) -> dict:
+def run_cycle(context, liquidations_only: bool = False) -> dict:
     """Execute a single full collection cycle across footprint and liquidation streams."""
-    # -----------------------------------------------------------------------
-    # Step 1: Footprint Signals & 15m Candles across all 35 mutual assets
-    # -----------------------------------------------------------------------
-    fp_page = get_coinglass_tab(context)
-    ensure_terminal_ready(fp_page)
-
     all_signals = []
-    total_chunks = (len(FP_TARGET_SYMBOLS) + CHUNK_SIZE - 1) // CHUNK_SIZE
+    total_signals = 0
 
-    for i in range(0, len(FP_TARGET_SYMBOLS), CHUNK_SIZE):
-        chunk = FP_TARGET_SYMBOLS[i:i + CHUNK_SIZE]
-        chunk_num = i // CHUNK_SIZE + 1
-        logger.info(f"[Footprint] Processing Chunk {chunk_num}/{total_chunks} ({chunk[0]}..{chunk[-1]})...")
+    # -----------------------------------------------------------------------
+    # Step 1: Footprint Signals & 15m Candles across mutual assets
+    # -----------------------------------------------------------------------
+    if not liquidations_only:
+        fp_page = get_coinglass_tab(context)
+        ensure_terminal_ready(fp_page)
 
-        chunk_result = extract_footprint_chunk(fp_page, chunk)
-        signals = chunk_result.get("signals", [])
-        all_signals.extend(signals)
+        total_chunks = (len(FP_TARGET_SYMBOLS) + CHUNK_SIZE - 1) // CHUNK_SIZE
+        for i in range(0, len(FP_TARGET_SYMBOLS), CHUNK_SIZE):
+            chunk = FP_TARGET_SYMBOLS[i:i + CHUNK_SIZE]
+            chunk_num = i // CHUNK_SIZE + 1
+            logger.info(f"[Footprint] Processing Chunk {chunk_num}/{total_chunks} ({chunk[0]}..{chunk[-1]})...")
 
-        candles_dict = chunk_result.get("candles", {})
-        for sym, bar_list in candles_dict.items():
-            upsert_candle_parquet(sym, MT5_ASSET_MAP.get(sym, ""), bar_list)
+            chunk_result = extract_footprint_chunk(fp_page, chunk)
+            signals = chunk_result.get("signals", [])
+            all_signals.extend(signals)
 
-    dump_signals_parquet(all_signals)
-    fp_page.evaluate("() => window.__cg_term.pickPair('BTC', 'agg-perp')")
+            candles_dict = chunk_result.get("candles", {})
+            for sym, bar_list in candles_dict.items():
+                upsert_candle_parquet(sym, MT5_ASSET_MAP.get(sym, ""), bar_list)
+
+        dump_signals_parquet(all_signals)
+        fp_page.evaluate("() => window.__cg_term.pickPair('BTC', 'agg-perp')")
+        total_signals = len(all_signals)
 
     # -----------------------------------------------------------------------
     # Step 2: Liquidation Intelligence (Snapshots, Discrete Levels, Key Levels)
@@ -905,34 +945,35 @@ def run_cycle(context) -> dict:
     total_levels_count = 0
     total_key_levels_count = 0
 
-    # 2A. Deep Strike Levels (Multi-TF 3D/7D/30D) for top priority mutual assets
-    priority_level_assets = [s for s in ["BTC", "ETH", "SOL", "XRP", "XAU", "XAG", "COPPER", "GAS", "SP500", "NAS100", "US30", "EURUSD", "GBPUSD", "USDJPY"] if s in LIQ_LEVEL_SYMBOLS]
-    for sym in priority_level_assets:
-        exs = LIQ_EXCHANGES_MAP.get(sym, ["Binance", "Bybit"])
-        logger.info(f"[Liquidations] Harvesting multi-TF levels & key barriers for {sym} across {exs}...")
-        snaps, levels, key_lvls = harvest_asset_liquidations(liq_page, sym, MT5_ASSET_MAP.get(sym, ""), target_exchanges=exs, is_deep_level=True)
-        all_snapshots.extend(snaps)
-        upsert_asset_levels(sym, levels)
-        upsert_asset_key_levels(sym, key_lvls)
-        total_levels_count += len(levels)
-        total_key_levels_count += len(key_lvls)
+    logger.info(f"[Liquidations] Beginning full liquidation sweep across all {len(LIQ_LEVEL_SYMBOLS)} mutual assets...")
 
-    # 2B. Macro Liquidation Snapshots for Forex & Secondary Assets
-    macro_only_assets = [s for s in LIQ_SNAP_SYMBOLS if s not in priority_level_assets]
-    for sym in macro_only_assets[:4]:  # Harvest top macro assets per cycle
-        exs = LIQ_EXCHANGES_MAP.get(sym, ["Bybit"])
-        logger.info(f"[Liquidations] Harvesting macro snapshot for {sym} ({exs})...")
-        snaps, _, key_lvls = harvest_asset_liquidations(liq_page, sym, MT5_ASSET_MAP.get(sym, ""), target_exchanges=exs, is_deep_level=False)
+    for idx, sym in enumerate(LIQ_LEVEL_SYMBOLS, start=1):
+        exs = LIQ_EXCHANGES_MAP.get(sym, ["Binance"])
+        mt5_sym = MT5_ASSET_MAP.get(sym, "")
+        logger.info(f"[{idx}/{len(LIQ_LEVEL_SYMBOLS)}] Harvesting multi-TF liquidations for {sym} ({mt5_sym}) on {exs}...")
+
+        snaps, levels, key_lvls = harvest_asset_liquidations(
+            liq_page,
+            sym,
+            mt5_sym,
+            target_exchanges=exs,
+            is_deep_level=True
+        )
+
         all_snapshots.extend(snaps)
+        if levels:
+            upsert_asset_levels(sym, levels)
+            total_levels_count += len(levels)
         if key_lvls:
             upsert_asset_key_levels(sym, key_lvls)
             total_key_levels_count += len(key_lvls)
 
-    upsert_liquidation_snapshots(all_snapshots)
+    if all_snapshots:
+        upsert_liquidation_snapshots(all_snapshots)
 
     return {
-        "signals_count": len(all_signals),
-        "candles_updated": len(FP_TARGET_SYMBOLS),
+        "signals_count": total_signals,
+        "candles_updated": len(FP_TARGET_SYMBOLS) if not liquidations_only else 0,
         "liquidation_snapshots_count": len(all_snapshots),
         "liquidation_levels_count": total_levels_count,
         "key_levels_count": total_key_levels_count
@@ -980,4 +1021,25 @@ def run_continuous_collector():
 
 
 if __name__ == "__main__":
-    run_continuous_collector()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="CoinGlass Master Data Collector")
+    parser.add_argument("--once", action="store_true", help="Run a single full collection cycle and exit")
+    parser.add_argument("--liquidations-only", action="store_true", help="Harvest only liquidation data across all mutual assets")
+    args = parser.parse_args()
+
+    if args.once or args.liquidations_only:
+        logger.info(f"Executing single cycle (liquidations_only={args.liquidations_only})...")
+        DB_DIR.mkdir(parents=True, exist_ok=True)
+        CANDLE_DIR.mkdir(parents=True, exist_ok=True)
+        LIQ_DIR.mkdir(parents=True, exist_ok=True)
+        LEVELS_DIR.mkdir(parents=True, exist_ok=True)
+        KEY_LEVELS_DIR.mkdir(parents=True, exist_ok=True)
+
+        with sync_playwright() as p:
+            browser = p.chromium.connect_over_cdp(CDP_URL)
+            ctx = browser.contexts[0] if browser.contexts else browser.new_context()
+            stats = run_cycle(ctx, liquidations_only=args.liquidations_only)
+            logger.info(f"Single cycle completed successfully: {stats}")
+    else:
+        run_continuous_collector()
