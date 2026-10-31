@@ -499,7 +499,7 @@ async def extract_footprint_chunk(page, symbols_chunk: list) -> dict:
 # ---------------------------------------------------------------------------
 # Liquidation Intelligence Helpers (Multi-Exchange & Multi-TF Architecture)
 # ---------------------------------------------------------------------------
-async def discover_perpetual_exchanges(page) -> list[dict]:
+async def discover_perpetual_exchanges(page, symbol: str = None) -> list[dict]:
     """Discover all available perpetual contracts and exchanges for the current asset."""
     btn = page.locator("button.ll-symBtn").first
     if await btn.count() == 0:
@@ -509,6 +509,12 @@ async def discover_perpetual_exchanges(page) -> list[dict]:
     if await menu.count() == 0 or not await menu.is_visible():
         await btn.click()
         await asyncio.sleep(0.5)
+
+    if symbol:
+        inp = page.locator("input[placeholder*='Search exchange or pair']").first
+        if await inp.count() > 0:
+            await inp.fill(symbol)
+            await asyncio.sleep(0.4)
 
     exchanges = await page.evaluate('''() => {
         const menu = document.querySelector('.ll-menu');
@@ -538,7 +544,7 @@ async def discover_perpetual_exchanges(page) -> list[dict]:
     return exchanges
 
 
-async def switch_liquidation_exchange(page, target_exchange: str, target_contract: str = None) -> bool:
+async def switch_liquidation_exchange(page, target_exchange: str, target_contract: str = None, symbol: str = None) -> bool:
     """Natively switches to target exchange and contract via CoinGlass .ll-menu."""
     btn = page.locator("button.ll-symBtn").first
     if await btn.count() == 0:
@@ -552,6 +558,12 @@ async def switch_liquidation_exchange(page, target_exchange: str, target_contrac
     if await menu.count() == 0 or not await menu.is_visible():
         await btn.click()
         await asyncio.sleep(0.5)
+
+    if symbol:
+        inp = page.locator("input[placeholder*='Search exchange or pair']").first
+        if await inp.count() > 0:
+            await inp.fill(symbol)
+            await asyncio.sleep(0.4)
 
     switched = await page.evaluate('''({ targetEx, targetCon }) => {
         const menu = document.querySelector('.ll-menu');
@@ -899,7 +911,7 @@ async def harvest_asset_liquidations(
         await asyncio.sleep(2.5)
 
     # Auto-discover exchanges if not strictly passed
-    discovered = await discover_perpetual_exchanges(page)
+    discovered = await discover_perpetual_exchanges(page, symbol=symbol)
     ex_map = {d["exchange"].upper(): d["contract"] for d in discovered}
 
     if not target_exchanges or target_exchanges == ["all"]:
@@ -922,7 +934,7 @@ async def harvest_asset_liquidations(
     for ex in selected_exs:
         contract = ex_map.get(ex, f"{symbol}USDT")
         logger.info(f"[{symbol}] Switching exchange to {ex} ({contract})...")
-        await switch_liquidation_exchange(page, target_exchange=ex, target_contract=contract)
+        await switch_liquidation_exchange(page, target_exchange=ex, target_contract=contract, symbol=symbol)
 
         for tf in timeframes:
             # Click timeframe tab
