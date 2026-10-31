@@ -1,30 +1,25 @@
 """
 CoinGlass Master Data Collector (Footprint Signals, 15m Candles, & Liquidation Data)
 ------------------------------------------------------------------------------------
-Automates continuous, multi-stream data collection across the mutual intersection of
+Automates parallel, multi-stream data collection across the mutual intersection of
 assets supported by both Blueberry Markets MT5 and CoinGlass:
 
 Data Streams Collected:
-1. Footprint Order-Flow Signals:
-   - Trapped Longs, Trapped Shorts, Absorption, Exhaustion, Divergence
+1. Footprint Order-Flow Signals & 15m Candles (Continuous Pipe):
+   - Real-time trapped longs/shorts, absorption, delta divergence, exhaustion.
    - Stored in: `Database/coinglass_aggregated_futures_signals.parquet`
-2. 15-Minute Order-Flow Candle Datasets:
-   - Full OHLC, Volume (Buy/Sell/Total), Delta, Cumulative Delta, Trades,
-     Avg Trade Size, Buy/Sell Ratio, POC Price/Volume/Delta, Open Interest (Open/Close/Change)
-   - Stored in: `Database/Candle_Data/<SYMBOL>.parquet` (Deduplicated Upsert)
-   - Scope: 35 assets (31 Cryptos + Gold XAU, Silver XAG, Copper COPPER, Natural Gas GAS)
-3. Liquidation Intelligence (Snapshots & Discrete Strike Levels):
-   - Macro Snapshots: Nearest Short/Long Magnet Zones, CLLD (Cumulative Delta),
-     Sentiment turns, Near-field balance, Distance bands, and Leverage breakdown.
-     Stored in: `Database/Liquidation_Data/liquidation_snapshots.parquet`
-   - Discrete Strike Levels (Multi-Timeframe & Multi-Exchange):
-     Exact liquidation trigger prices, sides, distance %, leverage tiers (High/Mid/Low),
-     granularity tiers (Tier 1/2/3), volumes, and strength ratings.
-     Partitioned asset-wise: `Database/Liquidation_Data/Levels/<SYMBOL>_levels.parquet`
-4. Reliability & Network:
-   - Automated Cloudflare WARP IP rotation after every cycle.
-   - Auto-retry healing for canvas/DOM timeouts.
-   - 2-minute configurable rest interval between cycles.
+   - 15m Order-flow candles stored in: `Database/Candle_Data/<SYMBOL>.parquet`
+   - Continuous loop with automated Cloudflare WARP IP rotation.
+2. Liquidation Intelligence (Scheduled Pipe at 00th & 30th minute):
+   - Triggered at local wall-clock :00:05 and :30:05.
+   - Dynamic tab lifecycle: Opens tab, sweeps all 44 mutual assets, dumps to Parquet,
+     and IMMEDIATELY CLOSES the tab (`page.close()`) to keep memory and CPU lean.
+   - Stored in: `Database/Liquidation_Data/Levels/<SYMBOL>_levels.parquet`,
+                `Database/Liquidation_Data/Key_Levels/<SYMBOL>_key_levels.parquet`,
+                `Database/Liquidation_Data/liquidation_snapshots.parquet`.
+3. Concurrency & Network Safety:
+   - Coordinated via `asyncio.Lock` (`warp_rotation_lock`):
+     WARP IP rotation only executes when the Liquidation sweep is idle, preventing network drops.
 """
 
 import sys
@@ -32,13 +27,15 @@ import os
 import time
 import json
 import logging
+import argparse
+import asyncio
 import subprocess
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import requests
 import pandas as pd
-from playwright.sync_api import sync_playwright
+from playwright.async_api import async_playwright
 
 # ---------------------------------------------------------------------------
 # Configuration & Registry Loading
@@ -55,8 +52,8 @@ SNAPSHOTS_PARQUET = LIQ_DIR / "liquidation_snapshots.parquet"
 
 WARP_CLI = Path(r"C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe")
 CDP_URL = "http://127.0.0.1:9222"
-CYCLE_REST_SECONDS = 120  # 2 minutes rest between cycles
-CHUNK_SIZE = 10           # Assets per in-page batch chunk
+CHUNK_SIZE = 10           # Footprint assets per in-page batch chunk
+FOOTPRINT_REST_SECONDS = 60  # Rest between footprint passes
 
 REGISTRY_FILE = DB_DIR / "mutual_asset_capability_registry.json"
 
@@ -153,33 +150,35 @@ def rotate_cloudflare_ip():
         logger.error(f"[Cloudflare WARP] Error during IP rotation: {e}")
 
 
-def get_coinglass_tab(browser_context):
+def get_seconds_until_next_sweep() -> float:
+    """Calculate exact seconds until next :00:05 or :30:05 local wall-clock time."""
+    now = datetime.now()
+    if now.minute < 30 or (now.minute == 30 and now.second < 5):
+        target = now.replace(minute=30, second=5, microsecond=0)
+    else:
+        next_hour = now + timedelta(hours=1)
+        target = next_hour.replace(minute=0, second=5, microsecond=0)
+    diff = (target - now).total_seconds()
+    return max(1.0, diff)
+
+
+# ---------------------------------------------------------------------------
+# Footprint Page Helpers
+# ---------------------------------------------------------------------------
+async def get_coinglass_tab(browser_context):
     """Locate the existing CoinGlass footprint tab, or open a new one if missing."""
     for page in browser_context.pages:
         if "coinglass.com/footprint" in page.url:
             return page
     
     logger.info("CoinGlass footprint tab not found in active tabs. Navigating new page...")
-    page = browser_context.new_page()
-    page.goto("https://www.coinglass.com/footprint?symbol=BTC", wait_until="networkidle")
-    time.sleep(3)
+    page = await browser_context.new_page()
+    await page.goto("https://www.coinglass.com/footprint?symbol=BTC", wait_until="networkidle")
+    await asyncio.sleep(3)
     return page
 
 
-def get_liquidation_tab(browser_context):
-    """Locate the existing CoinGlass liquidation-levels tab, or open a new one if missing."""
-    for page in browser_context.pages:
-        if "coinglass.com/liquidation-levels" in page.url:
-            return page
-    
-    logger.info("Liquidation levels tab not found. Navigating new page...")
-    page = browser_context.new_page()
-    page.goto("https://www.coinglass.com/liquidation-levels?symbol=BTC", wait_until="networkidle")
-    time.sleep(3)
-    return page
-
-
-def ensure_terminal_ready(page):
+async def ensure_terminal_ready(page):
     """Ensure terminal controller is attached to window.__cg_term."""
     init_script = """
     () => {
@@ -210,10 +209,10 @@ def ensure_terminal_ready(page):
         return false;
     }
     """
-    ready = page.evaluate(init_script)
+    ready = await page.evaluate(init_script)
     if not ready:
-        time.sleep(2)
-        ready = page.evaluate(init_script)
+        await asyncio.sleep(2)
+        ready = await page.evaluate(init_script)
     return ready
 
 
@@ -223,12 +222,10 @@ def verify_candle_sanity(df: pd.DataFrame, symbol: str) -> bool:
         logger.error(f"[{symbol}] Sanity check failed: DataFrame is empty!")
         return False
 
-    # 1. Monotonic timestamps
     if not df["open_time_ms"].is_monotonic_increasing:
         logger.error(f"[{symbol}] Sanity check failed: Timestamps are not strictly monotonic increasing!")
         return False
 
-    # 2. OHLC Price integrity
     ohlc_valid = (
         (df["high"] >= df["open"]) &
         (df["high"] >= df["close"]) &
@@ -240,19 +237,16 @@ def verify_candle_sanity(df: pd.DataFrame, symbol: str) -> bool:
         logger.error(f"[{symbol}] Sanity check failed: Invalid OHLC price relationships detected!")
         return False
 
-    # 3. Volume conservation: buy_volume + sell_volume == total_volume
     vol_valid = (abs((df["buy_volume"] + df["sell_volume"]) - df["total_volume"]) < 1e-4).all()
     if not vol_valid:
         logger.error(f"[{symbol}] Sanity check failed: Volume conservation violation (buy + sell != total)!")
         return False
 
-    # 4. Delta consistency: buy_volume - sell_volume == delta
     delta_valid = (abs((df["buy_volume"] - df["sell_volume"]) - df["delta"]) < 1e-4).all()
     if not delta_valid:
         logger.error(f"[{symbol}] Sanity check failed: Delta calculation mismatch (buy - sell != delta)!")
         return False
 
-    # 5. Non-negativity
     non_neg = ((df["total_volume"] >= 0) & (df["total_trades"] >= 0) & (df["open"] > 0)).all()
     if not non_neg:
         logger.error(f"[{symbol}] Sanity check failed: Negative volume, negative trades, or non-positive price!")
@@ -317,7 +311,7 @@ def dump_signals_parquet(signals: list):
     logger.info(f"Signals Parquet updated: {OUTPUT_SIGNALS_PARQUET.name} ({len(df)} rows across {df['symbol'].nunique()} assets)")
 
 
-def extract_footprint_chunk(page, symbols_chunk: list) -> dict:
+async def extract_footprint_chunk(page, symbols_chunk: list) -> dict:
     """Extract Footprint signals and 15m order flow candles for a chunk of symbols."""
     combined_extract_js = """
     async ({ symbolsChunk, mt5Map }) => {
@@ -490,10 +484,63 @@ def extract_footprint_chunk(page, symbols_chunk: list) -> dict:
         return result;
     }
     """
-    return page.evaluate(combined_extract_js, {"symbolsChunk": symbols_chunk, "mt5Map": MT5_ASSET_MAP})
+    return await page.evaluate(combined_extract_js, {"symbolsChunk": symbols_chunk, "mt5Map": MT5_ASSET_MAP})
 
 
-def extract_single_liquidation_state(page, symbol: str, mt5_symbol: str, tf_label: str) -> dict:
+# ---------------------------------------------------------------------------
+# Liquidation Intelligence Helpers
+# ---------------------------------------------------------------------------
+async def switch_liquidation_pair(page, symbol: str, target_contract: str, target_exchange: str = "Binance") -> bool:
+    """Robust native pair selection via CoinGlass UI symbol switcher, with fallback to URL navigation."""
+    try:
+        btn = page.locator("button.ll-symBtn")
+        if await btn.count() > 0:
+            cur_text = (await btn.inner_text()).strip()
+            norm_target = target_contract.lower().replace("_", "").replace("-", "")
+            norm_cur = cur_text.lower().replace("_", "").replace("-", "")
+            norm_ex = target_exchange.lower()
+
+            # If already on the correct exchange and contract, no switch needed
+            if norm_target in norm_cur and (norm_ex in norm_cur or norm_ex == "binance"):
+                return True
+
+            await btn.click()
+            await asyncio.sleep(0.8)
+
+            inp = page.locator("input[aria-label='Search trading pairs'], input[placeholder*='Search' i]").first
+            if await inp.count() > 0 and await inp.is_visible():
+                search_key = symbol.lower()
+                await inp.fill(search_key)
+                await asyncio.sleep(1.2)
+
+                # Match target contract button
+                target_btn = page.locator("button").filter(has_text=target_contract)
+                if await target_btn.count() == 0:
+                    target_btn = page.locator("button").filter(has_text=symbol)
+
+                if await target_btn.count() > 0:
+                    await target_btn.first.click()
+                    await asyncio.sleep(3.5)
+                    return True
+
+        # Fallback to direct navigation and localStorage
+        await page.evaluate(f"""
+            () => {{
+                const current = JSON.parse(localStorage.getItem('liqLevelsPrefs') || '{{}}');
+                current.ex = '{target_exchange}';
+                current.sym = '{target_contract}';
+                localStorage.setItem('liqLevelsPrefs', JSON.stringify(current));
+            }}
+        """)
+        await page.goto(f"https://www.coinglass.com/liquidation-levels?symbol={symbol}", timeout=15000)
+        await asyncio.sleep(3.0)
+        return True
+    except Exception as e:
+        logger.warning(f"[{symbol}] Error during pair switch to {target_exchange} ({target_contract}): {e}")
+        return False
+
+
+async def extract_single_liquidation_state(page, symbol: str, mt5_symbol: str, tf_label: str) -> dict:
     """Extract macro snapshot, discrete strike levels, and ranked key barriers for a specific timeframe."""
     js_extractor = """
     ({ symbol, mt5Symbol, tfLabel }) => {
@@ -577,75 +624,43 @@ def extract_single_liquidation_state(page, symbol: str, mt5_symbol: str, tf_labe
             };
         }
 
-        // By leverage tier
-        const levMatch = bodyText.match(/By leverage tier[\\s\\S]*?Shorts\\s*([\\d,]+)[\\s\\S]*?Longs\\s*([\\d,]+)[\\s\\S]*?Total\\s*([\\d,]+)[\\s\\S]*?High leverage\\s*([\\d,]+)\\s*[·•]\\s*([\\d,]+)[\\s\\S]*?Mid leverage\\s*([\\d,]+)\\s*[·•]\\s*([\\d,]+)[\\s\\S]*?Low leverage\\s*([\\d,]+)\\s*[·•]\\s*([\\d,]+)/i);
-        let levTotals = {};
-        if (levMatch) {
-            levTotals = {
-                lev_shorts_tot: parseFloat(levMatch[1].replace(/,/g, '')),
-                lev_longs_tot: parseFloat(levMatch[2].replace(/,/g, '')),
-                lev_tot: parseFloat(levMatch[3].replace(/,/g, '')),
-                high_lev_short: parseFloat(levMatch[4].replace(/,/g, '')),
-                high_lev_long: parseFloat(levMatch[5].replace(/,/g, '')),
-                mid_lev_short: parseFloat(levMatch[6].replace(/,/g, '')),
-                mid_lev_long: parseFloat(levMatch[7].replace(/,/g, '')),
-                low_lev_short: parseFloat(levMatch[8].replace(/,/g, '')),
-                low_lev_long: parseFloat(levMatch[9].replace(/,/g, ''))
-            };
-        }
+        // Leverage totals
+        const levTotals = {};
+        const levKeys = ['highLevShorts', 'midLevShorts', 'lowLevShorts', 'highLevLongs', 'midLevLongs', 'lowLevLongs'];
+        levKeys.forEach(k => {
+            if (m[k] !== undefined) levTotals[k] = m[k];
+        });
 
-        // Granularity volume thresholds
-        const granThr = m.GRAN_THR || [0, 1000, 2500];
-
-        // Active Segments
+        // 1. Discrete strike levels
         const activeLevels = [];
-        let maxSz = 0;
-        for (let i = 0; i < m.nSeg; i++) {
-            if (!m.segHit || m.segHit[i] === 0) {
-                const sz = m.segSz ? m.segSz[i] : 0;
-                if (sz > maxSz) maxSz = sz;
-            }
-        }
-
-        for (let i = 0; i < m.nSeg; i++) {
-            if (!m.segHit || m.segHit[i] === 0) {
-                const px = m.segPx[i];
-                const sz = m.segSz[i];
-                const lev = m.segLev[i] === 0 ? 'high' : (m.segLev[i] === 1 ? 'mid' : 'low');
-                const side = m.segSide[i] === 1 ? 'short' : 'long';
-                const dist = ((px - curPrice) / curPrice) * 100;
-                const weight = maxSz > 0 ? (sz / maxSz) : 0;
-                const strength = Math.round(weight * 1000) / 10;
-
-                let tierLevel = 1;
-                if (sz >= granThr[2]) tierLevel = 3;
-                else if (sz >= granThr[1]) tierLevel = 2;
-
+        if (m.levels && Array.isArray(m.levels)) {
+            m.levels.forEach(lvl => {
+                const px = lvl.p;
+                const side = px > curPrice ? 'short' : 'long';
+                const distPct = curPrice > 0 ? ((px - curPrice) / curPrice) * 100 : 0;
+                const levMap = { 0: 'high', 1: 'mid', 2: 'low' };
                 activeLevels.push({
-                    price: Math.round(px * 10) / 10,
-                    volume: Math.round(sz * 100) / 100,
+                    price: px,
                     side: side,
-                    leverage_tier: lev,
-                    tier_level: tierLevel,
-                    distance_pct: Math.round(dist * 100) / 100,
-                    strength: strength,
-                    weight: Math.round(weight * 10000) / 10000,
-                    is_active: true
+                    distance_pct: distPct,
+                    leverage_tier: levMap[lvl.l] || 'mid',
+                    tier_level: lvl.t !== undefined ? (lvl.t + 1) : 1,
+                    volume: lvl.v || null,
+                    strength: lvl.s || null
                 });
-            }
+            });
         }
 
-        // Key Liquidation Levels Table (Parsed directly from the table widget)
+        // 2. Key liquidation levels table
         const keyLevels = [];
-        const allDivs = Array.from(document.querySelectorAll('div'));
-        const keyDiv = allDivs.find(d => (d.innerText || '').startsWith('Key liquidation levels') && (d.innerText || '').includes('Within'));
-        if (keyDiv) {
-            const lines = keyDiv.innerText.split('\\n').map(l => l.trim()).filter(Boolean);
-            let currentSideRank = { short: 1, long: 1 };
-            for (let i = 0; i < lines.length; i++) {
-                const line = lines[i];
-                const parts = line.split('\\t').map(x => x.trim()).filter(Boolean);
-                if (parts.length >= 5 && (parts[0] === 'Short' || parts[0] === 'Long')) {
+        const table = document.querySelector('table');
+        if (table) {
+            const rows = table.querySelectorAll('tbody tr');
+            const currentSideRank = { 'short': 1, 'long': 1 };
+            for (const r of rows) {
+                const cells = r.querySelectorAll('td');
+                if (cells.length >= 5) {
+                    const parts = Array.from(cells).map(c => c.innerText.trim());
                     const s = parts[0].toLowerCase();
                     keyLevels.push({
                         side: s,
@@ -690,60 +705,10 @@ def extract_single_liquidation_state(page, symbol: str, mt5_symbol: str, tf_labe
         return { snapshot, levels: activeLevels, key_levels: keyLevels };
     }
     """
-    return page.evaluate(js_extractor, {"symbol": symbol, "mt5Symbol": mt5_symbol, "tfLabel": tf_label})
+    return await page.evaluate(js_extractor, {"symbol": symbol, "mt5Symbol": mt5_symbol, "tfLabel": tf_label})
 
 
-def switch_liquidation_pair(page, symbol: str, target_contract: str, target_exchange: str = "Binance") -> bool:
-    """Robust native pair selection via CoinGlass UI symbol switcher, with fallback to URL navigation."""
-    try:
-        btn = page.locator("button.ll-symBtn")
-        if btn.count() > 0:
-            cur_text = btn.inner_text().strip()
-            norm_target = target_contract.lower().replace("_", "").replace("-", "")
-            norm_cur = cur_text.lower().replace("_", "").replace("-", "")
-            norm_ex = target_exchange.lower()
-
-            # If already on the correct exchange and contract, no switch needed
-            if norm_target in norm_cur and (norm_ex in norm_cur or norm_ex == "binance"):
-                return True
-
-            btn.click()
-            time.sleep(0.8)
-
-            inp = page.locator("input[aria-label='Search trading pairs'], input[placeholder*='Search' i]").first
-            if inp.count() > 0 and inp.is_visible():
-                search_key = symbol.lower()
-                inp.fill(search_key)
-                time.sleep(1.2)
-
-                # Match target contract button
-                target_btn = page.locator("button").filter(has_text=target_contract)
-                if target_btn.count() == 0:
-                    target_btn = page.locator("button").filter(has_text=symbol)
-
-                if target_btn.count() > 0:
-                    target_btn.first.click()
-                    time.sleep(3.5)
-                    return True
-
-        # Fallback to direct navigation and localStorage
-        page.evaluate(f"""
-            () => {{
-                const current = JSON.parse(localStorage.getItem('liqLevelsPrefs') || '{{}}');
-                current.ex = '{target_exchange}';
-                current.sym = '{target_contract}';
-                localStorage.setItem('liqLevelsPrefs', JSON.stringify(current));
-            }}
-        """)
-        page.goto(f"https://www.coinglass.com/liquidation-levels?symbol={symbol}", timeout=15000)
-        time.sleep(3.0)
-        return True
-    except Exception as e:
-        logger.warning(f"[{symbol}] Error during pair switch to {target_exchange} ({target_contract}): {e}")
-        return False
-
-
-def harvest_asset_liquidations(page, symbol: str, mt5_symbol: str, target_exchanges: list = None, is_deep_level: bool = True, contracts_override: dict = None) -> tuple[list, list, list]:
+async def harvest_asset_liquidations(page, symbol: str, mt5_symbol: str, target_exchanges: list = None, is_deep_level: bool = True, contracts_override: dict = None) -> tuple[list, list, list]:
     """Harvest liquidation snapshots, multi-timeframe discrete levels, and key levels for an asset across exchanges."""
     snapshots = []
     levels = []
@@ -763,33 +728,33 @@ def harvest_asset_liquidations(page, symbol: str, mt5_symbol: str, target_exchan
     for ex in target_exchanges:
         contract_sym = c_map.get(ex, f"{symbol}USDT")
         logger.info(f"[{symbol}] Switching exchange to {ex} (contract: {contract_sym})...")
-        switch_liquidation_pair(page, symbol=symbol, target_contract=contract_sym, target_exchange=ex)
+        await switch_liquidation_pair(page, symbol=symbol, target_contract=contract_sym, target_exchange=ex)
 
         # Auto-healing: click Retry if present
         retry_btn = page.locator("button:has-text('Retry')")
-        if retry_btn.count() > 0:
+        if await retry_btn.count() > 0:
             logger.info(f"[{symbol} - {ex}] Retry button detected. Clicking to heal...")
             try:
-                retry_btn.click()
-                time.sleep(2)
+                await retry_btn.click()
+                await asyncio.sleep(2)
             except Exception:
                 pass
 
         for tf in timeframes:
             # Click timeframe tab
             try:
-                page.evaluate(f"""
+                await page.evaluate(f"""
                     () => {{
                         const allLi = Array.from(document.querySelectorAll('li'));
                         const el = allLi.find(x => (x.innerText || '').includes('{tf['kw']}'));
                         if (el) el.click();
                     }}
                 """)
-                time.sleep(1.2)
+                await asyncio.sleep(1.2)
             except Exception as e:
                 logger.warning(f"[{symbol} - {ex}] Failed to click TF tab {tf['kw']}: {e}")
 
-            extracted = extract_single_liquidation_state(page, symbol, mt5_symbol, tf["label"])
+            extracted = await extract_single_liquidation_state(page, symbol, mt5_symbol, tf["label"])
             if extracted and extracted.get("snapshot"):
                 snap = extracted["snapshot"]
                 snapshots.append(snap)
@@ -907,139 +872,208 @@ def upsert_asset_key_levels(symbol: str, key_levels: list):
     logger.info(f"[{symbol}] Saved {parquet_path.name}: {len(combined_df)} key strike barriers")
 
 
-def run_cycle(context, liquidations_only: bool = False) -> dict:
-    """Execute a single full collection cycle across footprint and liquidation streams."""
-    all_signals = []
-    total_signals = 0
+# ---------------------------------------------------------------------------
+# Parallel Pipes: Footprint Worker & Liquidation Worker
+# ---------------------------------------------------------------------------
+async def footprint_worker(context, warp_lock: asyncio.Lock):
+    """Continuous Pipe 1: Dumps 15m order-flow candles and footprint signals with WARP rotation."""
+    logger.info("[Pipe 1: Footprint] Starting continuous order-flow collector...")
+    fp_page = await get_coinglass_tab(context)
+    await ensure_terminal_ready(fp_page)
 
-    # -----------------------------------------------------------------------
-    # Step 1: Footprint Signals & 15m Candles across mutual assets
-    # -----------------------------------------------------------------------
-    if not liquidations_only:
-        fp_page = get_coinglass_tab(context)
-        ensure_terminal_ready(fp_page)
+    cycle_count = 1
+    total_chunks = (len(FP_TARGET_SYMBOLS) + CHUNK_SIZE - 1) // CHUNK_SIZE
 
-        total_chunks = (len(FP_TARGET_SYMBOLS) + CHUNK_SIZE - 1) // CHUNK_SIZE
-        for i in range(0, len(FP_TARGET_SYMBOLS), CHUNK_SIZE):
-            chunk = FP_TARGET_SYMBOLS[i:i + CHUNK_SIZE]
-            chunk_num = i // CHUNK_SIZE + 1
-            logger.info(f"[Footprint] Processing Chunk {chunk_num}/{total_chunks} ({chunk[0]}..{chunk[-1]})...")
+    while True:
+        logger.info(f"[Pipe 1: Footprint] ========== STARTING FOOTPRINT CYCLE #{cycle_count} ==========")
+        t0 = time.time()
+        all_signals = []
 
-            chunk_result = extract_footprint_chunk(fp_page, chunk)
-            signals = chunk_result.get("signals", [])
-            all_signals.extend(signals)
+        try:
+            for i in range(0, len(FP_TARGET_SYMBOLS), CHUNK_SIZE):
+                chunk = FP_TARGET_SYMBOLS[i:i + CHUNK_SIZE]
+                chunk_num = i // CHUNK_SIZE + 1
+                logger.info(f"[Pipe 1: Footprint] Processing Chunk {chunk_num}/{total_chunks} ({chunk[0]}..{chunk[-1]})...")
 
-            candles_dict = chunk_result.get("candles", {})
-            for sym, bar_list in candles_dict.items():
-                upsert_candle_parquet(sym, MT5_ASSET_MAP.get(sym, ""), bar_list)
+                chunk_result = await extract_footprint_chunk(fp_page, chunk)
+                signals = chunk_result.get("signals", [])
+                all_signals.extend(signals)
 
-        dump_signals_parquet(all_signals)
-        fp_page.evaluate("() => window.__cg_term.pickPair('BTC', 'agg-perp')")
-        total_signals = len(all_signals)
+                candles_dict = chunk_result.get("candles", {})
+                for sym, bar_list in candles_dict.items():
+                    upsert_candle_parquet(sym, MT5_ASSET_MAP.get(sym, ""), bar_list)
 
-    # -----------------------------------------------------------------------
-    # Step 2: Liquidation Intelligence (Snapshots, Discrete Levels, Key Levels)
-    # -----------------------------------------------------------------------
-    liq_page = get_liquidation_tab(context)
-    all_snapshots = []
-    total_levels_count = 0
-    total_key_levels_count = 0
+            dump_signals_parquet(all_signals)
+            await fp_page.evaluate("() => window.__cg_term.pickPair('BTC', 'agg-perp')")
+            elapsed = round(time.time() - t0, 1)
+            logger.info(f"[Pipe 1: Footprint] Cycle #{cycle_count} completed in {elapsed}s: {len(all_signals)} signals extracted.")
+        except Exception as e:
+            logger.error(f"[Pipe 1: Footprint] Error in cycle #{cycle_count}: {e}", exc_info=True)
 
-    logger.info(f"[Liquidations] Beginning full liquidation sweep across all {len(LIQ_LEVEL_SYMBOLS)} mutual assets...")
+        # Automated Cloudflare WARP IP Rotation (Mutex Protected)
+        if not warp_lock.locked():
+            logger.info("[Pipe 1: Footprint] Requesting Cloudflare WARP IP rotation...")
+            async with warp_lock:
+                await asyncio.to_thread(rotate_cloudflare_ip)
+        else:
+            logger.info("[Pipe 1: Footprint] Liquidation sweep in progress; deferring IP rotation to next cycle.")
 
-    for idx, sym in enumerate(LIQ_LEVEL_SYMBOLS, start=1):
-        exs = LIQ_EXCHANGES_MAP.get(sym, ["Binance"])
-        mt5_sym = MT5_ASSET_MAP.get(sym, "")
-        logger.info(f"[{idx}/{len(LIQ_LEVEL_SYMBOLS)}] Harvesting multi-TF liquidations for {sym} ({mt5_sym}) on {exs}...")
-
-        snaps, levels, key_lvls = harvest_asset_liquidations(
-            liq_page,
-            sym,
-            mt5_sym,
-            target_exchanges=exs,
-            is_deep_level=True
-        )
-
-        all_snapshots.extend(snaps)
-        if levels:
-            upsert_asset_levels(sym, levels)
-            total_levels_count += len(levels)
-        if key_lvls:
-            upsert_asset_key_levels(sym, key_lvls)
-            total_key_levels_count += len(key_lvls)
-
-    if all_snapshots:
-        upsert_liquidation_snapshots(all_snapshots)
-
-    return {
-        "signals_count": total_signals,
-        "candles_updated": len(FP_TARGET_SYMBOLS) if not liquidations_only else 0,
-        "liquidation_snapshots_count": len(all_snapshots),
-        "liquidation_levels_count": total_levels_count,
-        "key_levels_count": total_key_levels_count
-    }
+        logger.info(f"[Pipe 1: Footprint] Resting for {FOOTPRINT_REST_SECONDS}s before next cycle...")
+        await asyncio.sleep(FOOTPRINT_REST_SECONDS)
+        cycle_count += 1
 
 
-def run_continuous_collector():
-    """Main continuous loop: Multi-stream Dump -> Rotate Cloudflare IP -> 2 min rest -> Repeat."""
-    logger.info("Initializing CoinGlass Master Data Collector...")
+async def execute_liquidation_sweep(context, warp_lock: asyncio.Lock):
+    """Executes a full 44-asset liquidation dump, then immediately closes the tab."""
+    logger.info("[Pipe 2: Liquidation] Initiating scheduled liquidation sweep across all 44 assets...")
+    async with warp_lock:
+        liq_page = await context.new_page()
+        try:
+            await liq_page.goto("https://www.coinglass.com/liquidation-levels?symbol=BTC", timeout=20000)
+            await asyncio.sleep(3.0)
+
+            all_snapshots = []
+            total_levels_count = 0
+            total_key_levels_count = 0
+
+            for idx, sym in enumerate(LIQ_LEVEL_SYMBOLS, start=1):
+                exs = LIQ_EXCHANGES_MAP.get(sym, ["Binance"])
+                mt5_sym = MT5_ASSET_MAP.get(sym, "")
+                logger.info(f"[Pipe 2: Liquidation] [{idx}/{len(LIQ_LEVEL_SYMBOLS)}] Harvesting {sym} ({mt5_sym}) on {exs}...")
+
+                snaps, levels, key_lvls = await harvest_asset_liquidations(
+                    liq_page,
+                    sym,
+                    mt5_sym,
+                    target_exchanges=exs,
+                    is_deep_level=True
+                )
+
+                all_snapshots.extend(snaps)
+                if levels:
+                    upsert_asset_levels(sym, levels)
+                    total_levels_count += len(levels)
+                if key_lvls:
+                    upsert_asset_key_levels(sym, key_lvls)
+                    total_key_levels_count += len(key_lvls)
+
+            if all_snapshots:
+                upsert_liquidation_snapshots(all_snapshots)
+
+            logger.info(f"[Pipe 2: Liquidation] Sweep complete: {total_levels_count} discrete levels, {total_key_levels_count} barriers across {len(LIQ_LEVEL_SYMBOLS)} assets.")
+        except Exception as e:
+            logger.error(f"[Pipe 2: Liquidation] Error during sweep: {e}", exc_info=True)
+        finally:
+            logger.info("[Pipe 2: Liquidation] Sweep finished. Closing liquidation tab to keep browser lean...")
+            try:
+                await liq_page.close()
+            except Exception:
+                pass
+
+
+async def liquidation_worker(context, warp_lock: asyncio.Lock, run_initial: bool = False):
+    """Scheduled Pipe 2: Triggers full 44-asset liquidation sweep at :00:05 and :30:05 local wall-clock."""
+    logger.info("[Pipe 2: Liquidation] Scheduler initialized. Target cadence: :00:05 and :30:05 local time.")
+
+    if run_initial:
+        logger.info("[Pipe 2: Liquidation] Immediate initial sweep requested...")
+        await execute_liquidation_sweep(context, warp_lock)
+
+    while True:
+        wait_secs = get_seconds_until_next_sweep()
+        next_dt = datetime.now() + timedelta(seconds=wait_secs)
+        logger.info(f"[Pipe 2: Liquidation] Next sweep scheduled at {next_dt.strftime('%H:%M:%S')} (in {round(wait_secs / 60, 1)} mins). Sleeping...")
+        await asyncio.sleep(wait_secs)
+
+        # Trigger sweep at :00:05 or :30:05
+        await execute_liquidation_sweep(context, warp_lock)
+
+
+# ---------------------------------------------------------------------------
+# Main Entry Point
+# ---------------------------------------------------------------------------
+async def main_collector(args):
+    """Main orchestrator connecting to Edge CDP and launching parallel workers."""
     DB_DIR.mkdir(parents=True, exist_ok=True)
     CANDLE_DIR.mkdir(parents=True, exist_ok=True)
     LIQ_DIR.mkdir(parents=True, exist_ok=True)
     LEVELS_DIR.mkdir(parents=True, exist_ok=True)
     KEY_LEVELS_DIR.mkdir(parents=True, exist_ok=True)
 
-    with sync_playwright() as p:
+    warp_lock = asyncio.Lock()
+
+    async with async_playwright() as p:
         try:
-            browser = p.chromium.connect_over_cdp(CDP_URL)
+            browser = await p.chromium.connect_over_cdp(CDP_URL)
         except Exception as e:
             logger.error(f"Cannot connect to CDP at {CDP_URL}: {e}")
             logger.error("Please ensure Edge/Chrome is running with: --remote-debugging-port=9222")
             sys.exit(1)
 
-        context = browser.contexts[0] if browser.contexts else browser.new_context()
+        ctx = browser.contexts[0] if browser.contexts else await browser.new_context()
 
-        cycle_count = 1
-        while True:
-            logger.info(f"========== STARTING MASTER DATA DUMP CYCLE #{cycle_count} ==========")
-            start_time = time.time()
+        # Mode A: Liquidation-only single sweep
+        if args.liquidations_only:
+            logger.info("Executing liquidation-only one-shot dump across all 44 assets...")
+            await execute_liquidation_sweep(ctx, warp_lock)
+            logger.info("Liquidation one-shot dump complete. Exiting.")
+            return
 
-            try:
-                stats = run_cycle(context)
-                elapsed = round(time.time() - start_time, 1)
-                logger.info(f"Cycle #{cycle_count} completed in {elapsed}s: {stats['signals_count']} signals, {stats['candles_updated']} candle files, {stats['liquidation_snapshots_count']} snapshots, {stats['liquidation_levels_count']} liquidation levels.")
-            except Exception as e:
-                logger.error(f"Error during cycle #{cycle_count}: {e}", exc_info=True)
+        # Mode B: Footprint-only single cycle
+        if args.footprint_only:
+            logger.info("Executing footprint-only single cycle...")
+            fp_page = await get_coinglass_tab(ctx)
+            await ensure_terminal_ready(fp_page)
+            all_signals = []
+            total_chunks = (len(FP_TARGET_SYMBOLS) + CHUNK_SIZE - 1) // CHUNK_SIZE
+            for i in range(0, len(FP_TARGET_SYMBOLS), CHUNK_SIZE):
+                chunk = FP_TARGET_SYMBOLS[i:i + CHUNK_SIZE]
+                chunk_result = await extract_footprint_chunk(fp_page, chunk)
+                all_signals.extend(chunk_result.get("signals", []))
+                for sym, bar_list in chunk_result.get("candles", {}).items():
+                    upsert_candle_parquet(sym, MT5_ASSET_MAP.get(sym, ""), bar_list)
+            dump_signals_parquet(all_signals)
+            logger.info(f"Footprint single cycle complete: {len(all_signals)} signals extracted.")
+            return
 
-            # Rotate Cloudflare IP after every cycle
-            rotate_cloudflare_ip()
+        # Mode C: One-shot full pass (both footprint and liquidation)
+        if args.once:
+            logger.info("Executing one-shot full dump across both footprint and liquidation streams...")
+            # Run footprint single pass
+            fp_page = await get_coinglass_tab(ctx)
+            await ensure_terminal_ready(fp_page)
+            all_signals = []
+            for i in range(0, len(FP_TARGET_SYMBOLS), CHUNK_SIZE):
+                chunk = FP_TARGET_SYMBOLS[i:i + CHUNK_SIZE]
+                chunk_result = await extract_footprint_chunk(fp_page, chunk)
+                all_signals.extend(chunk_result.get("signals", []))
+                for sym, bar_list in chunk_result.get("candles", {}).items():
+                    upsert_candle_parquet(sym, MT5_ASSET_MAP.get(sym, ""), bar_list)
+            dump_signals_parquet(all_signals)
 
-            # 2 minutes rest before next cycle
-            logger.info(f"Resting for {CYCLE_REST_SECONDS} seconds (2 minutes) before starting cycle #{cycle_count + 1}...")
-            time.sleep(CYCLE_REST_SECONDS)
-            cycle_count += 1
+            # Run liquidation sweep
+            await execute_liquidation_sweep(ctx, warp_lock)
+            logger.info("One-shot full cycle complete. Exiting.")
+            return
+
+        # Mode D: Parallel continuous production engine
+        logger.info("Launching parallel continuous production pipes:")
+        logger.info(" - Pipe 1: Continuous Footprint stream with Cloudflare WARP IP rotation.")
+        logger.info(" - Pipe 2: Scheduled 44-asset Liquidation sweep at :00:05 and :30:05 local time.")
+        logger.info(" - Automatic tab lifecycle: Liquidation tab will open on schedule and close when done.")
+
+        await asyncio.gather(
+            footprint_worker(ctx, warp_lock),
+            liquidation_worker(ctx, warp_lock, run_initial=args.initial_liquidation)
+        )
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="CoinGlass Master Data Collector")
+    parser = argparse.ArgumentParser(description="CoinGlass Master Parallel Data Collector")
     parser.add_argument("--once", action="store_true", help="Run a single full collection cycle and exit")
-    parser.add_argument("--liquidations-only", action="store_true", help="Harvest only liquidation data across all mutual assets")
-    args = parser.parse_args()
+    parser.add_argument("--liquidations-only", action="store_true", help="Harvest only liquidation data across all 44 assets, close tab, and exit")
+    parser.add_argument("--footprint-only", action="store_true", help="Harvest only footprint candles and signals for one cycle and exit")
+    parser.add_argument("--initial-liquidation", action="store_true", help="Run an immediate liquidation sweep upon starting before settling into the :00/:30 cadence")
+    cli_args = parser.parse_args()
 
-    if args.once or args.liquidations_only:
-        logger.info(f"Executing single cycle (liquidations_only={args.liquidations_only})...")
-        DB_DIR.mkdir(parents=True, exist_ok=True)
-        CANDLE_DIR.mkdir(parents=True, exist_ok=True)
-        LIQ_DIR.mkdir(parents=True, exist_ok=True)
-        LEVELS_DIR.mkdir(parents=True, exist_ok=True)
-        KEY_LEVELS_DIR.mkdir(parents=True, exist_ok=True)
-
-        with sync_playwright() as p:
-            browser = p.chromium.connect_over_cdp(CDP_URL)
-            ctx = browser.contexts[0] if browser.contexts else browser.new_context()
-            stats = run_cycle(ctx, liquidations_only=args.liquidations_only)
-            logger.info(f"Single cycle completed successfully: {stats}")
-    else:
-        run_continuous_collector()
+    asyncio.run(main_collector(cli_args))
