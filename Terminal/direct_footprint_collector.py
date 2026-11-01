@@ -191,7 +191,9 @@ def dump_signals_parquet(new_signals: List[dict]):
     else:
         combined = new_df
     combined = combined.sort_values(by="time_ms", ascending=False).reset_index(drop=True)
-    combined.to_parquet(SIGNALS_PARQUET, index=False, engine="pyarrow")
+    tmp_file = SIGNALS_PARQUET.with_suffix(".tmp")
+    combined.to_parquet(tmp_file, index=False, engine="pyarrow")
+    tmp_file.replace(SIGNALS_PARQUET)
     logger.info(f"Aggregated Signals saved: {SIGNALS_PARQUET.name} ({len(combined)} rows)")
 
 
@@ -213,7 +215,9 @@ def upsert_candle_parquet(symbol: str, mt5_sym: str, candles: List[dict]):
     else:
         combined = new_df
     combined = combined.sort_values(by="open_time_ms", ascending=True).reset_index(drop=True)
-    combined.to_parquet(out_file, index=False, engine="pyarrow")
+    tmp_out = out_file.with_suffix(".tmp")
+    combined.to_parquet(tmp_out, index=False, engine="pyarrow")
+    tmp_out.replace(out_file)
 
 
 async def extract_symbol_footprint(ws, sym: str, mt5_sym: str) -> dict:

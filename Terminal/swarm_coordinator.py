@@ -24,6 +24,7 @@ if str(ROOT_DIR) not in sys.path:
 from Terminal.olap_engine import OlapEngine
 from Terminal.regime_detector import RegimeDetector
 from Terminal.vector_memory import VectorMemory
+from Terminal.deepmind_timesfm_forecaster import DeepMindTimesFMForecaster
 from Terminal.persistent_memory import get_rules, get_strategy_weight, get_lessons
 
 DB_DIR = ROOT_DIR / "Database"
@@ -43,6 +44,7 @@ class SwarmCoordinator:
         self.olap = OlapEngine()
         self.regime_det = RegimeDetector()
         self.vector_mem = VectorMemory()
+        self.timesfm = DeepMindTimesFMForecaster()
         self.symbols = ["BTC", "ETH", "SOL", "XRP", "AVAX", "DOGE", "LINK", "NEAR"]
 
     # -------------------------------------------------------------------------
@@ -116,6 +118,23 @@ class SwarmCoordinator:
             setup_desc = f"{sym} {r['bias']} with whale imbalance {r['whale_imbalance']*100:.1f}%, CVD {r['cvd_slope']}, regime {reg.get('regime')}"
             analogs = self.vector_mem.query_similar_setups(setup_desc, top_k=3)
             
+            # DeepMind TimesFM Probabilistic Forecaster
+            tfm_info = {"available": False, "direction": "NEUTRAL", "confidence": 0.0}
+            cvd_series = self.olap.get_series(sym, "cumulative_delta", limit=64)
+            if len(cvd_series) >= 16 and self.timesfm.is_available:
+                tfm_res = self.timesfm.forecast_trajectory(cvd_series, horizon=8)
+                if tfm_res.get("available"):
+                    tfm_info = {
+                        "available": True,
+                        "direction": tfm_res.get("direction"),
+                        "confidence": tfm_res.get("confidence"),
+                        "predicted_drift": round(tfm_res.get("predicted_drift", 0.0), 2)
+                    }
+                    if (r["bias"] == "LONG" and "BULLISH" in tfm_res.get("direction", "")) or \
+                       (r["bias"] == "SHORT" and "BEARISH" in tfm_res.get("direction", "")):
+                        r["confluence_score"] += 15
+                        r["reasons"].append(f"DeepMind TimesFM {tfm_res.get('direction')} ({tfm_res.get('confidence'):.0%})")
+            
             setups.append({
                 "symbol": sym,
                 "confluence_score": r["confluence_score"],
@@ -127,6 +146,7 @@ class SwarmCoordinator:
                 "volatility": reg.get("volatility_regime"),
                 "vector_memory_verdict": analogs.get("verdict"),
                 "vector_memory_win_rate": analogs.get("win_rate"),
+                "timesfm_forecast": tfm_info,
                 "reasons": r["reasons"]
             })
 

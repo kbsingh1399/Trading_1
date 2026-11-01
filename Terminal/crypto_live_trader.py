@@ -41,6 +41,7 @@ from Terminal.persistent_memory import (
 from Terminal.olap_engine import OlapEngine
 from Terminal.vector_memory import VectorMemory
 from Terminal.regime_detector import RegimeDetector
+from Terminal.deepmind_timesfm_forecaster import DeepMindTimesFMForecaster
 
 # Reconfigure stdout for UTF-8 and non-buffered logging
 sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
@@ -143,6 +144,7 @@ class CryptoLiveTrader:
         self.olap = OlapEngine()
         self.vector_mem = VectorMemory()
         self.regime_det = RegimeDetector()
+        self.timesfm = DeepMindTimesFMForecaster()
         self.known_open_tickets = set()
 
     def connect_mt5(self) -> bool:
@@ -437,6 +439,28 @@ class CryptoLiveTrader:
         elif past_analogs.get("verdict") == "FAVORABLE":
             confluence_score += 10
             reasons.append(f"Vector Memory Historical Win Rate {past_analogs.get('win_rate')*100:.0f}%")
+
+        # 5. Google DeepMind TimesFM 2.5 Zero-Shot CVD Forecaster
+        cvd_series = self.olap.get_series(symbol, "cumulative_delta", limit=64)
+        if len(cvd_series) >= 16 and self.timesfm.is_available:
+            tfm_res = self.timesfm.forecast_trajectory(cvd_series, horizon=8)
+            if tfm_res.get("available"):
+                tfm_dir = tfm_res.get("direction", "NEUTRAL")
+                tfm_conf = tfm_res.get("confidence", 0.0)
+                if direction == "BUY":
+                    if "BULLISH" in tfm_dir:
+                        confluence_score += 15
+                        reasons.append(f"DeepMind TimesFM {tfm_dir} (conf {tfm_conf:.0%})")
+                    elif "STRONG_BEARISH" in tfm_dir and tfm_conf > 0.6:
+                        logger.warning(f"[{symbol}] Vetoed by DeepMind TimesFM: Forecast predicts strong adverse bearish CVD drift!")
+                        return None
+                elif direction == "SELL":
+                    if "BEARISH" in tfm_dir:
+                        confluence_score += 15
+                        reasons.append(f"DeepMind TimesFM {tfm_dir} (conf {tfm_conf:.0%})")
+                    elif "STRONG_BULLISH" in tfm_dir and tfm_conf > 0.6:
+                        logger.warning(f"[{symbol}] Vetoed by DeepMind TimesFM: Forecast predicts strong adverse bullish CVD drift!")
+                        return None
 
         # Check Risk to Reward Ratio
         risk_dist = abs(entry_price - sl_price)

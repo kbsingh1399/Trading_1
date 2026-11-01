@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 
 import duckdb
 import pandas as pd
+import numpy as np
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DB_DIR = ROOT_DIR / "Database"
@@ -44,9 +45,15 @@ class OlapEngine:
     def _init_views(self):
         """Register parquet files as virtual DuckDB tables."""
         if SIGNALS_PARQUET.exists():
-            self.con.execute(f"CREATE OR REPLACE VIEW footprint_signals AS SELECT * FROM read_parquet('{SIGNALS_PARQUET.as_posix()}')")
+            try:
+                self.con.execute(f"CREATE OR REPLACE VIEW footprint_signals AS SELECT * FROM read_parquet('{SIGNALS_PARQUET.as_posix()}')")
+            except Exception as e:
+                logger.warning(f"Could not initialize footprint_signals view: {e}")
         if WHALE_SNAPSHOTS.exists():
-            self.con.execute(f"CREATE OR REPLACE VIEW whale_snapshots AS SELECT * FROM read_parquet('{WHALE_SNAPSHOTS.as_posix()}')")
+            try:
+                self.con.execute(f"CREATE OR REPLACE VIEW whale_snapshots AS SELECT * FROM read_parquet('{WHALE_SNAPSHOTS.as_posix()}')")
+            except Exception as e:
+                logger.warning(f"Could not initialize whale_snapshots view: {e}")
 
     def query_whale_walls(self, symbol: str) -> Dict[str, Any]:
         """Calculates total bid vs ask whale wall pressure within +-3% and +-10% of current price."""
@@ -158,6 +165,27 @@ class OlapEngine:
             }
         except Exception as e:
             return {"error": str(e), "cvd_slope": "NEUTRAL"}
+
+    def get_series(self, symbol: str, metric: str = "cumulative_delta", limit: int = 64) -> np.ndarray:
+        """Returns chronological 1D array of metric (e.g. cumulative_delta or close) for DeepMind TimesFM."""
+        candle_file = CANDLE_DIR / f"{symbol}.parquet"
+        if not candle_file.exists():
+            return np.array([], dtype=np.float32)
+        query = f"""
+        SELECT {metric}
+        FROM read_parquet('{candle_file.as_posix()}')
+        WHERE {metric} IS NOT NULL
+        ORDER BY open_time_ms DESC
+        LIMIT {limit}
+        """
+        try:
+            df = self.con.execute(query).df()
+            if df.empty:
+                return np.array([], dtype=np.float32)
+            # Reverse to chronological order (oldest to newest)
+            return df[metric].values[::-1].astype(np.float32)
+        except Exception:
+            return np.array([], dtype=np.float32)
 
     def scan_all_confluences(self, symbols: List[str]) -> List[Dict[str, Any]]:
         """Instant multi-stream scoring across all mutual symbols."""

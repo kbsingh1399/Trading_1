@@ -17,3 +17,8 @@ env/
 venv/
 .vscode/
 .idea/
+
+# Large Model Checkpoints
+models/
+*.safetensors
+*.bin
