@@ -5,7 +5,7 @@ Institutional Risk Envelope & Admissible Volume Solver (Single Source of Truth)
 Canonical risk governance and mathematical volume solver.
 Every execution and signal evaluation module imports from here.
 
-Governed by Arena Quant Audit (Round 2 Mathematical Corrections):
+Governed by Arena Quant Audit (Round 2 & Sonnet 5.5 Institutional Verification):
 1. Survival Constraint: max_risk = free_buffer / (SURVIVAL_LOSSES * MAX_OPEN_POSITIONS)
    Guarantees a 10-consecutive loss streak does NOT breach the $4,775 hard floor.
 2. Prospective Halt: Halts trading BEFORE entering if free_buffer <= HALT_CUSHION_USD.
@@ -27,6 +27,7 @@ logger = logging.getLogger("RiskEnvelope")
 # ---------------------------------------------------------------------------
 HARD_FLOOR_USD = 4775.00       # Contractual floor ($4,700) + Self-imposed safety buffer ($75) = $4,775
 HALT_CUSHION_USD = 20.00       # Prospective halt cushion >= worst-case single-trade execution reserve
+OPERATING_BUFFER_MIN = 20.00   # Canonical alias for HALT_CUSHION_USD
 MAX_RISK_USD = 25.00           # Strict nominal ceiling per trade ($25.00)
 MIN_RISK_USD = 5.00            # Minimum risk threshold to prevent micro-lot commission drag
 MAX_OPEN_POSITIONS = 2         # Hard mandate: strictly 2 concurrent positions max
@@ -81,59 +82,72 @@ def budget_per_trade(
     return budget, True, f"OK (Free Buffer: ${free:.2f}, Budget: ${budget:.2f})"
 
 
+def compute_dynamic_capital_budget(
+    current_equity: float,
+    balance: Optional[float] = None,
+    committed_stress_usd: float = 0.0
+) -> Tuple[float, bool, str]:
+    """
+    Backward-compatible wrapper mapping to the canonical survival-constrained budget_per_trade.
+    """
+    bal = balance if balance is not None else current_equity
+    return budget_per_trade(equity=current_equity, balance=bal, committed_stress_usd=committed_stress_usd)
+
+
 def admissible_volume(
-    loss_per_lot_step: float,
-    volume_step: float,
-    min_lot: float,
-    max_lot: float,
+    loss_per_lot_step: Optional[float] = None,
+    volume_step: Optional[float] = None,
+    min_lot: float = 0.01,
+    max_lot: float = 100.0,
     floor_usd: float = MIN_RISK_USD,
-    cap_usd: float = MAX_RISK_USD
+    cap_usd: float = MAX_RISK_USD,
+    # Compatibility arguments for callers passing per-lot loss and step
+    loss_per_lot: Optional[float] = None,
+    step: Optional[float] = None
 ) -> Tuple[Optional[float], str, float]:
     """
     Exact discrete integer-step grid solver.
-    
-    Args:
-        loss_per_lot_step: Dollar loss per 1 volume_step (loss_per_lot * volume_step).
-        volume_step: Broker volume step (e.g. 0.01).
-        min_lot: Broker min volume (e.g. 0.01).
-        max_lot: Broker max volume (e.g. 100.0).
-        floor_usd: Minimum risk floor (default $5.00).
-        cap_usd: Maximum risk ceiling (budgeted amount <= $25.00).
-
-    Returns:
-        (volume, reason_code, realized_risk_usd)
-        Chooses k_min (smallest legal size that satisfies the floor constraint)
-        to strictly preserve account survival under the 10-loss streak mandate.
+    Supports both loss_per_lot_step (Arena spec) and (loss_per_lot, step) signatures.
+    Always returns k_min (smallest legal size >= floor), preserving account survival.
     """
-    if loss_per_lot_step <= 0.0 or volume_step <= 0.0:
+    actual_step = volume_step if volume_step is not None else (step if step is not None else 0.01)
+
+    if loss_per_lot_step is not None:
+        actual_loss_step = loss_per_lot_step
+    elif loss_per_lot is not None:
+        actual_loss_step = loss_per_lot * actual_step
+    else:
+        return None, "NO_BROKER_VALUATION", 0.0
+
+    if actual_loss_step <= 0.0 or actual_step <= 0.0:
         return None, "NO_BROKER_VALUATION", 0.0
 
     if cap_usd < floor_usd:
         return None, f"EMPTY_CAP_WINDOW: cap (${cap_usd:.2f}) < floor (${floor_usd:.2f})", 0.0
 
     # Discrete step boundaries with 1e-12 floating-point margin
-    k_min = math.ceil((floor_usd / loss_per_lot_step) - 1e-12)
-    max_step_bound = min(cap_usd, max_lot * (loss_per_lot_step / volume_step) * volume_step)
-    k_max = math.floor((max_step_bound / loss_per_lot_step) + 1e-12)
+    k_min = math.ceil((floor_usd / actual_loss_step) - 1e-12)
+    max_step_bound = min(cap_usd, max_lot * actual_loss_step)
+    k_max = math.floor((max_step_bound / actual_loss_step) + 1e-12)
 
     # Broker min/max constraints in step index space
-    k_broker_min = math.ceil((min_lot / volume_step) - 1e-12)
-    k_broker_max = math.floor((max_lot / volume_step) + 1e-12)
+    k_broker_min = math.ceil((min_lot / actual_step) - 1e-12)
+    k_broker_max = math.floor((max_lot / actual_step) + 1e-12)
 
     effective_k_min = max(k_min, k_broker_min)
     effective_k_max = min(k_max, k_broker_max)
 
     if effective_k_max < effective_k_min or effective_k_min <= 0:
-        actual_min_risk = (effective_k_min * loss_per_lot_step)
-        actual_max_risk = (effective_k_max * loss_per_lot_step)
+        actual_min_risk = (effective_k_min * actual_loss_step)
+        actual_max_risk = (effective_k_max * actual_loss_step)
         return None, (
             f"NO_REPRESENTABLE_VOLUME: grid=[{actual_min_risk:.2f},{actual_max_risk:.2f}] "
             f"window=[{floor_usd:.2f},{cap_usd:.2f}]"
         ), 0.0
 
     # Pick k_min: smallest legal size >= floor, preserving capital survival
-    final_lots = round(effective_k_min * volume_step, 6)
-    actual_risk_usd = round(effective_k_min * loss_per_lot_step, 2)
+    final_lots = round(effective_k_min * actual_step, 6)
+    actual_risk_usd = round(effective_k_min * actual_loss_step, 2)
 
     if actual_risk_usd > cap_usd + 0.01:
         return None, f"NUMERICAL_OVERFLOW: realized risk ${actual_risk_usd:.2f} > cap ${cap_usd:.2f}", 0.0
@@ -150,10 +164,14 @@ def solve_volume_from_loss_per_lot(
     cap_usd: float = MAX_RISK_USD
 ) -> Tuple[Optional[float], str, float]:
     """Helper wrapper taking per-lot loss and explicitly converting to per-step loss."""
-    if loss_per_lot <= 0.0 or volume_step <= 0.0:
-        return None, "NO_BROKER_VALUATION", 0.0
-    loss_per_lot_step = loss_per_lot * volume_step
-    return admissible_volume(loss_per_lot_step, volume_step, min_lot, max_lot, floor_usd, cap_usd)
+    return admissible_volume(
+        loss_per_lot=loss_per_lot,
+        step=volume_step,
+        min_lot=min_lot,
+        max_lot=max_lot,
+        floor_usd=floor_usd,
+        cap_usd=cap_usd
+    )
 
 
 def validate_trade_geometry(
