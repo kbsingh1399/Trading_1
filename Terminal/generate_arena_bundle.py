@@ -13,6 +13,7 @@ FILES_TO_BUNDLE = [
     "Terminal/realtime_signal_evaluator.py",
     "Terminal/deepmind_timesfm_forecaster.py",
     "Terminal/vector_memory.py",
+    "Terminal/collector_lock.py",
     "Terminal/crypto_live_trader.py"
 ]
 

@@ -38,6 +38,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from Terminal.realtime_signal_evaluator import RealtimeSignalEvaluator
+from Terminal.collector_lock import rotate_warp_ip, BrowserLock, is_scheduled_for_other_collector
 DB_DIR = ROOT_DIR / "Database"
 CANDLE_DIR = DB_DIR / "Candle_Data"
 SIGNALS_PARQUET = DB_DIR / "coinglass_aggregated_futures_signals.parquet"
@@ -442,23 +443,35 @@ async def run_collector_daemon(cycle_seconds: int = 120):
     load_known_signals()
     logger.info(f"=== Footprint & Signals Daemon Active (Cadence: Every 2 Minutes / {cycle_seconds}s) ===")
     while True:
-        cycle_start = time.time()
-        tab_id, ws_url = open_coinglass_footprint_tab()
-        if tab_id and ws_url:
-            try:
-                # Allow page DOM to settle
-                await asyncio.sleep(4.0)
-                async with websockets.connect(ws_url, max_size=50_000_000) as ws:
-                    await footprint_sweep_cycle(ws)
-            except Exception as e:
-                logger.error(f"Error during footprint sweep: {e}")
-            finally:
-                # Closes tab once done with dumping
-                close_tab(tab_id)
+        # Check if current minute is exclusively reserved for Whales or Liquidation dump
+        cur_min = datetime.now().minute
+        if is_scheduled_for_other_collector(cur_min, "footprint"):
+            logger.info(f"[FOOTPRINT] Current minute (:{cur_min:02d}) is reserved for Whale/Liquidation sweep. Yielding 45s...")
+            await asyncio.sleep(45.0)
+            continue
 
-        # Embedded Cloudflare WARP IP Rotation
-        logger.info("Executing embedded Cloudflare WARP IP rotation between sweeps...")
-        await asyncio.to_thread(rotate_cloudflare_ip)
+        cycle_start = time.time()
+        with BrowserLock("Footprint"):
+            # 1. Cloudflare WARP IP Rotation BEFORE sweep
+            logger.info("Rotating Cloudflare WARP IP BEFORE Footprint dump cycle...")
+            await asyncio.to_thread(rotate_warp_ip, "Footprint-Pre")
+
+            tab_id, ws_url = open_coinglass_footprint_tab()
+            if tab_id and ws_url:
+                try:
+                    # Allow page DOM to settle
+                    await asyncio.sleep(3.5)
+                    async with websockets.connect(ws_url, max_size=50_000_000) as ws:
+                        await footprint_sweep_cycle(ws)
+                except Exception as e:
+                    logger.error(f"Error during footprint sweep: {e}")
+                finally:
+                    # Closes tab once done with dumping
+                    close_tab(tab_id)
+
+            # 2. Cloudflare WARP IP Rotation AFTER sweep
+            logger.info("Rotating Cloudflare WARP IP AFTER Footprint dump cycle...")
+            await asyncio.to_thread(rotate_warp_ip, "Footprint-Post")
 
         # Sleep for remainder of 2 minutes
         elapsed = time.time() - cycle_start

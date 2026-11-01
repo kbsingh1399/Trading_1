@@ -39,6 +39,10 @@ import pandas as pd
 import websockets
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from Terminal.collector_lock import rotate_warp_ip, BrowserLock, LIQUIDATION_MINUTES
 DB_DIR = ROOT_DIR / "Database"
 LIQ_DIR = DB_DIR / "Liquidation_Data"
 SNAPSHOTS_PARQUET = LIQ_DIR / "liquidation_snapshots.parquet"
@@ -76,15 +80,15 @@ MT5_MAP = load_mt5_map()
 
 
 def get_seconds_until_next_sweep() -> float:
-    """Calculate exact seconds until next :00:05 or :30:05 local wall-clock time."""
+    """Calculate exact seconds until next :10:05, :25:05, or :55:05 local wall-clock time."""
     now = datetime.now()
-    if now.minute < 30 or (now.minute == 30 and now.second < 5):
-        target = now.replace(minute=30, second=5, microsecond=0)
-    else:
-        next_hour = now + timedelta(hours=1)
-        target = next_hour.replace(minute=0, second=5, microsecond=0)
-    diff = (target - now).total_seconds()
-    return max(1.0, diff)
+    for m in sorted(LIQUIDATION_MINUTES):
+        candidate = now.replace(minute=m, second=5, microsecond=0)
+        if candidate > now:
+            return (candidate - now).total_seconds()
+    next_hour = now + timedelta(hours=1)
+    target = next_hour.replace(minute=sorted(LIQUIDATION_MINUTES)[0], second=5, microsecond=0)
+    return max(1.0, (target - now).total_seconds())
 
 
 def cleanup_coinglass_tabs(keep_tab_id: Optional[str] = None):
@@ -431,7 +435,7 @@ async def execute_liquidation_sweep():
 
         for i, sym in enumerate(CRYPTO_SYMBOLS, 1):
             try:
-                if ws is None or ws.closed:
+                if ws is None or ws.state.name != "OPEN":
                     ws = await get_active_ws()
                     if not ws:
                         logger.error(f"Failed to reconnect CDP WebSocket for {sym}")
@@ -441,13 +445,13 @@ async def execute_liquidation_sweep():
             except Exception as e:
                 logger.warning(f"[{sym}] Error during liquidation harvest: {e}")
                 try:
-                    if ws and not ws.closed:
+                    if ws and ws.state.name == "OPEN":
                         await ws.close()
                 except Exception:
                     pass
                 ws = await get_active_ws()
     finally:
-        if ws and not ws.closed:
+        if ws and ws.state.name == "OPEN":
             try:
                 await ws.close()
             except Exception:
@@ -457,13 +461,10 @@ async def execute_liquidation_sweep():
 
 
 async def run_collector_daemon():
-    """Scheduled daemon triggering at :00:05 and :30:05 local wall-clock."""
+    """Scheduled daemon triggering at :10:05, :25:05, and :55:05 local wall-clock."""
     acquire_pid_lock("liquidation_map_collector")
     cleanup_coinglass_tabs()
-    logger.info("=== Liquidation Map Daemon Active (Cadence: 0th & 30th minute of every hour) ===")
-    
-    # Run initial sweep immediately on startup
-    await execute_liquidation_sweep()
+    logger.info("=== Liquidation Map Daemon Active (Cadence: 10th, 25th, 55th minute of every hour) ===")
 
     while True:
         wait_secs = get_seconds_until_next_sweep()
@@ -471,8 +472,17 @@ async def run_collector_daemon():
         logger.info(f"Next liquidation sweep scheduled at {next_dt.strftime('%H:%M:%S')} (in {round(wait_secs / 60, 1)} mins). Sleeping...")
         await asyncio.sleep(wait_secs)
 
-        # Trigger sweep at :00:05 or :30:05
-        await execute_liquidation_sweep()
+        with BrowserLock("LiquidationMap"):
+            # 1. Cloudflare WARP IP Rotation BEFORE dump cycle
+            logger.info("Rotating Cloudflare WARP IP BEFORE Liquidation dump cycle...")
+            await asyncio.to_thread(rotate_warp_ip, "Liquidation-Pre")
+
+            # 2. Execute Liquidation collection sweep
+            await execute_liquidation_sweep()
+
+            # 3. Cloudflare WARP IP Rotation AFTER dump cycle
+            logger.info("Rotating Cloudflare WARP IP AFTER Liquidation dump cycle...")
+            await asyncio.to_thread(rotate_warp_ip, "Liquidation-Post")
 
 
 if __name__ == "__main__":

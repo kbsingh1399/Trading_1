@@ -37,6 +37,8 @@ sys.path.insert(0, str(ROOT_DIR))
 DB_DIR = ROOT_DIR / "Database"
 WHALE_DIR = DB_DIR / "Whale_Orders"
 OPEN_DIR = WHALE_DIR / "Open_Orders"
+from Terminal.collector_lock import rotate_warp_ip, BrowserLock, WHALE_MINUTES
+
 HIST_DIR = WHALE_DIR / "History_Orders"
 SNAPSHOT_PATH = WHALE_DIR / "whale_market_snapshots.parquet"
 
@@ -47,22 +49,16 @@ logger.setLevel(logging.INFO)
 logger.handlers = [handler]
 
 
-def get_seconds_until_next_quarter_hour() -> float:
-    """Calculate exact seconds until next :00:30, :15:05, :30:30, or :45:05 (offset from liquidation)."""
+def get_seconds_until_next_whale_sweep() -> float:
+    """Calculate exact seconds until next :00:05, :15:05, :35:05, or :50:05."""
     now = datetime.now()
-    minute = now.minute
-    second = now.second
-    if minute < 15 or (minute == 15 and second < 5):
-        target = now.replace(minute=15, second=5, microsecond=0)
-    elif minute < 30 or (minute == 30 and second < 30):
-        target = now.replace(minute=30, second=30, microsecond=0)
-    elif minute < 45 or (minute == 45 and second < 5):
-        target = now.replace(minute=45, second=5, microsecond=0)
-    else:
-        next_hour = now + timedelta(hours=1)
-        target = next_hour.replace(minute=0, second=30, microsecond=0)
-    diff = (target - now).total_seconds()
-    return max(1.0, diff)
+    for m in sorted(WHALE_MINUTES):
+        candidate = now.replace(minute=m, second=5, microsecond=0)
+        if candidate > now:
+            return (candidate - now).total_seconds()
+    next_hour = now + timedelta(hours=1)
+    target = next_hour.replace(minute=sorted(WHALE_MINUTES)[0], second=5, microsecond=0)
+    return max(1.0, (target - now).total_seconds())
 
 
 def cleanup_coinglass_tabs(keep_tab_id: Optional[str] = None):
@@ -482,7 +478,7 @@ async def sweep_all_cryptos(symbols: list = None) -> dict:
 
         for sym in target_symbols:
             try:
-                if ws is None or ws.closed:
+                if ws is None or ws.state.name != "OPEN":
                     ws = await get_active_ws()
                     if not ws:
                         logger.error(f"Failed to reconnect CDP WebSocket for {sym}")
@@ -494,13 +490,13 @@ async def sweep_all_cryptos(symbols: list = None) -> dict:
                 logger.error(f"[{sym}] Error: {e}")
                 summary[sym] = {"error": str(e)}
                 try:
-                    if ws and not ws.closed:
+                    if ws and ws.state.name == "OPEN":
                         await ws.close()
                 except Exception:
                     pass
                 ws = await get_active_ws()
     finally:
-        if ws and not ws.closed:
+        if ws and ws.state.name == "OPEN":
             try:
                 await ws.close()
             except Exception:
@@ -513,19 +509,25 @@ async def sweep_all_cryptos(symbols: list = None) -> dict:
 async def daemon_loop():
     acquire_pid_lock("whale_orders_collector")
     cleanup_coinglass_tabs()
-    logger.info("=== Whale Orders Collector Daemon Active (Cadence: :00, :15, :30, :45 of every hour) ===")
+    logger.info("=== Whale Orders Collector Daemon Active (Cadence: :00, :15, :35, :50 of every hour) ===")
     
-    # Run initial sweep immediately on startup
-    await sweep_all_cryptos()
-
     while True:
-        wait_secs = get_seconds_until_next_quarter_hour()
+        wait_secs = get_seconds_until_next_whale_sweep()
         next_dt = datetime.now() + timedelta(seconds=wait_secs)
         logger.info(f"Next whale orders sweep scheduled at {next_dt.strftime('%H:%M:%S')} (in {round(wait_secs / 60, 1)} mins). Sleeping...")
         await asyncio.sleep(wait_secs)
 
-        # Trigger sweep at :00, :15, :30, or :45
-        await sweep_all_cryptos()
+        with BrowserLock("WhaleOrders"):
+            # 1. Cloudflare WARP IP Rotation BEFORE dump cycle
+            logger.info("Rotating Cloudflare WARP IP BEFORE Whale Orders dump cycle...")
+            await asyncio.to_thread(rotate_warp_ip, "WhaleOrders-Pre")
+
+            # 2. Execute Whale Orders collection sweep
+            await sweep_all_cryptos()
+
+            # 3. Cloudflare WARP IP Rotation AFTER dump cycle
+            logger.info("Rotating Cloudflare WARP IP AFTER Whale Orders dump cycle...")
+            await asyncio.to_thread(rotate_warp_ip, "WhaleOrders-Post")
 
 
 if __name__ == "__main__":
