@@ -26,5 +26,13 @@
   "FET": "Binance_FETUSDT",
   "TAO": "Binance_TAOUSDT",
   "1000PEPE": "Binance_1000PEPEUSDT",
-  "1000SHIB": "Binance_1000SHIBUSDT"
+  "1000SHIB": "Binance_1000SHIBUSDT",
+  "XAU": "Binance_XAUUSDT",
+  "XAG": "Binance_XAGUSDT",
+  "UKOIL": "MEXC_UKOIL_USDT",
+  "BRENTOIL": "tradeXYZ_BRENTOIL-USD",
+  "NDX100": "MEXC_NAS100_USDT",
+  "SPX500": "tradeXYZ_SP500-USD",
+  "DJI30": "MEXC_US30_USDT",
+  "JP225": "tradeXYZ_JP225-USD"
 }
