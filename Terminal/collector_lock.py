@@ -108,18 +108,19 @@ class BrowserLock:
     Acquires CDP lock with a 2.0s deadline. If contested, sets acquired=False
     so callers can cleanly SKIP rather than blocking in a stale latency queue.
     """
-    def __init__(self, collector_name: str, timeout_secs: float = 2.0):
+    def __init__(self, collector_name: str, timeout_secs: float = 2.0, lock_file: Optional[Path] = None):
         self.collector_name = collector_name
         self.timeout_secs = timeout_secs
+        self.lock_file = lock_file or BROWSER_LOCK_FILE
         self.acquired = False
 
     def __enter__(self):
         global LOCK_CONTENTION_SKIPS
         start = time.time()
         while time.time() - start < self.timeout_secs:
-            if not BROWSER_LOCK_FILE.exists():
+            if not self.lock_file.exists():
                 try:
-                    BROWSER_LOCK_FILE.write_text(f"{self.collector_name}:{os.getpid()}:{time.time()}")
+                    self.lock_file.write_text(f"{self.collector_name}:{os.getpid()}:{time.time()}")
                     self.acquired = True
                     logger.info(f"[{self.collector_name}] Acquired shared browser lock.")
                     return self
@@ -128,11 +129,11 @@ class BrowserLock:
             else:
                 # Check for stale lock (> 180 seconds old)
                 try:
-                    content = BROWSER_LOCK_FILE.read_text().strip()
+                    content = self.lock_file.read_text().strip()
                     parts = content.split(":")
                     if len(parts) >= 3 and time.time() - float(parts[2]) > 180:
                         logger.warning(f"[{self.collector_name}] Clearing stale browser lock held by {parts[0]}")
-                        BROWSER_LOCK_FILE.unlink(missing_ok=True)
+                        self.lock_file.unlink(missing_ok=True)
                         continue
                 except Exception:
                     pass
@@ -145,7 +146,7 @@ class BrowserLock:
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.acquired:
             try:
-                BROWSER_LOCK_FILE.unlink(missing_ok=True)
+                self.lock_file.unlink(missing_ok=True)
                 logger.info(f"[{self.collector_name}] Released shared browser lock.")
             except Exception:
                 pass

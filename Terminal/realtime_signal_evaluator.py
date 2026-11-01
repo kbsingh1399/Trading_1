@@ -75,6 +75,18 @@ class RealtimeSignalEvaluator:
         self.vector_mem = VectorMemory()
         self.timesfm = DeepMindTimesFMForecaster()
 
+    def query_live_tv_liquidations(self, sym: str) -> Dict[str, Any]:
+        """Queries the latest live liquidation reversal data harvested from CoinGlass TV."""
+        sig_file = DB_DIR / "Live_Liquidations" / "latest_reversal_signals.json"
+        if not sig_file.exists():
+            return {}
+        try:
+            with open(sig_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data.get(sym, {})
+        except Exception:
+            return {}
+
     def evaluate_signal(self, sig: Dict[str, Any]) -> Dict[str, Any]:
         """
         Deeply inspects a newly detected signal against the entire data pipeline.
@@ -111,7 +123,8 @@ class RealtimeSignalEvaluator:
         if ("absorption" in sig_name.lower() and sig_side in ["buy", "bullish"]) or \
            ("trapped shorts" in sig_name.lower()) or \
            ("bull div" in sig_name.lower()) or \
-           ("exhaustion" in sig_name.lower() and sig_side in ["sell", "bearish"]):
+           ("exhaustion" in sig_name.lower() and sig_side in ["sell", "bearish"]) or \
+           ("liquidation exhaustion" in sig_name.lower() and sig_side in ["buy", "bullish"]):
             direction = "BUY"
             if whale_imbalance >= 0.55:
                 confluence_score += 15
@@ -127,7 +140,8 @@ class RealtimeSignalEvaluator:
         elif ("absorption" in sig_name.lower() and sig_side in ["sell", "bearish"]) or \
              ("trapped longs" in sig_name.lower()) or \
              ("bear div" in sig_name.lower()) or \
-             ("exhaustion" in sig_name.lower() and sig_side in ["buy", "bullish"]):
+             ("exhaustion" in sig_name.lower() and sig_side in ["buy", "bullish"]) or \
+             ("liquidation exhaustion" in sig_name.lower() and sig_side in ["sell", "bearish"]):
             direction = "SELL"
             if whale_imbalance <= 0.45:
                 confluence_score += 15
@@ -151,6 +165,29 @@ class RealtimeSignalEvaluator:
         elif vm_verdict == "UNFAVORABLE":
             confluence_score -= 15
             reasons.append("Vector Memory Unfavorable Veto")
+
+        # 3.5 CoinGlass TV Live Liquidation Reversal Confluence
+        tv_liq = self.query_live_tv_liquidations(sym)
+        has_tv_liq_spike = bool(tv_liq.get("recent_spike", False))
+        tv_liq_bias = tv_liq.get("reversal_bias", "NEUTRAL")
+        tv_liq_exhaustion = float(tv_liq.get("exhaustion_score", 0.0))
+        tv_liq_long_usd = float(tv_liq.get("latest_long_liq_usd", 0.0))
+        tv_liq_short_usd = float(tv_liq.get("latest_short_liq_usd", 0.0))
+
+        if direction == "BUY":
+            if has_tv_liq_spike and tv_liq_bias == "BULLISH_REVERSAL":
+                confluence_score += 15
+                reasons.append(f"CoinGlass TV Long Liq Capitulation Reversal (Exhaustion {tv_liq_exhaustion:.0f}/100, Long Liq ${tv_liq_long_usd:,.0f})")
+            elif has_tv_liq_spike and tv_liq_bias == "BEARISH_REVERSAL":
+                confluence_score -= 15
+                reasons.append(f"Adverse Short Liq Squeeze Top (${tv_liq_short_usd:,.0f} short liq already exhausted)")
+        elif direction == "SELL":
+            if has_tv_liq_spike and tv_liq_bias == "BEARISH_REVERSAL":
+                confluence_score += 15
+                reasons.append(f"CoinGlass TV Short Liq Blow-Off Reversal (Exhaustion {tv_liq_exhaustion:.0f}/100, Short Liq ${tv_liq_short_usd:,.0f})")
+            elif has_tv_liq_spike and tv_liq_bias == "BULLISH_REVERSAL":
+                confluence_score -= 15
+                reasons.append(f"Adverse Long Liq Cascade Bottom (${tv_liq_long_usd:,.0f} long liq already exhausted)")
 
         # 4. Google DeepMind TimesFM 2.5 Dual Stationary Increments (CVD + Price)
         cvd_series = self.olap.get_series(sym, "cumulative_delta", limit=64)
@@ -354,6 +391,13 @@ class RealtimeSignalEvaluator:
                 "verdict": vm_verdict,
                 "win_rate": vm_win_rate
             },
+            "tv_liquidation_metrics": {
+                "recent_spike": has_tv_liq_spike,
+                "reversal_bias": tv_liq_bias,
+                "exhaustion_score": tv_liq_exhaustion,
+                "latest_long_liq_usd": tv_liq_long_usd,
+                "latest_short_liq_usd": tv_liq_short_usd
+            },
             "confluence_reasons": reasons
         }
 
@@ -428,6 +472,8 @@ class RealtimeSignalEvaluator:
                 "timesfm_cvd_conf": alert["deepmind_timesfm"].get("cvd_confidence", 0.0),
                 "timesfm_price_dir": alert["deepmind_timesfm"].get("price_direction", "N/A"),
                 "timesfm_price_conf": alert["deepmind_timesfm"].get("price_confidence", 0.0),
+                "tv_liq_bias": alert.get("tv_liquidation_metrics", {}).get("reversal_bias", "NEUTRAL"),
+                "tv_liq_exhaustion": alert.get("tv_liquidation_metrics", {}).get("exhaustion_score", 0.0),
                 "reasons": ", ".join(alert["confluence_reasons"])
             }
             new_df = pd.DataFrame([flat_record])

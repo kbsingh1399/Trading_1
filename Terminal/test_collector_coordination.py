@@ -37,16 +37,18 @@ def test_exact_30min_exponential_half_life():
     assert abs(w60 - 0.2500) < 1e-3
 
 
-def test_browser_lock_mutex_and_skip():
+def test_browser_lock_mutex_and_skip(tmp_path):
     """
     Acquiring an already-held lock should timeout within 2.0s and set acquired=False.
+    Uses an isolated test lock file to avoid contention with running daemons.
     """
+    test_lock = tmp_path / "test_cdp.lock"
     # First acquire succeeds
-    with BrowserLock("Collector_A", timeout_secs=0.5) as lock_a:
+    with BrowserLock("Collector_A", timeout_secs=0.5, lock_file=test_lock) as lock_a:
         assert lock_a.acquired is True
 
         # Second concurrent acquire on same resource fails fast
-        with BrowserLock("Collector_B", timeout_secs=0.3) as lock_b:
+        with BrowserLock("Collector_B", timeout_secs=0.3, lock_file=test_lock) as lock_b:
             assert lock_b.acquired is False
 
 

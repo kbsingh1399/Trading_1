@@ -112,6 +112,44 @@ class VectorMemory:
         else:
             self.table_counterfactual = self.db.open_table("counterfactual_setups")
 
+    def query_similar_setups(self, setup_text: str, top_k: int = 3) -> Dict[str, Any]:
+        """
+        Queries historical analogous trade setups via vector similarity.
+        Returns historical win rate and verdict (FAVORABLE, UNFAVORABLE, INCONCLUSIVE).
+        """
+        try:
+            if not hasattr(self, "table_setups") or len(self.table_setups) == 0:
+                return {"verdict": "INCONCLUSIVE", "win_rate": 0.5, "similar_setups": []}
+
+            vec = self._embed_text(setup_text)
+            df = self.table_setups.search(vec).limit(top_k).to_pandas()
+            if df.empty:
+                return {"verdict": "INCONCLUSIVE", "win_rate": 0.5, "similar_setups": []}
+
+            completed = df[df["outcome"].isin(["WIN", "LOSS"])]
+            if completed.empty:
+                return {"verdict": "INCONCLUSIVE", "win_rate": 0.5, "similar_setups": df.to_dict(orient="records")}
+
+            wins = len(completed[completed["outcome"] == "WIN"])
+            total = len(completed)
+            win_rate = wins / float(total)
+
+            if win_rate >= 0.60:
+                verdict = "FAVORABLE"
+            elif win_rate <= 0.40:
+                verdict = "UNFAVORABLE"
+            else:
+                verdict = "INCONCLUSIVE"
+
+            return {
+                "verdict": verdict,
+                "win_rate": round(win_rate, 2),
+                "similar_setups": completed.to_dict(orient="records")
+            }
+        except Exception as e:
+            logger.warning(f"Error querying similar setups: {e}")
+            return {"verdict": "INCONCLUSIVE", "win_rate": 0.5, "similar_setups": []}
+
     def record_rejected_setup(
         self,
         alert_id: str,
