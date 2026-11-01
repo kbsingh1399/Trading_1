@@ -41,6 +41,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+from Terminal.runtime_io import acquire_singleton, atomic_parquet, atomic_json, cdp_result
 from Terminal.collector_lock import BrowserLock, rotate_warp_ip
 from Terminal.realtime_signal_evaluator import RealtimeSignalEvaluator
 
@@ -123,23 +124,8 @@ def load_symbol_map() -> Dict[str, str]:
     return DEFAULT_SYMBOL_MAP
 
 
-def acquire_pid_lock(name: str):
-    lock_dir = DB_DIR / ".locks"
-    lock_dir.mkdir(parents=True, exist_ok=True)
-    lock_file = lock_dir / f"{name}.pid"
-    my_pid = os.getpid()
-    if lock_file.exists():
-        try:
-            old_pid = int(lock_file.read_text().strip())
-            if old_pid != my_pid:
-                subprocess.run(
-                    ["powershell", "-Command", f"Stop-Process -Id {old_pid} -Force -ErrorAction SilentlyContinue"],
-                    capture_output=True, check=False
-                )
-                logger.info(f"Terminated previous instance PID {old_pid}")
-        except Exception:
-            pass
-    lock_file.write_text(str(my_pid))
+def acquire_pid_lock(name):
+    acquire_singleton(name, DB_DIR / '.locks')
 
 
 def get_tv_tab() -> Optional[Dict]:
@@ -244,7 +230,12 @@ def process_and_persist_liquidations(base_sym: str, tv_sym: str, raw_rows: List[
         return None
         
     df = pd.DataFrame(raw_rows, columns=["timestamp", "long_liq_usd", "short_liq_usd"])
+    for col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    if not np.isfinite(df.to_numpy()).all() or (df[['long_liq_usd', 'short_liq_usd']] < 0).any().any():
+        raise ValueError("Invalid liquidation observation")
     df["timestamp"] = df["timestamp"].astype(int)
+    df = df.sort_values('timestamp', kind='stable').drop_duplicates('timestamp', keep='last').reset_index(drop=True)
     df["total_liq_usd"] = df["long_liq_usd"] + df["short_liq_usd"]
     df["net_liq_usd"] = df["long_liq_usd"] - df["short_liq_usd"]
     df["long_ratio"] = np.where(df["total_liq_usd"] > 0, df["long_liq_usd"] / df["total_liq_usd"], 0.5)
@@ -258,7 +249,7 @@ def process_and_persist_liquidations(base_sym: str, tv_sym: str, raw_rows: List[
     # Rolling 50-bar 90th percentile threshold for spikes
     # Min threshold: $25k for majors/large caps, $10k for alts
     min_spike_floor = 50000.0 if base_sym in ["BTC", "ETH", "SOL"] else 15000.0
-    rolling_p90 = df["total_liq_usd"].rolling(50, min_periods=10).quantile(0.90).fillna(min_spike_floor)
+    rolling_p90 = df["total_liq_usd"].shift(1).rolling(50, min_periods=10).quantile(0.90).fillna(min_spike_floor)
     df["p90_threshold"] = np.maximum(rolling_p90, min_spike_floor)
     
     df["is_spike"] = (df["total_liq_usd"] >= df["p90_threshold"]) & (df["total_liq_usd"] > min_spike_floor)
@@ -272,7 +263,7 @@ def process_and_persist_liquidations(base_sym: str, tv_sym: str, raw_rows: List[
     
     # Persist asset parquet
     out_file = LIVE_LIQ_DIR / f"{base_sym}_tv_liquidations.parquet"
-    df.to_parquet(out_file, index=False)
+    atomic_parquet(df, out_file)
     
     # Latest bar analysis for signal output
     latest = df.iloc[-1]
@@ -290,6 +281,7 @@ def process_and_persist_liquidations(base_sym: str, tv_sym: str, raw_rows: List[
         ratio = max_liq / p90
         exhaustion_score = min(100.0, float(50.0 + (ratio - 1.0) * 25.0))
         
+    spike_bar = latest if latest["reversal_bias"] != "NEUTRAL" else prev
     summary = {
         "symbol": base_sym,
         "coinglass_symbol": tv_sym,
@@ -300,6 +292,7 @@ def process_and_persist_liquidations(base_sym: str, tv_sym: str, raw_rows: List[
         "latest_total_liq_usd": float(latest["total_liq_usd"]),
         "prev_total_liq_usd": float(prev["total_liq_usd"]),
         "p90_threshold": float(p90),
+        "spike_bar_time_utc": spike_bar["datetime_utc"] if recent_spike else None,
         "recent_spike": recent_spike,
         "reversal_bias": reversal_bias,
         "exhaustion_score": round(exhaustion_score, 1),
@@ -322,7 +315,7 @@ async def sweep_all_liquidations(tab: Dict) -> Dict[str, Dict]:
             logger.warning(f"Could not initialize RealtimeSignalEvaluator: {e}")
 
     results = {}
-    async with websockets.connect(ws_url, max_size=100*1024*1024) as ws:
+    async with websockets.connect(ws_url, open_timeout=5, close_timeout=2, max_size=100*1024*1024) as ws:
         contexts = {}
         async def listen_for_ctx():
             while True:
@@ -336,7 +329,7 @@ async def sweep_all_liquidations(tab: Dict) -> Dict[str, Dict]:
 
         await ws.send(json.dumps({"id": 1, "method": "Runtime.enable"}))
         await ws.send(json.dumps({"id": 999, "method": "Runtime.evaluate", "params": {"expression": "1"}}))
-        await listen_for_ctx()
+        await asyncio.wait_for(listen_for_ctx(), timeout=10.0)
         
         # Frame 1 is the TradingView iframe
         tv_frame_id = None
@@ -355,23 +348,26 @@ async def sweep_all_liquidations(tab: Dict) -> Dict[str, Dict]:
         for base_sym, tv_sym in symbol_map.items():
             msg_id += 1
             try:
-                raw_rows, last_price = await harvest_single_symbol(ws, tv_ctx, tv_sym, msg_id)
+                raw_rows, last_price = await asyncio.wait_for(harvest_single_symbol(ws, tv_ctx, tv_sym, msg_id), timeout=10.0)
                 if raw_rows:
                     summary = process_and_persist_liquidations(base_sym, tv_sym, raw_rows)
                     if summary:
                         results[base_sym] = summary
+                        atomic_json(SIGNALS_JSON_FILE, results)
                         spike_tag = f" [SPIKE: {summary['reversal_bias']}]" if summary["recent_spike"] and summary["reversal_bias"] != "NEUTRAL" else ""
                         logger.info(f"Harvested {base_sym} ({tv_sym}): {len(raw_rows)} bars, latest total: ${summary['latest_total_liq_usd']:,.0f}{spike_tag}")
 
                         # Check for active reversal spike dispatch
                         if summary["recent_spike"] and summary["reversal_bias"] != "NEUTRAL" and summary["exhaustion_score"] >= 50.0:
-                            spike_key = (base_sym, summary["last_bar_time_utc"], summary["reversal_bias"])
+                            spike_key = (base_sym, summary["spike_bar_time_utc"], summary["reversal_bias"])
                             if spike_key not in PROCESSED_REVERSAL_KEYS:
                                 PROCESSED_REVERSAL_KEYS.add(spike_key)
+                                if len(PROCESSED_REVERSAL_KEYS) > 4096:
+                                    PROCESSED_REVERSAL_KEYS.remove(min(PROCESSED_REVERSAL_KEYS, key=lambda k: k[1]))
                                 logger.info(f"🚨 [TV LIQUIDATION SENTINEL] Active Reversal Spike on {base_sym}: {summary['reversal_bias']} (Exhaustion: {summary['exhaustion_score']:.0f}/100, Liq: ${summary['prev_total_liq_usd']:,.0f})! Dispatching to RealtimeSignalEvaluator...")
                                 if evaluator and last_price > 0:
                                     try:
-                                        ts_sec = int(datetime.fromisoformat(summary["last_bar_time_utc"].replace("Z", "+00:00")).timestamp())
+                                        ts_sec = int(datetime.fromisoformat(summary["spike_bar_time_utc"].replace("Z", "+00:00")).timestamp())
                                     except Exception:
                                         ts_sec = int(time.time())
                                     candidate_sig = {
@@ -381,7 +377,8 @@ async def sweep_all_liquidations(tab: Dict) -> Dict[str, Dict]:
                                         "sig_code": "LIQ_REV_SPIKE",
                                         "side": "buy" if summary["reversal_bias"] == "BULLISH_REVERSAL" else "sell",
                                         "price": last_price,
-                                        "datetime_utc": summary["last_bar_time_utc"],
+                                        "datetime_utc": summary["spike_bar_time_utc"],
+                                        "observed_at_utc": summary["updated_at_utc"],
                                         "time_ms": ts_sec * 1000,
                                         "title": f"CoinGlass Live Liquidation Reversal Spike ({base_sym})",
                                         "description": f"Massive {summary['reversal_bias']} liquidation spike: total ${summary['prev_total_liq_usd']:,.0f} vs P90 ${summary['p90_threshold']:,.0f} (Exhaustion score: {summary['exhaustion_score']:.0f}/100)"
@@ -402,11 +399,10 @@ async def sweep_all_liquidations(tab: Dict) -> Dict[str, Dict]:
             
     # Persist aggregated summary
     if results:
-        with open(SIGNALS_JSON_FILE, "w", encoding="utf-8") as f:
-            json.dump(results, f, indent=2)
+        atomic_json(SIGNALS_JSON_FILE, results)
             
         summary_df = pd.DataFrame(list(results.values()))
-        summary_df.to_parquet(SUMMARY_PARQUET_FILE, index=False)
+        atomic_parquet(summary_df, SUMMARY_PARQUET_FILE)
         logger.info(f"Sweep complete: {len(results)} assets dumped to Parquet & JSON.")
         
     return results
@@ -426,7 +422,7 @@ async def run_daemon():
             await asyncio.sleep(15.0)
             continue
             
-        with BrowserLock("TVLiquidationCollector", timeout_secs=5.0) as lock:
+        with BrowserLock("TVLiquidationCollector", timeout_secs=2.0) as lock:
             if not lock.acquired:
                 logger.info("Browser lock busy. Yielding sweep to next cycle...")
             else:
@@ -447,7 +443,7 @@ def run_single_sweep():
     if not tab:
         print("CoinGlass TV tab not available.")
         return
-    with BrowserLock("TVLiquidationCollector", timeout_secs=5.0) as lock:
+    with BrowserLock("TVLiquidationCollector", timeout_secs=2.0) as lock:
         if not lock.acquired:
             print("Browser lock busy.")
             return

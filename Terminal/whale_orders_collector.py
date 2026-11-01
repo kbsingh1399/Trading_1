@@ -37,6 +37,7 @@ sys.path.insert(0, str(ROOT_DIR))
 DB_DIR = ROOT_DIR / "Database"
 WHALE_DIR = DB_DIR / "Whale_Orders"
 OPEN_DIR = WHALE_DIR / "Open_Orders"
+from Terminal.runtime_io import acquire_singleton, atomic_parquet, upsert_parquet, cdp_result
 from Terminal.collector_lock import rotate_warp_ip, BrowserLock, WHALE_MINUTES
 
 HIST_DIR = WHALE_DIR / "History_Orders"
@@ -80,29 +81,12 @@ def cleanup_coinglass_tabs(keep_tab_id: Optional[str] = None):
         logger.debug(f"Tab cleanup error: {e}")
 
 
-def acquire_pid_lock(name: str):
-    """Ensures strictly one instance of this daemon runs at any time."""
-    lock_dir = DB_DIR / ".locks"
-    lock_dir.mkdir(parents=True, exist_ok=True)
-    lock_file = lock_dir / f"{name}.pid"
-    my_pid = os.getpid()
-    if lock_file.exists():
-        try:
-            old_pid = int(lock_file.read_text().strip())
-            if old_pid != my_pid:
-                subprocess.run(
-                    ["powershell", "-Command", f"Stop-Process -Id {old_pid} -Force -ErrorAction SilentlyContinue"],
-                    capture_output=True, check=False
-                )
-                logger.info(f"Terminated previous instance PID {old_pid} to enforce single-instance guarantee.")
-        except Exception:
-            pass
-    lock_file.write_text(str(my_pid))
+def acquire_pid_lock(name):
+    acquire_singleton(name, DB_DIR / '.locks')
 
 
 def open_coinglass_whale_tab(initial_sym: str = "BTC") -> Tuple[Optional[str], Optional[str]]:
     """Opens a fresh CoinGlass large orderbook tab and returns (tab_id, ws_url)."""
-    cleanup_coinglass_tabs()
     try:
         url = f"https://www.coinglass.com/large-orderbook-statistics?symbol={initial_sym}"
         req = urllib.request.Request(f"http://127.0.0.1:9222/json/new?{url}", method="PUT")
@@ -125,7 +109,6 @@ def close_tab(tab_id: str):
             logger.info(f"Closed whale orders tab ({tab_id}) - Browser lean & free.")
         except Exception as e:
             logger.warning(f"Could not close tab {tab_id}: {e}")
-    cleanup_coinglass_tabs()
 
 CRYPTO_SYMBOLS = [
     "BTC", "ETH", "SOL", "XRP", "DOGE", "BNB", "ADA", "LINK", "AVAX", "SUI", "NEAR", "HYPE"
@@ -191,70 +174,32 @@ def upsert_whale_open_orders(symbol: str, rows: List[dict]):
     df = pd.DataFrame(rows)
     df["snapshot_time_utc"] = datetime.now(timezone.utc).isoformat()
     df["dumped_at_utc"] = datetime.now(timezone.utc).isoformat()
-    df.to_parquet(out_path, index=False, engine="pyarrow")
+    atomic_parquet(df, out_path)
     logger.info(f"[{symbol}] Saved {out_path.name}: {len(df)} active open whale walls")
 
 
-def upsert_whale_history_orders(symbol: str, rows: List[dict]):
-    if not rows:
-        return
-    HIST_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = HIST_DIR / f"{symbol}_whale_history_orders.parquet"
-    new_df = pd.DataFrame(rows)
-    now_utc = datetime.now(timezone.utc).isoformat()
-    new_df["snapshot_time_utc"] = now_utc
-    new_df["dumped_at_utc"] = now_utc
-    if out_path.exists():
-        try:
-            old_df = pd.read_parquet(out_path)
-            combined = pd.concat([old_df, new_df], ignore_index=True)
-            combined = combined.drop_duplicates(subset=["venue", "price", "initial_usd", "duration_str"], keep="last")
-        except Exception:
-            combined = new_df
-    else:
-        combined = new_df
-    combined.to_parquet(out_path, index=False, engine="pyarrow")
-    logger.info(f"[{symbol}] Saved {out_path.name}: {len(combined)} historical whale orders")
+def upsert_whale_history_orders(symbol, rows):
+    if rows:
+        frame = pd.DataFrame(rows)
+        frame['snapshot_time_utc'] = datetime.now(timezone.utc).isoformat()
+        frame['dumped_at_utc'] = frame['snapshot_time_utc']
+        upsert_parquet(frame, HIST_DIR / f'{symbol}_whale_history_orders.parquet',
+                       ['venue', 'side', 'price', 'initial_usd', 'duration_str'],
+                       sort_by='snapshot_time_utc', limit=100000)
 
 
-def upsert_whale_market_snapshots(snapshots: List[dict]):
-    if not snapshots:
-        return
-    WHALE_DIR.mkdir(parents=True, exist_ok=True)
-    new_df = pd.DataFrame(snapshots)
-    now_utc = datetime.now(timezone.utc).isoformat()
-    new_df["snapshot_time_utc"] = now_utc
-    new_df["dumped_at_utc"] = now_utc
-    if SNAPSHOT_PATH.exists():
-        try:
-            old_df = pd.read_parquet(SNAPSHOT_PATH)
-            combined = pd.concat([old_df, new_df], ignore_index=True)
-            combined = combined.drop_duplicates(subset=["symbol", "snapshot_time_utc"], keep="last")
-        except Exception:
-            combined = new_df
-    else:
-        combined = new_df
-    combined.to_parquet(SNAPSHOT_PATH, index=False, engine="pyarrow")
-    logger.info(f"Whale Market Snapshots saved: {SNAPSHOT_PATH.name} ({len(combined)} records)")
+def upsert_whale_market_snapshots(snapshots):
+    if snapshots:
+        frame = pd.DataFrame(snapshots)
+        frame['snapshot_time_utc'] = datetime.now(timezone.utc).isoformat()
+        frame['dumped_at_utc'] = frame['snapshot_time_utc']
+        upsert_parquet(frame, SNAPSHOT_PATH, ['symbol', 'snapshot_time_utc'],
+                       sort_by='snapshot_time_utc', limit=100000)
 
 
 async def cdp_eval(ws, expr: str, msg_id: int = 1, await_promise: bool = False):
-    payload = {
-        "id": msg_id,
-        "method": "Runtime.evaluate",
-        "params": {
-            "expression": expr,
-            "returnByValue": True,
-            "awaitPromise": await_promise
-        }
-    }
-    await ws.send(json.dumps(payload))
-    while True:
-        raw = await ws.recv()
-        resp = json.loads(raw)
-        if resp.get("id") == msg_id:
-            res = resp.get("result", {})
-            return res.get("result", {}).get("value")
+    return await cdp_result(ws, {"id": msg_id, "method": "Runtime.evaluate", "params": {
+        "expression": expr, "returnByValue": True, "awaitPromise": await_promise}})
 
 
 def get_large_orderbook_ws_url() -> Optional[str]:
@@ -394,14 +339,14 @@ async def harvest_whale_orders_for_symbol(ws, symbol: str) -> dict:
     def parse_rows(raw_list, tab_name):
         records = []
         for tds in raw_list:
-            v_raw = tds[0].replace('★', '').replace('?', '').strip()
+            v_raw = tds[0].replace('â˜…', '').replace('?', '').strip()
             side = "Ask" if "Ask" in v_raw else ("Bid" if "Bid" in v_raw else "Unknown")
             pure_v = v_raw.replace("Ask", "").replace("Bid", "").strip()
             m_type = "Spot" if "Spot" in pure_v else "Perp"
             ex = pure_v.replace("Spot", "").replace("Perp", "").strip().upper()
             try: price = float(tds[1].replace(',', ''))
             except: price = 0.0
-            try: dist_pct = float(tds[2].replace('%', '').replace('+', '').replace('−', '-').replace('-', '-').strip())
+            try: dist_pct = float(tds[2].replace('%', '').replace('+', '').replace('âˆ’', '-').replace('-', '-').strip())
             except: dist_pct = 0.0
             init_usd = parse_currency(tds[3])
             rem_usd = parse_currency(tds[4])
@@ -466,7 +411,7 @@ async def sweep_all_cryptos(symbols: list = None) -> dict:
         async def get_active_ws():
             for attempt in range(4):
                 try:
-                    return await websockets.connect(ws_url, max_size=50_000_000, ping_interval=None)
+                    return await websockets.connect(ws_url, open_timeout=5, close_timeout=2, max_size=50_000_000, ping_interval=None)
                 except Exception:
                     await asyncio.sleep(1.5)
             return None
@@ -508,7 +453,6 @@ async def sweep_all_cryptos(symbols: list = None) -> dict:
 
 async def daemon_loop():
     acquire_pid_lock("whale_orders_collector")
-    cleanup_coinglass_tabs()
     logger.info("=== Whale Orders Collector Daemon Active (Cadence: :00, :15, :35, :50 of every hour) ===")
     
     while True:
@@ -517,7 +461,10 @@ async def daemon_loop():
         logger.info(f"Next whale orders sweep scheduled at {next_dt.strftime('%H:%M:%S')} (in {round(wait_secs / 60, 1)} mins). Sleeping...")
         await asyncio.sleep(wait_secs)
 
-        with BrowserLock("WhaleOrders"):
+        with BrowserLock("WhaleOrders") as browser_lock:
+            if not browser_lock.acquired:
+                await asyncio.sleep(2.0)
+                continue
             # 1. Cloudflare WARP IP Rotation BEFORE dump cycle
             logger.info("Rotating Cloudflare WARP IP BEFORE Whale Orders dump cycle...")
             await asyncio.to_thread(rotate_warp_ip, "WhaleOrders-Pre")

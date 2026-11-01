@@ -10,9 +10,12 @@ The instant a new signal is written by direct_footprint_collector:
 """
 
 import sys
+import threading
 import time
 import json
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from Terminal.alert_stream import consume_alerts
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DB_DIR = ROOT_DIR / "Database"
@@ -31,38 +34,38 @@ def get_current_line_count():
 
 
 def main():
-    initial_count = get_current_line_count()
-    if STATE_FILE.exists():
-        try:
-            state = json.loads(STATE_FILE.read_text())
-            initial_count = max(initial_count, state.get("last_line_count", initial_count))
-        except Exception:
-            pass
+    from watchdog.events import FileSystemEventHandler
+    from watchdog.observers import Observer
+    wake = threading.Event()
 
-    STATE_FILE.write_text(json.dumps({"last_line_count": initial_count}))
-    # Wait until a new line is appended
-    while True:
-        time.sleep(1.0)
-        current_count = get_current_line_count()
-        if current_count > initial_count:
-            # New signal detected! Read new lines
-            new_lines = []
-            try:
-                with open(ALERTS_JSONL, "r", encoding="utf-8") as f:
-                    all_lines = [l.strip() for l in f if l.strip()]
-                    new_lines = all_lines[initial_count:]
-            except Exception as e:
-                print(f"Error reading new lines: {e}")
-                time.sleep(1.0)
-                continue
+    class Handler(FileSystemEventHandler):
+        def on_any_event(self, event):
+            if event.event_type not in {'modified', 'created', 'moved'}:
+                return
+            paths = [event.src_path, getattr(event, 'dest_path', '')]
+            if any(p and Path(p).resolve() == ALERTS_JSONL.resolve() for p in paths):
+                wake.set()
 
-            STATE_FILE.write_text(json.dumps({"last_line_count": current_count}))
-            print(f"=== NEW_SIGNAL_EVENT_DETECTED: {len(new_lines)} NEW ALERT(S) ===")
-            for line in new_lines:
-                print(line)
-            # Exit to trigger instant reactive Antigravity wakeup
-            sys.exit(0)
+    DB_DIR.mkdir(parents=True, exist_ok=True)
+    observer = Observer()
+    observer.schedule(Handler(), str(DB_DIR), recursive=False)
+    observer.start()  # Subscribe before reading the cursor, preventing a lost wakeup.
+    try:
+        first = True
+        while True:
+            wake.clear()
+            alerts = consume_alerts(ALERTS_JSONL, STATE_FILE, start_at_end=first)
+            first = False
+            if alerts:
+                print(f'=== NEW_SIGNAL_EVENT_DETECTED: {len(alerts)} NEW ALERT(S) ===')
+                for alert in alerts:
+                    print(json.dumps(alert), flush=True)
+                return 0
+            wake.wait()
+    finally:
+        observer.stop()
+        observer.join(timeout=5)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

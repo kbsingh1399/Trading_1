@@ -42,6 +42,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+from Terminal.runtime_io import acquire_singleton, atomic_parquet, upsert_parquet, cdp_result
 from Terminal.collector_lock import rotate_warp_ip, BrowserLock, LIQUIDATION_MINUTES
 DB_DIR = ROOT_DIR / "Database"
 LIQ_DIR = DB_DIR / "Liquidation_Data"
@@ -110,29 +111,12 @@ def cleanup_coinglass_tabs(keep_tab_id: Optional[str] = None):
         logger.debug(f"Tab cleanup error: {e}")
 
 
-def acquire_pid_lock(name: str):
-    """Ensures strictly one instance of this daemon runs at any time."""
-    lock_dir = DB_DIR / ".locks"
-    lock_dir.mkdir(parents=True, exist_ok=True)
-    lock_file = lock_dir / f"{name}.pid"
-    my_pid = os.getpid()
-    if lock_file.exists():
-        try:
-            old_pid = int(lock_file.read_text().strip())
-            if old_pid != my_pid:
-                subprocess.run(
-                    ["powershell", "-Command", f"Stop-Process -Id {old_pid} -Force -ErrorAction SilentlyContinue"],
-                    capture_output=True, check=False
-                )
-                logger.info(f"Terminated previous instance PID {old_pid} to enforce single-instance guarantee.")
-        except Exception:
-            pass
-    lock_file.write_text(str(my_pid))
+def acquire_pid_lock(name):
+    acquire_singleton(name, DB_DIR / '.locks')
 
 
 def open_coinglass_liquidation_tab(initial_sym: str = "BTC") -> Tuple[Optional[str], Optional[str]]:
     """Opens a fresh CoinGlass liquidation tab and returns (tab_id, ws_url)."""
-    cleanup_coinglass_tabs()
     try:
         url = f"https://www.coinglass.com/liquidation-levels?symbol={initial_sym}"
         req = urllib.request.Request(f"http://127.0.0.1:9222/json/new?{url}", method="PUT")
@@ -155,112 +139,50 @@ def close_tab(tab_id: str):
             logger.info(f"Closed liquidation tab ({tab_id}) - Browser lean & free.")
         except Exception as e:
             logger.warning(f"Could not close tab {tab_id}: {e}")
-    cleanup_coinglass_tabs()
 
 
 async def cdp_eval(ws, expr: str, msg_id: int = 1, await_promise: bool = False):
-    payload = {
-        "id": msg_id,
-        "method": "Runtime.evaluate",
-        "params": {
-            "expression": expr,
-            "returnByValue": True,
-            "awaitPromise": await_promise
-        }
-    }
-    await ws.send(json.dumps(payload))
-    while True:
-        raw = await ws.recv()
-        resp = json.loads(raw)
-        if resp.get("id") == msg_id:
-            res = resp.get("result", {})
-            return res.get("result", {}).get("value")
+    return await cdp_result(ws, {"id": msg_id, "method": "Runtime.evaluate", "params": {
+        "expression": expr, "returnByValue": True, "awaitPromise": await_promise}})
 
 
 # ---------------------------------------------------------------------------
 # Data Persistence Functions
 # ---------------------------------------------------------------------------
-def upsert_asset_key_levels(symbol: str, levels: List[dict]):
+def upsert_asset_key_levels(symbol, levels):
     if not levels:
         return
-    KEY_LEVELS_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = KEY_LEVELS_DIR / f"{symbol}_key_levels.parquet"
-    new_df = pd.DataFrame(levels)
-    now_utc = datetime.now(timezone.utc).isoformat()
-    new_df["snapshot_time_utc"] = now_utc
-    new_df["dumped_at_utc"] = now_utc
-    if out_path.exists():
-        try:
-            old_df = pd.read_parquet(out_path)
-            combined = pd.concat([old_df, new_df], ignore_index=True)
-            combined = combined.drop_duplicates(subset=["range_filter", "side", "rank", "price"], keep="last")
-        except Exception:
-            combined = new_df
-    else:
-        combined = new_df
-    combined.to_parquet(out_path, index=False, engine="pyarrow")
+    frame = pd.DataFrame(levels)
+    frame['snapshot_time_utc'] = datetime.now(timezone.utc).isoformat()
+    frame['dumped_at_utc'] = frame['snapshot_time_utc']
+    atomic_parquet(frame, KEY_LEVELS_DIR / f'{symbol}_key_levels.parquet')
 
 
-def upsert_asset_magnet_zones(symbol: str, magnet_zones: List[dict]):
+def upsert_asset_magnet_zones(symbol, magnet_zones):
     if not magnet_zones:
         return
-    MAGNET_ZONES_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = MAGNET_ZONES_DIR / f"{symbol}_magnet_zones.parquet"
-    new_df = pd.DataFrame(magnet_zones)
-    now_utc = datetime.now(timezone.utc).isoformat()
-    new_df["snapshot_time_utc"] = now_utc
-    new_df["dumped_at_utc"] = now_utc
-    if out_path.exists():
-        try:
-            old_df = pd.read_parquet(out_path)
-            combined = pd.concat([old_df, new_df], ignore_index=True)
-            combined = combined.drop_duplicates(subset=["side", "rank", "price_band"], keep="last")
-        except Exception:
-            combined = new_df
-    else:
-        combined = new_df
-    combined.to_parquet(out_path, index=False, engine="pyarrow")
+    frame = pd.DataFrame(magnet_zones)
+    frame['snapshot_time_utc'] = datetime.now(timezone.utc).isoformat()
+    frame['dumped_at_utc'] = frame['snapshot_time_utc']
+    atomic_parquet(frame, MAGNET_ZONES_DIR / f'{symbol}_magnet_zones.parquet')
 
 
-def upsert_asset_near_field(symbol: str, near_fields: List[dict]):
+def upsert_asset_near_field(symbol, near_fields):
     if not near_fields:
         return
-    NEAR_FIELD_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = NEAR_FIELD_DIR / f"{symbol}_near_field.parquet"
-    new_df = pd.DataFrame(near_fields)
-    now_utc = datetime.now(timezone.utc).isoformat()
-    new_df["snapshot_time_utc"] = now_utc
-    new_df["dumped_at_utc"] = now_utc
-    if out_path.exists():
-        try:
-            old_df = pd.read_parquet(out_path)
-            combined = pd.concat([old_df, new_df], ignore_index=True)
-            combined = combined.drop_duplicates(subset=["symbol", "snapshot_time_utc"], keep="last")
-        except Exception:
-            combined = new_df
-    else:
-        combined = new_df
-    combined.to_parquet(out_path, index=False, engine="pyarrow")
+    frame = pd.DataFrame(near_fields)
+    frame['snapshot_time_utc'] = datetime.now(timezone.utc).isoformat()
+    frame['dumped_at_utc'] = frame['snapshot_time_utc']
+    atomic_parquet(frame, NEAR_FIELD_DIR / f'{symbol}_near_field.parquet')
 
 
-def upsert_liquidation_snapshots(snapshots: List[dict]):
-    if not snapshots:
-        return
-    LIQ_DIR.mkdir(parents=True, exist_ok=True)
-    new_df = pd.DataFrame(snapshots)
-    now_utc = datetime.now(timezone.utc).isoformat()
-    new_df["snapshot_time_utc"] = now_utc
-    new_df["dumped_at_utc"] = now_utc
-    if SNAPSHOTS_PARQUET.exists():
-        try:
-            old_df = pd.read_parquet(SNAPSHOTS_PARQUET)
-            combined = pd.concat([old_df, new_df], ignore_index=True)
-            combined = combined.drop_duplicates(subset=["snapshot_time_utc", "symbol"], keep="last")
-        except Exception:
-            combined = new_df
-    else:
-        combined = new_df
-    combined.to_parquet(SNAPSHOTS_PARQUET, index=False, engine="pyarrow")
+def upsert_liquidation_snapshots(snapshots):
+    if snapshots:
+        frame = pd.DataFrame(snapshots)
+        frame['snapshot_time_utc'] = datetime.now(timezone.utc).isoformat()
+        frame['dumped_at_utc'] = frame['snapshot_time_utc']
+        upsert_parquet(frame, SNAPSHOTS_PARQUET, ['snapshot_time_utc', 'symbol'],
+                       sort_by='snapshot_time_utc', limit=100000)
 
 
 # ---------------------------------------------------------------------------
@@ -423,7 +345,7 @@ async def execute_liquidation_sweep():
         async def get_active_ws():
             for attempt in range(4):
                 try:
-                    return await websockets.connect(ws_url, max_size=50_000_000, ping_interval=None)
+                    return await websockets.connect(ws_url, open_timeout=5, close_timeout=2, max_size=50_000_000, ping_interval=None)
                 except Exception:
                     await asyncio.sleep(1.5)
             return None
@@ -463,7 +385,6 @@ async def execute_liquidation_sweep():
 async def run_collector_daemon():
     """Scheduled daemon triggering at :10:05, :25:05, and :55:05 local wall-clock."""
     acquire_pid_lock("liquidation_map_collector")
-    cleanup_coinglass_tabs()
     logger.info("=== Liquidation Map Daemon Active (Cadence: 10th, 25th, 55th minute of every hour) ===")
 
     while True:
@@ -472,7 +393,10 @@ async def run_collector_daemon():
         logger.info(f"Next liquidation sweep scheduled at {next_dt.strftime('%H:%M:%S')} (in {round(wait_secs / 60, 1)} mins). Sleeping...")
         await asyncio.sleep(wait_secs)
 
-        with BrowserLock("LiquidationMap"):
+        with BrowserLock("LiquidationMap") as browser_lock:
+            if not browser_lock.acquired:
+                await asyncio.sleep(2.0)
+                continue
             # 1. Cloudflare WARP IP Rotation BEFORE dump cycle
             logger.info("Rotating Cloudflare WARP IP BEFORE Liquidation dump cycle...")
             await asyncio.to_thread(rotate_warp_ip, "Liquidation-Pre")

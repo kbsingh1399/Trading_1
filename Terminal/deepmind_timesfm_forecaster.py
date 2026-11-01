@@ -114,8 +114,8 @@ class DeepMindTimesFMForecaster:
                 "hurdle_adjustment": 0.0
             }
 
-        cvd = np.asarray(cvd_series, dtype=np.float32).flatten()
-        vol = np.asarray(volume_series, dtype=np.float32).flatten()
+        cvd = np.asarray(cvd_series, dtype=np.float64).flatten()
+        vol = np.asarray(volume_series, dtype=np.float64).flatten()
 
         if len(cvd) < 12 or len(vol) < 12:
             return {
@@ -125,6 +125,10 @@ class DeepMindTimesFMForecaster:
                 "hurdle_adjustment": 0.0
             }
 
+        if len(cvd) != len(vol) or not np.isfinite(cvd).all() or not np.isfinite(vol).all() or (vol < 0).any():
+            return {"available": False, "error": "Invalid or unaligned model inputs", "adverse_veto": False}
+        if not isinstance(horizon, int) or not 1 <= horizon <= 24:
+            return {"available": False, "error": "Invalid horizon", "adverse_veto": False}
         # Align length to match
         min_len = min(len(cvd), len(vol))
         cvd = cvd[-min_len:]
@@ -152,6 +156,11 @@ class DeepMindTimesFMForecaster:
 
         try:
             point_fc, quantile_fc = self._model.forecast(horizon=horizon, inputs=[r_t])
+            point_fc, quantile_fc = np.asarray(point_fc), np.asarray(quantile_fc)
+            if point_fc.shape != (1, horizon) or quantile_fc.ndim != 3 or quantile_fc.shape[:2] != (1, horizon):
+                raise ValueError('Malformed forecast shape')
+            if not np.isfinite(point_fc).all() or not np.isfinite(quantile_fc).all():
+                raise ValueError('Nonfinite forecast')
             pts = point_fc[0][:horizon]
 
             # Qwen F-06: Resolve quantile columns dynamically to support both:
@@ -163,14 +172,16 @@ class DeepMindTimesFMForecaster:
             elif q_cols == 9:
                 q10_idx, q50_idx, q90_idx = 0, 4, 8
             else:
-                q10_idx = int(round(0.1 * (q_cols - 1)))
-                q50_idx = int(round(0.5 * (q_cols - 1)))
-                q90_idx = int(round(0.9 * (q_cols - 1)))
+                raise ValueError('Unknown quantile grid')
 
             q10 = quantile_fc[0][:horizon, q10_idx]  # 10th percentile
             q50 = quantile_fc[0][:horizon, q50_idx]  # 50th percentile (median)
             q90 = quantile_fc[0][:horizon, q90_idx]  # 90th percentile
 
+            if np.any(q10 > q90):
+                raise ValueError('Crossed forecast bounds')
+
+            # Marginal quantile sums are diagnostics, not a joint horizon interval.
             # Horizon-integrated delta ratio (projected cumulative order-flow bias)
             projected_bias = float(np.sum(pts))
             q10_sum = float(np.sum(q10))
@@ -184,12 +195,12 @@ class DeepMindTimesFMForecaster:
             veto_reason = ""
             if candidate_direction:
                 cdir = candidate_direction.upper()
-                if cdir == "BUY" and q90_sum < 0.0:
+                if cdir == "BUY" and np.all(q90 < 0.0):
                     adverse_veto = True
-                    veto_reason = f"BUY_VETO: Entire 80% predictive order-flow interval is negative (q90_sum={q90_sum:.2f})"
-                elif cdir == "SELL" and q10_sum > 0.0:
+                    veto_reason = f"BUY_VETO: All marginal upper quantiles are negative (q90_sum={q90_sum:.2f})"
+                elif cdir == "SELL" and np.all(q10 > 0.0):
                     adverse_veto = True
-                    veto_reason = f"SELL_VETO: Entire 80% predictive order-flow interval is positive (q10_sum={q10_sum:.2f})"
+                    veto_reason = f"SELL_VETO: All marginal lower quantiles are positive (q10_sum={q10_sum:.2f})"
 
             # Rule B: Confluence Hurdle Adjustment
             # Wider interval -> Higher required confluence hurdle (+0 to +10 pts)
@@ -197,6 +208,7 @@ class DeepMindTimesFMForecaster:
 
             return {
                 "available": True,
+                "joint_horizon_interval_calibrated": False,
                 "horizon": horizon,
                 "projected_delta_ratio_sum": round(projected_bias, 4),
                 "q10_sum": round(q10_sum, 4),

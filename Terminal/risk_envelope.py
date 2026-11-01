@@ -7,7 +7,7 @@ Every execution and signal evaluation module imports from here.
 
 Governed by Arena Quant Audit (Round 2 & Sonnet 5.5 Institutional Verification):
 1. Survival Constraint: max_risk = free_buffer / (SURVIVAL_LOSSES * MAX_OPEN_POSITIONS)
-   Guarantees a 10-consecutive loss streak does NOT breach the $4,775 hard floor.
+   Guarantees a 10-consecutive loss streak does NOT breach the USD 4,775 hard floor.
 2. Prospective Halt: Halts trading BEFORE entering if free_buffer <= HALT_CUSHION_USD.
 3. Reservation-Based: Subtracts worst-case stressed risk of all open positions + resting limits.
 4. Exact Integer Grid Solver: Solves discrete lot grid [k_min, k_max].
@@ -17,6 +17,7 @@ Governed by Arena Quant Audit (Round 2 & Sonnet 5.5 Institutional Verification):
 """
 
 import math
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 import logging
 from typing import Tuple, Optional, Dict, Any
 
@@ -25,10 +26,10 @@ logger = logging.getLogger("RiskEnvelope")
 # ---------------------------------------------------------------------------
 # Canonical Risk Constants (SINGLE SOURCE OF TRUTH ACROSS THE ENTIRE SYSTEM)
 # ---------------------------------------------------------------------------
-HARD_FLOOR_USD = 4775.00       # Contractual floor ($4,700) + Self-imposed safety buffer ($75) = $4,775
+HARD_FLOOR_USD = 4775.00       # Contractual floor (USD 4,700) + Self-imposed safety buffer (USD 75) = USD 4,775
 HALT_CUSHION_USD = 20.00       # Prospective halt cushion >= worst-case single-trade execution reserve
 OPERATING_BUFFER_MIN = 20.00   # Canonical alias for HALT_CUSHION_USD
-MAX_RISK_USD = 25.00           # Strict nominal ceiling per trade ($25.00)
+MAX_RISK_USD = 25.00           # Strict nominal ceiling per trade (USD 25.00)
 MIN_RISK_USD = 5.00            # Minimum risk threshold to prevent micro-lot commission drag
 MAX_OPEN_POSITIONS = 2         # Hard mandate: strictly 2 concurrent positions max
 MAX_RESTING_LIMITS = 2         # Resting pending orders count as future contingent liabilities
@@ -55,10 +56,12 @@ def budget_per_trade(
     Halt Hierarchy:
         1. Base capital <= HARD_FLOOR_USD -> EQUITY_BREACH
         2. Free buffer <= HALT_CUSHION_USD -> PROSPECTIVE_HALT (cushion defense)
-        3. Computed budget < MIN_RISK_USD -> BUDGET_BELOW_MIN_FLOOR (binds when free buffer < $100)
+        3. Computed budget < MIN_RISK_USD -> BUDGET_BELOW_MIN_FLOOR (binds when free buffer < USD 100)
 
     Calculates:
-        base = min(balance, equity)
+        if not all(isinstance(x, (int, float)) and math.isfinite(x) for x in (balance, equity, committed_stress_usd)) or committed_stress_usd < 0:
+        return 0.0, False, "INVALID_CAPITAL_STATE"
+    base = min(balance, equity)
         buffer = base - HARD_FLOOR_USD
         free = buffer - committed_stress_usd
         if free <= HALT_CUSHION_USD -> HALT (prospective)
@@ -73,11 +76,11 @@ def budget_per_trade(
     buffer = base - HARD_FLOOR_USD
 
     if buffer <= 0.0:
-        return 0.0, False, f"EQUITY_BREACH: Base capital ${base:.2f} <= Hard Floor ${HARD_FLOOR_USD:.2f}"
+        return 0.0, False, f"EQUITY_BREACH: Base capital USD {base:.2f} <= Hard Floor USD {HARD_FLOOR_USD:.2f}"
 
     free = buffer - committed_stress_usd
     if free <= HALT_CUSHION_USD:
-        return 0.0, False, f"PROSPECTIVE_HALT: Free buffer ${free:.2f} <= Halt Cushion ${HALT_CUSHION_USD:.2f}"
+        return 0.0, False, f"PROSPECTIVE_HALT: Free buffer USD {free:.2f} <= Halt Cushion USD {HALT_CUSHION_USD:.2f}"
 
     divisor = SURVIVAL_DIVISOR * (STRESS_MULT if stress_native else 1.0)
     per_trade = free / divisor
@@ -86,11 +89,11 @@ def budget_per_trade(
 
     if budget < MIN_RISK_USD:
         return 0.0, False, (
-            f"BUDGET_BELOW_MIN_FLOOR: Computed budget ${budget:.2f} < Min threshold ${MIN_RISK_USD:.2f} "
-            f"(Free buffer: ${free:.2f})"
+            f"BUDGET_BELOW_MIN_FLOOR: Computed budget USD {budget:.2f} < Min threshold USD {MIN_RISK_USD:.2f} "
+            f"(Free buffer: USD {free:.2f})"
         )
 
-    return budget, True, f"OK (Free Buffer: ${free:.2f}, Budget: ${budget:.2f})"
+    return budget, True, f"OK (Free Buffer: USD {free:.2f}, Budget: USD {budget:.2f})"
 
 
 def compute_dynamic_capital_budget(
@@ -134,38 +137,26 @@ def admissible_volume(
         return None, "NO_BROKER_VALUATION", 0.0
 
     if cap_usd < floor_usd:
-        return None, f"EMPTY_CAP_WINDOW: cap (${cap_usd:.2f}) < floor (${floor_usd:.2f})", 0.0
+        return None, f"EMPTY_CAP_WINDOW: cap (USD {cap_usd:.2f}) < floor (USD {floor_usd:.2f})", 0.0
 
-    # Discrete step boundaries with relative floating-point margin (Qwen F-14)
-    eps = 1e-9 * max(1.0, float(actual_loss_step))
-    k_min = math.ceil((floor_usd / actual_loss_step) - eps)
-    max_step_bound = min(cap_usd, max_lot * actual_loss_step)
-    k_max = math.floor((max_step_bound / actual_loss_step) + eps)
+    # Work in integer lot-step indices. Never mix volume with loss per step.
+    values = (actual_loss_step, actual_step, min_lot, max_lot, floor_usd, cap_usd)
+    if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in values):
+        return None, "INVALID_VOLUME_INPUT", 0.0
+    if min_lot <= 0 or max_lot < min_lot or floor_usd < 0 or cap_usd <= 0:
+        return None, "INVALID_VOLUME_INPUT", 0.0
+    loss, grid, minimum, maximum, floor, cap = map(lambda v: Decimal(str(v)), values)
+    ceil = lambda v: int(v.to_integral_value(rounding=ROUND_CEILING))
+    down = lambda v: int(v.to_integral_value(rounding=ROUND_FLOOR))
+    k_min = max(1, ceil(minimum / grid), ceil(floor / loss))
+    k_max = min(down(maximum / grid), down(cap / loss))
+    if k_min > k_max:
+        return None, f"NO_REPRESENTABLE_VOLUME: grid=[{k_min},{k_max}]", 0.0
+    volume = grid * k_min
+    risk = loss * k_min
+    # Preserve full precision: rounding risk to cents can hide a cap breach.
+    return float(volume), "OK", float(risk)
 
-    # Broker min/max constraints in step index space
-    k_broker_min = math.ceil((min_lot / actual_step) - eps)
-    k_broker_max = math.floor((max_lot / actual_step) + eps)
-
-    effective_k_min = max(k_min, k_broker_min)
-    effective_k_max = min(k_max, k_broker_max)
-
-    if effective_k_max < effective_k_min or effective_k_min <= 0:
-        actual_min_risk = (effective_k_min * actual_loss_step)
-        actual_max_risk = (effective_k_max * actual_loss_step)
-        return None, (
-            f"NO_REPRESENTABLE_VOLUME: grid=[{actual_min_risk:.2f},{actual_max_risk:.2f}] "
-            f"window=[{floor_usd:.2f},{cap_usd:.2f}]"
-        ), 0.0
-
-    # Pick k_min: smallest legal size >= floor, preserving capital survival
-    final_lots = round(effective_k_min * actual_step, 6)
-    actual_risk_usd = round(effective_k_min * actual_loss_step, 2)
-
-    # Strict fail-closed overflow check
-    if actual_risk_usd > cap_usd + eps:
-        return None, f"NUMERICAL_OVERFLOW: realized risk ${actual_risk_usd:.2f} > cap ${cap_usd:.2f}", 0.0
-
-    return final_lots, "OK", actual_risk_usd
 
 
 def solve_volume_from_loss_per_lot(
@@ -197,13 +188,15 @@ def validate_trade_geometry(
     """
     Fails closed on any inverted stop, non-positive price, or spread breach.
     """
+    if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in (entry, stop_loss, take_profit, spread_bps)) or spread_bps < 0:
+        return False, "INVALID_GEOMETRY_INPUT"
     if spread_bps > MAX_SPREAD_BPS:
         return False, f"SPREAD_GATE_BREACH: Spread {spread_bps:.1f} bps > Max allowed {MAX_SPREAD_BPS:.1f} bps"
 
     if entry <= 0.0 or stop_loss <= 0.0 or take_profit <= 0.0:
         return False, "INVALID_PRICE_LEVELS: Non-positive prices"
 
-    dir_upper = direction.upper()
+    dir_upper = str(direction).upper()
     if dir_upper == "BUY":
         if stop_loss >= entry:
             return False, f"INVERTED_STOP: BUY stop-loss {stop_loss} >= entry {entry}"
@@ -219,7 +212,7 @@ def validate_trade_geometry(
 
     risk_dist = abs(entry - stop_loss)
     reward_dist = abs(take_profit - entry)
-    rr = reward_dist / (risk_dist + 1e-9)
+    rr = reward_dist / risk_dist
 
     if rr < MIN_RR_RATIO:
         return False, f"POOR_REWARD_TO_RISK: R:R {rr:.2f} < Min required {MIN_RR_RATIO:.2f}"

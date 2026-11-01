@@ -23,6 +23,7 @@ import time
 import math
 import json
 import logging
+import hashlib
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
@@ -38,6 +39,8 @@ import MetaTrader5 as mt5
 from Terminal.persistent_memory import (
     get_rules, get_strategy_weight, record_trade_reflection, sync_to_markdown
 )
+from Terminal.runtime_io import FileMutex, atomic_json
+from Terminal.venue_admission import EXPECTED_MT5_LOGIN, mt5_account_book, native_size
 from Terminal.olap_engine import OlapEngine
 from Terminal.vector_memory import VectorMemory
 from Terminal.regime_detector import RegimeDetector
@@ -49,7 +52,8 @@ from Terminal.risk_envelope import (
 )
 
 # Reconfigure stdout for UTF-8 and non-buffered logging
-sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
 
 # ---------------------------------------------------------------------------
 # Paths and Configuration
@@ -103,34 +107,16 @@ def calculate_lot_size(
     Exact mathematical volume solver based on Terminal.risk_envelope.admissible_volume.
     Guarantees realized dollar loss lies strictly inside [MIN_RISK_USD, cap_usd].
     """
-    price_dist = abs(entry_price - sl_price)
-    if price_dist <= 0 or info.point <= 0:
+    if not all(math.isfinite(v) for v in (risk_dollars, entry_price, sl_price)) or entry_price == sl_price:
         return 0.0, 0.0
-
-    points_dist = price_dist / info.point
-    tick_val = info.trade_tick_value
-    tick_size = info.trade_tick_size
-    point = info.point
-
-    cost_per_point_per_lot = tick_val * (point / tick_size)
-    loss_per_lot = points_dist * cost_per_point_per_lot
-
-    step = info.volume_step if info.volume_step > 0 else 0.01
-    cap_usd = min(risk_dollars, MAX_RISK_USD)
-
-    lots, status, actual_loss = admissible_volume(
-        loss_per_lot=loss_per_lot,
-        step=step,
-        min_lot=info.volume_min,
-        max_lot=info.volume_max,
-        floor_usd=MIN_RISK_USD,
-        cap_usd=cap_usd
-    )
-    if lots is None or lots <= 0:
-        logger.warning(f"Admissible volume solver rejected sizing: {status}")
+    side = mt5.ORDER_TYPE_BUY if sl_price < entry_price else mt5.ORDER_TYPE_SELL
+    loss = mt5.order_calc_profit(side, info.name, info.volume_step, entry_price, sl_price)
+    if loss is None or not math.isfinite(loss) or loss >= 0:
         return 0.0, 0.0
+    lots, reason, actual = admissible_volume(loss_per_lot_step=-loss, volume_step=info.volume_step,
+        min_lot=info.volume_min, max_lot=info.volume_max, cap_usd=min(risk_dollars, MAX_RISK_USD))
+    return (lots, actual) if lots is not None else (0.0, 0.0)
 
-    return lots, actual_loss
 
 
 class CryptoLiveTrader:
@@ -150,8 +136,8 @@ class CryptoLiveTrader:
             logger.error(f"Failed to connect to MT5: {mt5.last_error()}")
             return False
         acct = mt5.account_info()
-        if not acct:
-            logger.error("Connected to MT5 but account_info is None.")
+        if acct is None or acct.login != EXPECTED_MT5_LOGIN or acct.currency != "USD":
+            logger.error("MT5 account identity unknown or mismatched.")
             return False
         logger.info(f"Connected to MT5 Account: {acct.login} ({acct.name}) | Equity: ${acct.equity:,.2f}")
         return True
@@ -159,6 +145,8 @@ class CryptoLiveTrader:
     def get_open_crypto_positions(self) -> List[dict]:
         """Fetch all currently open crypto positions placed by this engine."""
         positions = mt5.positions_get()
+        if positions is None:
+            raise RuntimeError("Unknown MT5 position inventory")
         if not positions:
             return []
         crypto_mt5_symbols = {v["mt5"] for v in self.crypto_map.values()}
@@ -187,6 +175,7 @@ class CryptoLiveTrader:
         - If profit reaches +1R (halfway to TP1 or equal to initial risk distance),
           moves SL to break-even (entry + small buffer) to guarantee zero loss.
         """
+        mt5_account_book(mt5)  # Verify identity and inventory before any mutation.
         open_pos = self.get_open_crypto_positions()
         if not open_pos:
             return
@@ -199,7 +188,7 @@ class CryptoLiveTrader:
                 continue
 
             # 1. HARD LOSS CIRCUIT BREAKER ($50 limit)
-            if pos["profit"] <= -48.00:
+            if pos["profit"] <= -HARD_MAX_LOSS_USD:
                 logger.warning(f"[{mt5_sym}] [CIRCUIT-BREAKER] Position #{pos['ticket']} hit hard loss threshold (${pos['profit']:.2f} <= -$48.00). Executing emergency market close!")
                 close_type = mt5.ORDER_TYPE_SELL if pos["type"] == "BUY" else mt5.ORDER_TYPE_BUY
                 close_price = tick.bid if pos["type"] == "BUY" else tick.ask
@@ -437,27 +426,16 @@ class CryptoLiveTrader:
             confluence_score += 10
             reasons.append(f"Vector Memory Historical Win Rate {past_analogs.get('win_rate')*100:.0f}%")
 
-        # 5. Google DeepMind TimesFM 2.5 Zero-Shot CVD Forecaster
-        cvd_series = self.olap.get_series(symbol, "cumulative_delta", limit=64)
-        if len(cvd_series) >= 16 and self.timesfm.is_available:
-            tfm_res = self.timesfm.forecast_trajectory(cvd_series, horizon=8)
-            if tfm_res.get("available"):
-                tfm_dir = tfm_res.get("direction", "NEUTRAL")
-                tfm_conf = tfm_res.get("confidence", 0.0)
-                if direction == "BUY":
-                    if "BULLISH" in tfm_dir:
-                        confluence_score += 15
-                        reasons.append(f"DeepMind TimesFM {tfm_dir} (conf {tfm_conf:.0%})")
-                    elif "STRONG_BEARISH" in tfm_dir and tfm_conf > 0.6:
-                        logger.warning(f"[{symbol}] Vetoed by DeepMind TimesFM: Forecast predicts strong adverse bearish CVD drift!")
-                        return None
-                elif direction == "SELL":
-                    if "BEARISH" in tfm_dir:
-                        confluence_score += 15
-                        reasons.append(f"DeepMind TimesFM {tfm_dir} (conf {tfm_conf:.0%})")
-                    elif "STRONG_BULLISH" in tfm_dir and tfm_conf > 0.6:
-                        logger.warning(f"[{symbol}] Vetoed by DeepMind TimesFM: Forecast predicts strong adverse bullish CVD drift!")
-                        return None
+        try:
+            frame = self.olap.get_forecast_frame(symbol, 64)
+            if self.timesfm.is_available and len(frame) >= 16:
+                forecast = self.timesfm.forecast_normalized_delta_ratio(
+                    frame.cumulative_delta.to_numpy(), frame.total_volume.to_numpy(), 24, direction)
+                if forecast.get('adverse_veto'):
+                    return None
+                confluence_score -= forecast.get('confluence_hurdle_adjustment', 0.0)
+        except Exception as exc:
+            logger.warning('Forecast unavailable: %s', exc)
 
         # Check Risk to Reward Ratio
         risk_dist = abs(entry_price - sl_price)
@@ -475,15 +453,16 @@ class CryptoLiveTrader:
 
         # 5. Canonical Risk Envelope & Prop-Firm Floor Defense
         acct = mt5.account_info()
-        balance = acct.balance if acct else 4714.57
-        equity = acct.equity if acct else balance
+        if acct is None or acct.login != EXPECTED_MT5_LOGIN or acct.currency != "USD":
+            return None
+        balance, equity = acct.balance, acct.equity
 
-        floor_budget_risk, ok, budget_msg = compute_dynamic_capital_budget(equity)
+        floor_budget_risk, ok, budget_msg = compute_dynamic_capital_budget(equity, balance=balance)
         if not ok:
             logger.warning(f"[{symbol}] TRADING HALTED: {budget_msg}")
             return None
 
-        valid_geo, geo_msg = validate_trade_geometry(direction, entry_price, sl_price, tp1_price, spread_pct)
+        valid_geo, geo_msg = validate_trade_geometry(direction, entry_price, sl_price, tp1_price, spread_pct * 100.0)
         if not valid_geo:
             logger.warning(f"[{symbol}] Trade geometry rejected: {geo_msg}")
             return None
@@ -492,7 +471,7 @@ class CryptoLiveTrader:
         strat_weight = get_strategy_weight(strategy)
         regime_mult = regime_data.get("strategy_multipliers", {}).get(strategy, 1.0)
         final_target_risk = floor_budget_risk * strat_weight * regime_mult
-        final_target_risk = min(HARD_MAX_LOSS_USD, max(5.0, final_target_risk))
+        final_target_risk = min(floor_budget_risk, HARD_MAX_LOSS_USD, max(5.0, final_target_risk))
 
         final_lots, actual_risk = calculate_lot_size(info, final_target_risk, entry_price, sl_price)
         if final_lots <= 0:
@@ -519,71 +498,41 @@ class CryptoLiveTrader:
             "filling_mode": mt5.ORDER_FILLING_IOC
         }
 
-    def validate_and_adjust_stops_for_ticket(self, ticket: dict, info: mt5.SymbolInfo) -> bool:
-        """
-        Validates stops against broker stop levels. If retcode is 10016 (Invalid stops),
-        adaptively expands SL and TP until compliant, then recalculates lot size to maintain
-        strict 1.0% risk.
-        """
-        mt5_sym = ticket["mt5_symbol"]
-        order_type = mt5.ORDER_TYPE_BUY if ticket["direction"] == "BUY" else mt5.ORDER_TYPE_SELL
-        digits = info.digits
-        point = info.point
-
-        sl = ticket["stop_loss"]
-        tp = ticket["take_profit_1"]
-        lots = ticket["lots"]
-
-        for attempt in range(15):
-            req = {
-                "action": mt5.TRADE_ACTION_DEAL,
-                "symbol": mt5_sym,
-                "volume": lots,
-                "type": order_type,
-                "price": ticket["entry_price"],
-                "sl": sl,
-                "tp": tp,
-                "deviation": 20,
-                "magic": self.magic,
-                "comment": f"CG_{ticket['direction']}_{ticket['symbol']}",
-                "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": ticket["filling_mode"]
-            }
-            check = mt5.order_check(req)
-            if check.retcode == 0:
-                if ticket.get("risk_usd", 0) > HARD_MAX_LOSS_USD:
-                    logger.warning(f"[{mt5_sym}] Ticket risk exceeds $50.00 cap (${ticket.get('risk_usd'):.2f}). Order rejected.")
-                    return False
-                ticket["stop_loss"] = sl
-                ticket["take_profit_1"] = tp
-                ticket["lots"] = lots
-                return True
-            elif check.retcode == 10016:  # Invalid stops
-                # Expand SL and TP by 10 points further away
-                step_points = max(10, info.trade_stops_level) * point
-                if order_type == mt5.ORDER_TYPE_BUY:
-                    sl = round(sl - step_points, digits)
-                    tp = round(tp + step_points * 2, digits)
-                else:
-                    sl = round(sl + step_points, digits)
-                    tp = round(tp - step_points * 2, digits)
-
-                # Recompute lot size to maintain strict 1.0% dollar risk
-                acct = mt5.account_info()
-                balance = acct.balance if acct else 4714.57
-                risk_usd = balance * RISK_PERCENT
-                new_lots, actual_risk = calculate_lot_size(info, risk_usd, ticket["entry_price"], sl)
-                if new_lots <= 0:
-                    return False
-                lots = new_lots
-                ticket["risk_usd"] = actual_risk
-            else:
-                logger.warning(f"[{mt5_sym}] Order Check rejected ({check.retcode}): {check.comment}")
+    def validate_and_adjust_stops_for_ticket(self, ticket, info):
+        try:
+            tick = mt5.symbol_info_tick(ticket['mt5_symbol'])
+            if tick is None:
                 return False
+            entry = tick.ask if ticket['direction'] == 'BUY' else tick.bid
+            sized = native_size(mt5, ticket['mt5_symbol'], ticket['direction'], entry,
+                                ticket['stop_loss'], ticket['take_profit_1'], ticket.get('risk_usd', MAX_RISK_USD))
+            if info.trade_tick_size <= 0:
+                return False
+            for price in [entry, ticket['stop_loss'], ticket['take_profit_1']]:
+                if not math.isclose(price / info.trade_tick_size, round(price / info.trade_tick_size), abs_tol=1e-6):
+                    return False
+            ticket.update(entry_price=entry, lots=sized['lots'], risk_usd=sized['risk_usd'])
+            request = self._request(ticket)
+            check = mt5.order_check(request)
+            return check is not None and check.retcode == 0
+        except Exception as exc:
+            logger.warning('Native preflight rejected: %s', exc)
+            return False
 
-        return False
+    def _request(self, ticket):
+        return {'action': mt5.TRADE_ACTION_DEAL, 'symbol': ticket['mt5_symbol'],
+                'volume': ticket['lots'], 'type': mt5.ORDER_TYPE_BUY if ticket['direction'] == 'BUY' else mt5.ORDER_TYPE_SELL,
+                'price': ticket['entry_price'], 'sl': ticket['stop_loss'], 'tp': ticket['take_profit_1'],
+                'deviation': 20, 'magic': self.magic, 'comment': f"CG_{ticket['direction']}_{ticket['symbol']}",
+                'type_time': mt5.ORDER_TIME_GTC, 'type_filling': ticket['filling_mode']}
 
-    def execute_trade(self, ticket: dict) -> bool:
+    def execute_trade(self, ticket):
+        with FileMutex(DB_DIR / '.locks/mt5_admission.lock') as lock:
+            if not lock.acquired:
+                return False
+            return self._execute_trade_locked(ticket)
+
+    def _execute_trade_locked(self, ticket: dict) -> bool:
         """Executes a formulated trade directly on MT5."""
         mt5_sym = ticket["mt5_symbol"]
         info = mt5.symbol_info(mt5_sym)
@@ -596,28 +545,43 @@ class CryptoLiveTrader:
             logger.error(f"[{mt5_sym}] Could not find broker-compliant stops. Aborting.")
             return False
 
-        order_type = mt5.ORDER_TYPE_BUY if ticket["direction"] == "BUY" else mt5.ORDER_TYPE_SELL
-
-        req = {
-            "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": mt5_sym,
-            "volume": ticket["lots"],
-            "type": order_type,
-            "price": ticket["entry_price"],
-            "sl": ticket["stop_loss"],
-            "tp": ticket["take_profit_1"],
-            "deviation": 20,
-            "magic": self.magic,
-            "comment": f"CG_{ticket['direction']}_{ticket['symbol']}",
-            "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": ticket["filling_mode"]
-        }
+        req = self._request(ticket)
+        intent_file = DB_DIR / 'mt5_execution_intents.json'
+        try:
+            intents = json.loads(intent_file.read_text()) if intent_file.exists() else {}
+            key = hashlib.sha256(str(ticket['signal_key']).encode()).hexdigest()
+            if key in intents or any(v['status'] in ('SENDING', 'UNRESOLVED') for v in intents.values()):
+                logger.error('Duplicate or unresolved execution intent; reconciliation required')
+                return False
+            intents[key] = {'status': 'SENDING', 'request': req, 'at': datetime.now(timezone.utc).isoformat()}
+            atomic_json(intent_file, intents)
+        except Exception as exc:
+            logger.error('Cannot persist execution intent: %s', exc)
+            return False
 
         logger.info(f"Submitting MT5 Order: {ticket['direction']} {ticket['lots']} {mt5_sym} @ {ticket['entry_price']} | SL: {ticket['stop_loss']} | TP: {ticket['take_profit_1']} | Risk: ${ticket['risk_usd']:.2f}")
 
-        res = mt5.order_send(req)
-        if not res or res.retcode != mt5.TRADE_RETCODE_DONE:
-            logger.error(f"MT5 Order Send failed ({res.retcode if res else 'None'}): {res.comment if res else 'Unknown'}")
+        try:
+            res = mt5.order_send(req)
+        except Exception:
+            res = None
+        # Ambiguous responses remain latched; never blindly retry a possible fill.
+        if res is None or res.retcode not in (mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_DONE_PARTIAL):
+            intents[key]['status'] = 'UNRESOLVED'
+            atomic_json(intent_file, intents)
+            logger.error('Execution not confirmed; intent retained for reconciliation')
+            return False
+        verified = mt5.positions_get(symbol=mt5_sym)
+        protected = verified is not None and any(
+            p.magic == self.magic and p.type == req['type'] and p.sl > 0 and p.tp > 0
+            and math.isclose(p.sl, req['sl'], abs_tol=info.trade_tick_size / 2)
+            and math.isclose(p.tp, req['tp'], abs_tol=info.trade_tick_size / 2)
+            for p in verified)
+        intents[key].update(status='CONFIRMED' if protected else 'UNRESOLVED', order=res.order,
+                            deal=res.deal, volume=res.volume)
+        atomic_json(intent_file, intents)
+        if not protected:
+            logger.error('Fill protection could not be verified; new admissions latched')
             return False
 
         deal_ticket = res.order

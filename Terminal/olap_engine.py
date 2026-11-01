@@ -12,6 +12,8 @@ import os
 import sys
 import json
 import logging
+import re
+from Terminal.runtime_io import completed_candles
 from pathlib import Path
 from typing import List, Dict, Optional, Any
 from datetime import datetime, timezone
@@ -55,137 +57,106 @@ class OlapEngine:
             except Exception as e:
                 logger.warning(f"Could not initialize whale_snapshots view: {e}")
 
-    def query_whale_walls(self, symbol: str) -> Dict[str, Any]:
-        """Calculates total bid vs ask whale wall pressure within +-3% and +-10% of current price."""
-        open_file = OPEN_ORDERS_DIR / f"{symbol}_whale_open_orders.parquet"
-        if not open_file.exists():
-            return {"bid_walls_usd": 0.0, "ask_walls_usd": 0.0, "nearest_bid": None, "nearest_ask": None, "imbalance": 0.5}
-
-        query = f"""
-        WITH parsed AS (
-            SELECT 
-                side,
-                price,
-                CAST(from_price_pct AS DOUBLE) AS pct_dist,
-                remaining_usd AS size_usd
-            FROM read_parquet('{open_file.as_posix()}')
-        )
-        SELECT 
-            side,
-            COALESCE(SUM(size_usd), 0.0) AS total_usd,
-            COALESCE(SUM(CASE WHEN ABS(pct_dist) <= 3.0 THEN size_usd ELSE 0.0 END), 0.0) AS tight_usd,
-            COUNT(*) AS wall_count
-        FROM parsed
-        GROUP BY side
-        """
+    def query_whale_walls(self, symbol):
         try:
-            df = self.con.execute(query).df()
-            bids = df[df["side"].str.lower().str.contains("bid")]
-            asks = df[df["side"].str.lower().str.contains("ask")]
+            self._validate_symbol(symbol)
+            frame = pd.read_parquet(OPEN_ORDERS_DIR / f'{symbol}_whale_open_orders.parquet')
+            frame = self._latest_snapshot(frame)
+            age = (datetime.now(timezone.utc) - pd.to_datetime(frame.snapshot_time_utc.iloc[0], utc=True)).total_seconds()
+            if not 0 <= age <= 1800:
+                raise ValueError('Whale snapshot stale or future')
+            for col in ['price', 'remaining_usd', 'from_price_pct']:
+                frame[col] = pd.to_numeric(frame[col], errors='raise')
+                if not np.isfinite(frame[col]).all():
+                    raise ValueError('Nonfinite whale depth')
+            if (frame.remaining_usd < 0).any():
+                raise ValueError('Negative whale depth')
+            side = frame.side.str.lower()
+            bids = frame[side.str.contains('bid')]
+            asks = frame[side.str.contains('ask')]
+            bid = float(bids.loc[bids.from_price_pct.abs() <= 3, 'remaining_usd'].sum())
+            ask = float(asks.loc[asks.from_price_pct.abs() <= 3, 'remaining_usd'].sum())
+            if bid + ask <= 0:
+                raise ValueError('No usable whale depth')
+            return {'data_valid': True, 'tight_bid_walls_usd': bid, 'tight_ask_walls_usd': ask,
+                    'whale_imbalance_bid_ratio': bid / (bid + ask),
+                    'total_bids_usd': float(bids.remaining_usd.sum()), 'total_asks_usd': float(asks.remaining_usd.sum()),
+                    'age_seconds': age}
+        except Exception as exc:
+            return {'data_valid': False, 'error': str(exc), 'whale_imbalance_bid_ratio': 0.5}
 
-            bid_usd = float(bids["tight_usd"].iloc[0]) if not bids.empty else 0.0
-            ask_usd = float(asks["tight_usd"].iloc[0]) if not asks.empty else 0.0
-            total = bid_usd + ask_usd
-            imbalance = round(bid_usd / total, 3) if total > 0 else 0.5
-
-            return {
-                "tight_bid_walls_usd": bid_usd,
-                "tight_ask_walls_usd": ask_usd,
-                "whale_imbalance_bid_ratio": imbalance,
-                "total_bids_usd": float(bids["total_usd"].iloc[0]) if not bids.empty else 0.0,
-                "total_asks_usd": float(asks["total_usd"].iloc[0]) if not asks.empty else 0.0
-            }
-        except Exception as e:
-            return {"error": str(e), "whale_imbalance_bid_ratio": 0.5}
-
-    def query_liquidation_confluence(self, symbol: str) -> Dict[str, Any]:
-        """Analyzes magnet zones and near field balance for liquidation pressure."""
-        near_file = NEAR_FIELD_DIR / f"{symbol}_near_field.parquet"
-        mag_file = MAGNET_DIR / f"{symbol}_magnet_zones.parquet"
-
-        res = {"near_field_shorts_pct": 50.0, "top_magnet_zone": None}
-        if near_file.exists():
-            try:
-                df = self.con.execute(f"SELECT * FROM read_parquet('{near_file.as_posix()}')").df()
-                if not df.empty and "shorts_pct" in df.columns:
-                    res["near_field_shorts_pct"] = float(df["shorts_pct"].iloc[0])
-            except Exception:
-                pass
-
-        if mag_file.exists():
-            try:
-                m_df = self.con.execute(f"SELECT * FROM read_parquet('{mag_file.as_posix()}') ORDER BY score DESC LIMIT 1").df()
-                if not m_df.empty:
-                    res["top_magnet_zone"] = {
-                        "side": m_df["side"].iloc[0],
-                        "price_band": m_df["price_band"].iloc[0] if "price_band" in m_df.columns else "",
-                        "distance_pct": m_df["distance_pct"].iloc[0] if "distance_pct" in m_df.columns else 0.0
-                    }
-            except Exception:
-                pass
-
-        return res
-
-    def query_cvd_trend(self, symbol: str, lookback_bars: int = 12) -> Dict[str, Any]:
-        """Evaluates 15m order-flow candle delta and CVD direction over lookback bars."""
-        candle_file = CANDLE_DIR / f"{symbol}.parquet"
-        if not candle_file.exists():
-            return {"cvd_slope": "NEUTRAL", "cumulative_delta": 0.0, "poc_price": None}
-
-        query = f"""
-        SELECT open_time_utc, close, total_volume, delta, cumulative_delta, poc_price
-        FROM read_parquet('{candle_file.as_posix()}')
-        ORDER BY open_time_ms DESC
-        LIMIT {lookback_bars}
-        """
+    def query_liquidation_confluence(self, symbol):
+        result = {'data_valid': False, 'near_field_shorts_pct': 50.0, 'top_magnet_zone': None}
         try:
-            df = self.con.execute(query).df()
-            if df.empty:
-                return {"cvd_slope": "NEUTRAL", "cumulative_delta": 0.0, "poc_price": None}
+            self._validate_symbol(symbol)
+            frame = self._latest_snapshot(pd.read_parquet(NEAR_FIELD_DIR / f'{symbol}_near_field.parquet'))
+            value = float(frame.shorts_pct.iloc[-1])
+            if not np.isfinite(value) or not 0 <= value <= 100:
+                raise ValueError('Invalid near-field percentage')
+            result.update(data_valid=True, near_field_shorts_pct=value)
+            path = MAGNET_DIR / f'{symbol}_magnet_zones.parquet'
+            if path.exists():
+                magnets = self._latest_snapshot(pd.read_parquet(path)).sort_values('score', ascending=False)
+                if not magnets.empty:
+                    result['top_magnet_zone'] = magnets.iloc[0].to_dict()
+        except Exception as exc:
+            result.update(data_valid=False, error=str(exc))
+        return result
 
-            latest_poc = float(df["poc_price"].iloc[0]) if pd.notnull(df["poc_price"].iloc[0]) else None
-            recent_delta_sum = float(df["delta"].sum())
-            price_change = float(df["close"].iloc[0] - df["close"].iloc[-1])
-
-            # Detect CVD Divergence: Price falling but delta aggressive buying -> Bullish Divergence
-            if price_change < 0 and recent_delta_sum > 0:
-                slope = "BULLISH_DIVERGENCE"
-            elif price_change > 0 and recent_delta_sum < 0:
-                slope = "BEARISH_DIVERGENCE"
-            elif recent_delta_sum > 0:
-                slope = "BULLISH_FLOW"
+    def query_cvd_trend(self, symbol, lookback_bars=12):
+        try:
+            frame = self.get_forecast_frame(symbol, lookback_bars)
+            delta = float(frame.delta.sum())
+            change = float(frame.close.iloc[-1] - frame.close.iloc[0])
+            # Price/tape disagreement is unresolved absorption, not proof of reversal.
+            if change * delta < 0:
+                slope = 'PRICE_DELTA_DISAGREEMENT'
             else:
-                slope = "BEARISH_FLOW"
+                slope = 'BULLISH_FLOW' if delta > 0 else 'BEARISH_FLOW' if delta < 0 else 'NEUTRAL'
+            poc = float(frame.poc_price.iloc[-1])
+            return {'data_valid': True, 'cvd_slope': slope, 'recent_net_delta': delta,
+                    'recent_poc': poc if np.isfinite(poc) and poc > 0 else None, 'bars_analyzed': len(frame)}
+        except Exception as exc:
+            return {'data_valid': False, 'error': str(exc), 'cvd_slope': 'NEUTRAL'}
 
-            return {
-                "cvd_slope": slope,
-                "recent_net_delta": recent_delta_sum,
-                "recent_poc": latest_poc,
-                "bars_analyzed": len(df)
-            }
-        except Exception as e:
-            return {"error": str(e), "cvd_slope": "NEUTRAL"}
-
-    def get_series(self, symbol: str, metric: str = "cumulative_delta", limit: int = 64) -> np.ndarray:
-        """Returns chronological 1D array of metric (e.g. cumulative_delta or close) for DeepMind TimesFM."""
-        candle_file = CANDLE_DIR / f"{symbol}.parquet"
-        if not candle_file.exists():
-            return np.array([], dtype=np.float32)
-        query = f"""
-        SELECT {metric}
-        FROM read_parquet('{candle_file.as_posix()}')
-        WHERE {metric} IS NOT NULL
-        ORDER BY open_time_ms DESC
-        LIMIT {limit}
-        """
+    def get_series(self, symbol, metric='cumulative_delta', limit=64):
+        if metric not in {'cumulative_delta', 'close', 'total_volume', 'delta'}:
+            raise ValueError('Unsupported forecast metric')
         try:
-            df = self.con.execute(query).df()
-            if df.empty:
-                return np.array([], dtype=np.float32)
-            # Reverse to chronological order (oldest to newest)
-            return df[metric].values[::-1].astype(np.float32)
+            return self.get_forecast_frame(symbol, limit)[metric].to_numpy(dtype=np.float64)
         except Exception:
-            return np.array([], dtype=np.float32)
+            return np.array([], dtype=np.float64)
+
+    @staticmethod
+    def _validate_symbol(symbol):
+        if not isinstance(symbol, str) or re.fullmatch(r'[A-Z0-9_]+', symbol) is None:
+            raise ValueError('Invalid asset symbol')
+
+    @staticmethod
+    def _latest_snapshot(frame):
+        if frame.empty or 'snapshot_time_utc' not in frame:
+            raise ValueError('Missing snapshot timestamp')
+        times = pd.to_datetime(frame.snapshot_time_utc, utc=True, errors='raise')
+        age = (datetime.now(timezone.utc) - times.max()).total_seconds()
+        if not 0 <= age <= 1800:
+            raise ValueError('Snapshot stale or future')
+        return frame.loc[times == times.max()].copy()
+
+    def get_forecast_frame(self, symbol, limit=64):
+        self._validate_symbol(symbol)
+        if not isinstance(limit, int) or not 2 <= limit <= 10000:
+            raise ValueError('Invalid context length')
+        frame = completed_candles(pd.read_parquet(CANDLE_DIR / f'{symbol}.parquet')).tail(limit)
+        for col in ['close', 'cumulative_delta', 'total_volume', 'delta']:
+            frame[col] = pd.to_numeric(frame[col], errors='raise')
+            if not np.isfinite(frame[col]).all():
+                raise ValueError('Nonfinite candle input')
+        if (frame.close <= 0).any() or (frame.total_volume < 0).any():
+            raise ValueError('Invalid price or volume')
+        return frame
+
+    def close(self):
+        self.con.close()
 
     def scan_all_confluences(self, symbols: List[str]) -> List[Dict[str, Any]]:
         """Instant multi-stream scoring across all mutual symbols."""

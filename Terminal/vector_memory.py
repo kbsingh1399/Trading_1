@@ -13,6 +13,7 @@ Persistent memory system for:
 import os
 import sys
 import logging
+import math
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Optional, Any, Tuple
@@ -22,6 +23,7 @@ import numpy as np
 import lancedb
 import pyarrow as pa
 from fastembed import TextEmbedding
+from Terminal.runtime_io import completed_candles
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DB_DIR = ROOT_DIR / "Database"
@@ -111,6 +113,10 @@ class VectorMemory:
             logger.info("Created 'counterfactual_setups' LanceDB vector table.")
         else:
             self.table_counterfactual = self.db.open_table("counterfactual_setups")
+            if "counterfactual_r" not in self.table_counterfactual.schema.names:
+                logger.info("Migrating counterfactual_setups schema to include counterfactual_r...")
+                self.db.drop_table("counterfactual_setups")
+                self.table_counterfactual = self.db.create_table("counterfactual_setups", schema=schema_counterfactual)
 
     def query_similar_setups(self, setup_text: str, top_k: int = 3) -> Dict[str, Any]:
         """
@@ -134,9 +140,13 @@ class VectorMemory:
             total = len(completed)
             win_rate = wins / float(total)
 
-            if win_rate >= 0.60:
+            # Three nearest texts are not a calibrated estimate of profitability.
+            z = 1.96
+            center = (win_rate + z*z/(2*total)) / (1 + z*z/total)
+            radius = z * math.sqrt(win_rate*(1-win_rate)/total + z*z/(4*total*total)) / (1+z*z/total)
+            if total >= 20 and center - radius > 0.5:
                 verdict = "FAVORABLE"
-            elif win_rate <= 0.40:
+            elif total >= 20 and center + radius < 0.5:
                 verdict = "UNFAVORABLE"
             else:
                 verdict = "INCONCLUSIVE"
@@ -216,13 +226,10 @@ class VectorMemory:
                 if cdf.empty or "high" not in cdf.columns or "low" not in cdf.columns:
                     continue
 
-                decision_ts = pd.to_datetime(row["timestamp"])
-                # Filter strictly forward bars
-                if "time" in cdf.columns:
-                    cdf["dt"] = pd.to_datetime(cdf["time"])
-                    forward = cdf[cdf["dt"] > decision_ts].sort_values("dt").head(24)
-                else:
-                    forward = cdf.tail(24)
+                decision_ts = pd.to_datetime(row['timestamp'], utc=True)
+                cdf = completed_candles(cdf)
+                cdf['dt'] = pd.to_datetime(cdf['open_time_ms'], unit='ms', utc=True)
+                forward = cdf[cdf['dt'] >= decision_ts].sort_values('dt').head(24)
 
                 if forward.empty:
                     continue
@@ -233,13 +240,23 @@ class VectorMemory:
                 tp = row["take_profit"]
                 risk_dist = abs(entry - sl) + 1e-9
 
-                outcome = "HYPO_EXPIRED"
+                outcome = "UNEVALUATED"
+                filled = False
                 realized_r = 0.0
 
                 for _, bar in forward.iterrows():
                     high = bar["high"]
                     low = bar["low"]
 
+                    if not filled:
+                        filled = low <= entry <= high
+                        if not filled:
+                            continue
+                        # Intrabar path is unknown: no target credit on the fill bar.
+                        if (direction == 'BUY' and low <= sl) or (direction == 'SELL' and high >= sl):
+                            outcome, realized_r = 'HYPO_LOSS', -1.0
+                            break
+                        continue
                     if direction == "BUY":
                         hit_tp = high >= tp
                         hit_sl = low <= sl
@@ -273,6 +290,13 @@ class VectorMemory:
                             realized_r = round((entry - tp) / risk_dist, 2)
                             break
 
+                if outcome == 'UNEVALUATED':
+                    if len(forward) < 24:
+                        continue
+                    if not filled:
+                        outcome = 'HYPO_UNFILLED'
+                    else:
+                        outcome = 'HYPO_EXPIRED'
                 if outcome == "HYPO_EXPIRED":
                     last_close = forward.iloc[-1]["close"] if "close" in forward.columns else entry
                     if direction == "BUY":
@@ -280,12 +304,12 @@ class VectorMemory:
                     else:
                         realized_r = round((entry - last_close) / risk_dist, 2)
 
-                df.at[idx, "counterfactual_outcome"] = outcome
-                df.at[idx, "counterfactual_r"] = float(realized_r)
+                key = str(row['alert_id']).replace("'", "''")
+                self.table_counterfactual.update(where=f"alert_id = '{key}' AND counterfactual_outcome = 'UNEVALUATED'",
+                    values={'counterfactual_outcome': outcome, 'counterfactual_r': float(realized_r)})
                 updated_count += 1
 
             if updated_count > 0:
-                self.table_counterfactual = self.db.create_table("counterfactual_setups", df, mode="overwrite")
                 logger.info(f"Simulated {updated_count} counterfactual trade outcomes in LanceDB.")
 
             return {"updated": updated_count, "status": "SUCCESS"}

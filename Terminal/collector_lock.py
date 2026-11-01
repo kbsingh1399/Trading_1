@@ -22,6 +22,7 @@ import urllib.request
 import subprocess
 from pathlib import Path
 from typing import Optional, Tuple
+from Terminal.runtime_io import FileMutex
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DB_DIR = ROOT_DIR / "Database"
@@ -65,16 +66,16 @@ def rotate_warp_ip(context: str = "Collector", reason: str = "SCHEDULED", force:
     valid_reasons = ["CHALLENGE", "HTTP_403", "HTTP_429", "CONSECUTIVE_EMPTY_SCRAPES", "MANUAL_OVERRIDE"]
     if not force and reason not in valid_reasons:
         logger.info(f"[{context}] [Cloudflare WARP] Normal operation ({reason}). Rotation skipped to preserve session cookies.")
-        return get_current_ip()
+        return "unknown"
 
     if not force and (now - _LAST_ROTATION_TIME < MIN_ROTATION_INTERVAL_SECS):
         logger.info(f"[{context}] [Cloudflare WARP] Cooldown active ({int(now - _LAST_ROTATION_TIME)}s / {int(MIN_ROTATION_INTERVAL_SECS)}s). Skipped.")
-        return get_current_ip()
+        return "unknown"
 
     # Qwen F-16: Grace window prevents newly rotated IP cookie refresh from re-triggering CONSECUTIVE_EMPTY_SCRAPES
     if reason == "CONSECUTIVE_EMPTY_SCRAPES" and (now - _LAST_ROTATION_TIME < (MIN_ROTATION_INTERVAL_SECS + POST_ROTATION_GRACE_SECS)):
         logger.info(f"[{context}] [Cloudflare WARP] Post-rotation grace active. Skipped empty-scrape re-trigger.")
-        return get_current_ip()
+        return "unknown"
 
     if not WARP_CLI.exists():
         logger.warning(f"[{context}] WARP CLI binary not found at: {WARP_CLI}")
@@ -83,11 +84,11 @@ def rotate_warp_ip(context: str = "Collector", reason: str = "SCHEDULED", force:
     old_ip = get_current_ip()
     logger.info(f"[{context}] [Cloudflare WARP] Rotation triggered ({reason}). Old IP: {old_ip}")
     try:
-        subprocess.run([str(WARP_CLI), "disconnect"], capture_output=True, text=True, check=False)
+        subprocess.run([str(WARP_CLI), "disconnect"], capture_output=True, text=True, check=True, timeout=10)
         time.sleep(1.0)
-        subprocess.run([str(WARP_CLI), "tunnel", "rotate-keys"], capture_output=True, text=True, check=False)
+        subprocess.run([str(WARP_CLI), "tunnel", "rotate-keys"], capture_output=True, text=True, check=True, timeout=10)
         time.sleep(1.0)
-        subprocess.run([str(WARP_CLI), "connect"], capture_output=True, text=True, check=False)
+        subprocess.run([str(WARP_CLI), "connect"], capture_output=True, text=True, check=True, timeout=10)
         time.sleep(3.0)
         new_ip = get_current_ip()
         _LAST_ROTATION_TIME = time.time()
@@ -102,54 +103,21 @@ def rotate_warp_ip(context: str = "Collector", reason: str = "SCHEDULED", force:
 LOCK_CONTENTION_SKIPS = 0
 
 
-class BrowserLock:
-    """
-    Fast, deadline-enforcing browser mutex.
-    Acquires CDP lock with a 2.0s deadline. If contested, sets acquired=False
-    so callers can cleanly SKIP rather than blocking in a stale latency queue.
-    """
-    def __init__(self, collector_name: str, timeout_secs: float = 2.0, lock_file: Optional[Path] = None):
+class BrowserLock(FileMutex):
+    """OS-backed browser mutex with a monotonic, bounded acquisition deadline."""
+    def __init__(self, collector_name, timeout_secs=2.0, lock_file=None):
+        super().__init__(lock_file or BROWSER_LOCK_FILE, timeout_secs)
         self.collector_name = collector_name
+        self.lock_file = self.path
         self.timeout_secs = timeout_secs
-        self.lock_file = lock_file or BROWSER_LOCK_FILE
-        self.acquired = False
 
     def __enter__(self):
         global LOCK_CONTENTION_SKIPS
-        start = time.time()
-        while time.time() - start < self.timeout_secs:
-            if not self.lock_file.exists():
-                try:
-                    self.lock_file.write_text(f"{self.collector_name}:{os.getpid()}:{time.time()}")
-                    self.acquired = True
-                    logger.info(f"[{self.collector_name}] Acquired shared browser lock.")
-                    return self
-                except Exception:
-                    pass
-            else:
-                # Check for stale lock (> 180 seconds old)
-                try:
-                    content = self.lock_file.read_text().strip()
-                    parts = content.split(":")
-                    if len(parts) >= 3 and time.time() - float(parts[2]) > 180:
-                        logger.warning(f"[{self.collector_name}] Clearing stale browser lock held by {parts[0]}")
-                        self.lock_file.unlink(missing_ok=True)
-                        continue
-                except Exception:
-                    pass
-            time.sleep(0.2)
-
-        LOCK_CONTENTION_SKIPS += 1
-        logger.info(f"[{self.collector_name}] SKIPPED_LOCK_CONTENTION (total skips: {LOCK_CONTENTION_SKIPS}): Browser busy. Yielding immediately without blocking.")
+        super().__enter__()
+        if not self.acquired:
+            LOCK_CONTENTION_SKIPS += 1
+            logger.info('[%s] SKIPPED_LOCK_CONTENTION', self.collector_name)
         return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.acquired:
-            try:
-                self.lock_file.unlink(missing_ok=True)
-                logger.info(f"[{self.collector_name}] Released shared browser lock.")
-            except Exception:
-                pass
 
 
 # Canonical 30-minute half-life constant (Qwen F-05, DeepSeek AUD-05)
@@ -169,7 +137,7 @@ def calculate_wall_decay_weight(age_seconds: float, tau: float = TAU_30MIN_HALFL
     - At age 60m (3600s): weight = 0.2500 (Two half-lives)
     Eliminates binary 30s cut-off mismatches on 15m collection cadences.
     """
-    if age_seconds < 0.0:
+    if not math.isfinite(age_seconds) or not math.isfinite(tau) or tau <= 0 or age_seconds < 0.0:
         return 0.0
     return float(round(math.exp(-age_seconds / tau), 4))
 

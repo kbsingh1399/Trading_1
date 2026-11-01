@@ -20,7 +20,7 @@ from typing import Dict, Any, Optional
 
 import numpy as np
 import pandas as pd
-from hmmlearn import hmm
+from Terminal.runtime_io import completed_candles
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DB_DIR = ROOT_DIR / "Database"
@@ -56,7 +56,7 @@ class RegimeDetector:
             }
 
         try:
-            df = pd.read_parquet(candle_file)
+            df = completed_candles(pd.read_parquet(candle_file))
             if len(df) < 10:
                 return {"symbol": symbol, "regime": "INSUFFICIENT_DATA", "strategy_multipliers": {}}
 
@@ -87,7 +87,7 @@ class RegimeDetector:
             cvd_slope = 0.0
             if "delta" in df.columns:
                 delta_sum = df["delta"].iloc[-5:].sum()
-                vol_sum = df["volume"].iloc[-5:].sum() if "volume" in df.columns else 1.0
+                vol_sum = df["total_volume"].iloc[-5:].sum() if "total_volume" in df.columns else 0.0
                 cvd_slope = float(delta_sum / vol_sum) if vol_sum > 0 else 0.0
 
             # Regime Classification Rules

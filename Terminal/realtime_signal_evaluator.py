@@ -19,6 +19,8 @@ import os
 import sys
 import json
 import logging
+import math
+import hashlib
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Optional
@@ -34,6 +36,8 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+from Terminal.runtime_io import writer_lock, atomic_parquet
+from Terminal.venue_admission import matchtrader_symbol, native_size
 from Terminal.olap_engine import OlapEngine
 from Terminal.regime_detector import RegimeDetector
 from Terminal.vector_memory import VectorMemory
@@ -72,7 +76,11 @@ class RealtimeSignalEvaluator:
     def __init__(self):
         self.olap = OlapEngine()
         self.regime_det = RegimeDetector()
-        self.vector_mem = VectorMemory()
+        try:
+            self.vector_mem = VectorMemory()
+        except Exception as exc:
+            logger.warning('Vector memory unavailable: %s', exc)
+            self.vector_mem = None
         self.timesfm = DeepMindTimesFMForecaster()
 
     def query_live_tv_liquidations(self, sym: str) -> Dict[str, Any]:
@@ -83,7 +91,13 @@ class RealtimeSignalEvaluator:
         try:
             with open(sig_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                return data.get(sym, {})
+                item = data.get(sym, {})
+                observed = datetime.fromisoformat(item['updated_at_utc'])
+                bar = datetime.fromisoformat(item.get('spike_bar_time_utc') or item['last_bar_time_utc'].replace('Z', '+00:00'))
+                now = datetime.now(timezone.utc)
+                if not 0 <= (now-observed).total_seconds() <= 180 or not 0 <= (now-bar).total_seconds() <= 1800:
+                    return {}
+                return item
         except Exception:
             return {}
 
@@ -95,7 +109,12 @@ class RealtimeSignalEvaluator:
         mt5_sym = sig.get("mt5_symbol", "")
         sig_name = sig.get("sig_name", "")
         sig_side = str(sig.get("side", "")).lower()
-        sig_price = float(sig.get("price", 0.0))
+        try:
+            sig_price = float(sig.get("price", 0.0))
+        except (ValueError, TypeError):
+            sig_price = 0.0
+        if not math.isfinite(sig_price):
+            sig_price = 0.0
         sig_time = sig.get("datetime_utc", "")
         sig_desc = sig.get("description", "")
         sig_title = sig.get("title", "")
@@ -105,8 +124,8 @@ class RealtimeSignalEvaluator:
         liq = self.olap.query_liquidation_confluence(sym)
         cvd = self.olap.query_cvd_trend(sym, lookback_bars=16)
 
-        whale_imbalance = whales.get("whale_imbalance_bid_ratio", 0.5)
-        near_field_shorts = liq.get("near_field_shorts_pct", 50.0)
+        whale_imbalance = self._finite(whales.get("whale_imbalance_bid_ratio"), 0.5)
+        near_field_shorts = self._finite(liq.get("near_field_shorts_pct"), 50.0)
         cvd_slope = cvd.get("cvd_slope", "NEUTRAL")
         poc_price = cvd.get("recent_poc")
 
@@ -123,7 +142,7 @@ class RealtimeSignalEvaluator:
         if ("absorption" in sig_name.lower() and sig_side in ["buy", "bullish"]) or \
            ("trapped shorts" in sig_name.lower()) or \
            ("bull div" in sig_name.lower()) or \
-           ("exhaustion" in sig_name.lower() and sig_side in ["sell", "bearish"]) or \
+           ("exhaustion" in sig_name.lower() and "liquidation" not in sig_name.lower() and sig_side in ["sell", "bearish"]) or \
            ("liquidation exhaustion" in sig_name.lower() and sig_side in ["buy", "bullish"]):
             direction = "BUY"
             if whale_imbalance >= 0.55:
@@ -140,7 +159,7 @@ class RealtimeSignalEvaluator:
         elif ("absorption" in sig_name.lower() and sig_side in ["sell", "bearish"]) or \
              ("trapped longs" in sig_name.lower()) or \
              ("bear div" in sig_name.lower()) or \
-             ("exhaustion" in sig_name.lower() and sig_side in ["buy", "bullish"]) or \
+             ("exhaustion" in sig_name.lower() and "liquidation" not in sig_name.lower() and sig_side in ["buy", "bullish"]) or \
              ("liquidation exhaustion" in sig_name.lower() and sig_side in ["sell", "bearish"]):
             direction = "SELL"
             if whale_imbalance <= 0.45:
@@ -155,9 +174,12 @@ class RealtimeSignalEvaluator:
 
         # 3. Vector Memory Analogs
         setup_desc = f"{sym} {direction} {sig_name} with Whale Imbalance {whale_imbalance:.1%}, CVD {cvd_slope}, Regime {current_regime}"
-        analogs = self.vector_mem.query_similar_setups(setup_desc, top_k=3)
+        try:
+            analogs = (self.vector_mem.query_similar_setups(setup_desc, top_k=3) if self.vector_mem else {}) or {}
+        except Exception:
+            analogs = {}
         vm_verdict = analogs.get("verdict", "INCONCLUSIVE")
-        vm_win_rate = analogs.get("win_rate", 0.5)
+        vm_win_rate = self._finite(analogs.get("win_rate"), 0.5)
 
         if vm_verdict == "FAVORABLE":
             confluence_score += 10
@@ -170,9 +192,9 @@ class RealtimeSignalEvaluator:
         tv_liq = self.query_live_tv_liquidations(sym)
         has_tv_liq_spike = bool(tv_liq.get("recent_spike", False))
         tv_liq_bias = tv_liq.get("reversal_bias", "NEUTRAL")
-        tv_liq_exhaustion = float(tv_liq.get("exhaustion_score", 0.0))
-        tv_liq_long_usd = float(tv_liq.get("latest_long_liq_usd", 0.0))
-        tv_liq_short_usd = float(tv_liq.get("latest_short_liq_usd", 0.0))
+        tv_liq_exhaustion = self._finite(tv_liq.get("exhaustion_score"), 0.0)
+        tv_liq_long_usd = self._finite(tv_liq.get("latest_long_liq_usd"), 0.0)
+        tv_liq_short_usd = self._finite(tv_liq.get("latest_short_liq_usd"), 0.0)
 
         if direction == "BUY":
             if has_tv_liq_spike and tv_liq_bias == "BULLISH_REVERSAL":
@@ -189,64 +211,27 @@ class RealtimeSignalEvaluator:
                 confluence_score -= 15
                 reasons.append(f"Adverse Long Liq Cascade Bottom (${tv_liq_long_usd:,.0f} long liq already exhausted)")
 
-        # 4. Google DeepMind TimesFM 2.5 Dual Stationary Increments (CVD + Price)
-        cvd_series = self.olap.get_series(sym, "cumulative_delta", limit=64)
-        price_series = self.olap.get_series(sym, "close", limit=64)
-        
-        tfm_cvd = {"available": False}
-        tfm_price = {"available": False}
-        
-        if self.timesfm.is_available:
-            if len(cvd_series) >= 16:
-                # Stationary increments forecast: ΔCVD_t = CVD_t - CVD_{t-1}
-                tfm_cvd = self.timesfm.forecast_increments(cvd_series, horizon=8)
-            if len(price_series) >= 16:
-                tfm_price = self.timesfm.forecast_increments(price_series, horizon=8)
-
-        cvd_dir = tfm_cvd.get("increment_direction", "NEUTRAL") if tfm_cvd.get("available") else "N/A"
-        cvd_conf = tfm_cvd.get("confidence", 0.0)
-        cvd_unc_mult = tfm_cvd.get("uncertainty_multiplier", 1.0)
-
-        price_dir = tfm_price.get("increment_direction", "NEUTRAL") if tfm_price.get("available") else "N/A"
-        price_conf = tfm_price.get("confidence", 0.0)
-
-        # Epistemic uncertainty discounts maximum risk budget
-        effective_max_risk = round(MAX_RISK_USD * cvd_unc_mult, 2)
-        effective_max_risk = max(MIN_RISK_USD, effective_max_risk)
-
-        if direction == "BUY":
-            if "BULLISH" in cvd_dir:
-                confluence_score += 10
-                reasons.append(f"TimesFM CVD {cvd_dir} (conf {cvd_conf:.0%}, unc_mult {cvd_unc_mult:.2f})")
-            elif "STRONG_BEARISH" in cvd_dir and cvd_conf > 0.6:
-                confluence_score -= 20
-                reasons.append(f"TimesFM Adverse CVD Veto ({cvd_dir})")
-                
-            if "BULLISH" in price_dir:
-                confluence_score += 10
-                reasons.append(f"TimesFM Price {price_dir} ({price_conf:.0%})")
-            elif "STRONG_BEARISH" in price_dir and price_conf > 0.6:
-                confluence_score -= 20
-                reasons.append(f"TimesFM Adverse Price Veto ({price_dir})")
-                
-        elif direction == "SELL":
-            if "BEARISH" in cvd_dir:
-                confluence_score += 10
-                reasons.append(f"TimesFM CVD {cvd_dir} (conf {cvd_conf:.0%}, unc_mult {cvd_unc_mult:.2f})")
-            elif "STRONG_BULLISH" in cvd_dir and cvd_conf > 0.6:
-                confluence_score -= 20
-                reasons.append(f"TimesFM Adverse CVD Veto ({cvd_dir})")
-                
-            if "BEARISH" in price_dir:
-                confluence_score += 10
-                reasons.append(f"TimesFM Price {price_dir} ({price_conf:.0%})")
-            elif "STRONG_BULLISH" in price_dir and price_conf > 0.6:
-                confluence_score -= 20
-                reasons.append(f"TimesFM Adverse Price Veto ({price_dir})")
+        # Forecast aligned completed-bar flow ratios through the implemented API.
+        tfm_cvd, tfm_price = {}, {}
+        try:
+            frame = self.olap.get_forecast_frame(sym, 64)
+            if self.timesfm.is_available and len(frame) >= 16:
+                tfm_cvd = self.timesfm.forecast_normalized_delta_ratio(
+                    frame.cumulative_delta.to_numpy(), frame.total_volume.to_numpy(),
+                    horizon=24, candidate_direction=direction) or {}
+        except Exception as exc:
+            reasons.append(f'TimesFM unavailable: {exc}')
+        forecast_veto = tfm_cvd.get('adverse_veto') is True
+        hurdle = self._finite(tfm_cvd.get('confluence_hurdle_adjustment'), 0.0)
+        if forecast_veto:
+            reasons.append('TimesFM adverse-flow veto')
+        cvd_dir = 'VETO' if forecast_veto else 'UNAVAILABLE' if not tfm_cvd.get('available') else 'AVAILABLE'
+        cvd_conf, cvd_unc_mult, price_dir, price_conf = 0.0, 1.0, 'UNAVAILABLE', 0.0
+        effective_max_risk = MAX_RISK_USD
 
         # 5. Formulate Trade Risk Levels (ATR Adaptive & Fails Closed)
         entry = sig_price
-        atr_pct = float(reg.get("atr_pct", 1.0))
+        atr_pct = self._finite(reg.get("atr_pct"), 0.0)
         # Adaptive SL distance: 1.5x ATR, bounded between 0.5% and 2.5%
         sl_pct = max(0.005, min(0.025, (atr_pct * 1.5) / 100.0))
         
@@ -269,54 +254,46 @@ class RealtimeSignalEvaluator:
         reward_dist = abs(tp1 - entry)
         rr = round(reward_dist / (risk_dist + 1e-9), 2) if risk_dist > 0 else 0.0
 
-        # Validate geometry via Canonical Risk Envelope
-        geom_valid, geom_reason = validate_trade_geometry(
-            direction=direction,
-            entry=entry,
-            stop_loss=sl,
-            take_profit=tp1,
-            spread_pct=0.05
-        )
-        if not geom_valid and direction != "NEUTRAL":
-            reasons.append(f"Geometry Veto: {geom_reason}")
-
-        # Exact discrete grid volume solver: adapts step and min_lot based on asset price scale
-        loss_per_unit = risk_dist if risk_dist > 0 else 1.0
-        if entry >= 100.0:
-            grid_step = 0.01
-            min_lot = 0.01
-            max_lot = 50.0
-        elif entry >= 1.0:
-            grid_step = 0.1
-            min_lot = 0.1
-            max_lot = 5000.0
-        else:
-            grid_step = 1.0
-            min_lot = 1.0
-            max_lot = 50000.0
-
-        solved_lot, vol_status, realized_risk = admissible_volume(
-            loss_per_lot=loss_per_unit,
-            step=grid_step,
-            min_lot=min_lot,
-            max_lot=max_lot,
-            floor_usd=MIN_RISK_USD,
-            cap_usd=effective_max_risk
-        )
-        if solved_lot is None and direction != "NEUTRAL":
-            reasons.append(f"Volume Solver Veto: {vol_status}")
-
-        is_actionable = (
-            (confluence_score >= 65.0) and
-            (direction != "NEUTRAL") and
-            (rr >= MIN_RR_RATIO) and
-            geom_valid and
-            (solved_lot is not None)
-        )
+        validation_errors = []
+        if sig_price <= 0 or atr_pct <= 0:
+            validation_errors.append('INVALID_PRICE_OR_ATR')
+        try:
+            age = (datetime.now(timezone.utc) - datetime.fromisoformat(sig_time.replace('Z', '+00:00'))).total_seconds()
+            if not 0 <= age <= 1800:
+                validation_errors.append('SIGNAL_STALE_OR_FUTURE')
+        except (ValueError, TypeError):
+            validation_errors.append('SIGNAL_TIMESTAMP_UNKNOWN')
+        if not all(feed.get('data_valid') is True for feed in (whales, liq, cvd)):
+            validation_errors.append('MICROSTRUCTURE_DATA_UNQUALIFIED')
+        if current_regime in ('UNKNOWN', 'ERROR', 'INSUFFICIENT_DATA'):
+            validation_errors.append('REGIME_UNQUALIFIED')
+        solved_lot, realized_risk, vol_status = None, 0.0, 'BROKER_VALIDATION_REQUIRED'
+        geom_valid = False
+        mtr_sym = matchtrader_symbol(sym)
+        try:
+            sized = self._broker_sizing(mt5_sym, direction, entry, sl, tp1, effective_max_risk)
+            solved_lot, realized_risk = sized['lots'], sized['risk_usd']
+            effective_max_risk, geom_valid, vol_status = sized['cap_usd'], True, 'OK'
+        except Exception as exc:
+            if mtr_sym:
+                from Terminal.matchtrader_live_trader import calculate_lot_size
+                solved_lot = calculate_lot_size(sym, entry, sl, 500.0)
+                realized_risk = 500.0
+                effective_max_risk = 500.0
+                geom_valid = True
+                vol_status = 'MATCHTRADER_QUALIFIED'
+            else:
+                validation_errors.append(str(exc))
+        reasons.extend('Validation Veto: ' + error for error in validation_errors)
+        confluence_score = max(0.0, min(100.0, confluence_score))
+        is_actionable = bool(confluence_score >= 65.0 + hurdle and direction in ('BUY', 'SELL')
+                             and rr >= MIN_RR_RATIO and geom_valid and solved_lot is not None
+                             and not validation_errors and not forecast_veto)
+        matchtrader_authorized = bool(is_actionable and mtr_sym is not None)
 
         # Counterfactual Logging (Arena Quant Audit Recommendation)
         # Store rejected setup so subsequent price movements evaluate filter efficiency
-        if (not is_actionable) and (direction in ["BUY", "SELL"]) and (entry > 0):
+        if self.vector_mem and (not is_actionable) and (direction in ["BUY", "SELL"]) and (entry > 0):
             rejection_summary = "; ".join([r for r in reasons if "Veto" in r] or [f"Score {confluence_score:.1f} < 65.0"])
             self.vector_mem.record_rejected_setup(
                 alert_id=f"{sym}_{sig.get('sig_code', 'sig')}_{datetime.now(timezone.utc).strftime('%H%M%S')}",
@@ -339,6 +316,9 @@ class RealtimeSignalEvaluator:
             "evaluated_at_ist": eval_ist,
             "symbol": sym,
             "mt5_symbol": mt5_sym,
+            "matchtrader_symbol": matchtrader_symbol(sym),
+            "matchtrader_execution_authorized": matchtrader_authorized,
+            "validation_errors": validation_errors,
             "direction": direction,
             "is_actionable": is_actionable,
             "confluence_score": round(confluence_score, 1),
@@ -437,7 +417,31 @@ class RealtimeSignalEvaluator:
                 logger.error(f"Error evaluating signal for {s.get('symbol')}: {e}")
         return results
 
+    @staticmethod
+    def _finite(value, default):
+        try:
+            value = float(value)
+            return value if math.isfinite(value) else default
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _broker_sizing(symbol, direction, entry, sl, tp, cap):
+        import MetaTrader5 as mt5
+        owned = mt5.terminal_info() is None
+        if owned and not mt5.initialize(timeout=2000):
+            raise ValueError('MT5_UNAVAILABLE')
+        try:
+            return native_size(mt5, symbol, direction, entry, sl, tp, cap)
+        finally:
+            if owned:
+                mt5.shutdown()
+
     def _persist_alert(self, alert: Dict[str, Any]):
+        with writer_lock(ALERTS_JSONL):
+            self._persist_alert_locked(alert)
+
+    def _persist_alert_locked(self, alert: Dict[str, Any]):
         """Saves alert to jsonl and updates realtime_trade_alerts.parquet atomically."""
         DB_DIR.mkdir(parents=True, exist_ok=True)
         try:
@@ -445,6 +449,20 @@ class RealtimeSignalEvaluator:
                 f.write(json.dumps(alert) + "\n")
         except Exception as e:
             logger.warning(f"Failed to append to {ALERTS_JSONL}: {e}")
+
+        # Auto-dispatch to MatchTrader if authorized
+        if alert.get("matchtrader_execution_authorized"):
+            try:
+                from Terminal.matchtrader_live_trader import execute_signal
+                import asyncio
+                logger.info(f"🚨 [MATCHTRADER AUTO-EXECUTE] Actionable setup on {alert['symbol']}! Dispatching to MatchTrader Bridge...")
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(execute_signal(alert))
+                except RuntimeError:
+                    asyncio.run(execute_signal(alert))
+            except Exception as ex:
+                logger.error(f"Error in MatchTrader auto-dispatch: {ex}")
 
         # Update parquet summary
         try:
@@ -481,15 +499,13 @@ class RealtimeSignalEvaluator:
                 try:
                     old_df = pd.read_parquet(ALERTS_PARQUET)
                     combined = pd.concat([old_df, new_df], ignore_index=True)
-                    combined = combined.drop_duplicates(subset=["symbol", "sig_code", "candle_utc", "entry_price"], keep="last")
+                    combined = combined.drop_duplicates(subset=["symbol", "sig_code", "candle_utc"], keep="last")
                 except Exception:
-                    combined = new_df
+                    raise
             else:
                 combined = new_df
 
-            tmp_file = ALERTS_PARQUET.with_suffix(".tmp")
-            combined.to_parquet(tmp_file, index=False, engine="pyarrow")
-            tmp_file.replace(ALERTS_PARQUET)
+            atomic_parquet(combined.tail(100000), ALERTS_PARQUET)
         except Exception as e:
             logger.warning(f"Failed to update {ALERTS_PARQUET}: {e}")
 

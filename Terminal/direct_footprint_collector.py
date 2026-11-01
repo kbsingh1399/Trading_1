@@ -38,6 +38,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from Terminal.realtime_signal_evaluator import RealtimeSignalEvaluator
+from Terminal.runtime_io import acquire_singleton, atomic_parquet, upsert_parquet, cdp_result
 from Terminal.collector_lock import rotate_warp_ip, BrowserLock, is_scheduled_for_other_collector
 DB_DIR = ROOT_DIR / "Database"
 CANDLE_DIR = DB_DIR / "Candle_Data"
@@ -135,31 +136,13 @@ def cleanup_coinglass_tabs(keep_tab_id: Optional[str] = None):
         logger.debug(f"Tab cleanup error: {e}")
 
 
-def acquire_pid_lock(name: str):
-    """Ensures strictly one instance of this daemon runs at any time."""
-    lock_dir = DB_DIR / ".locks"
-    lock_dir.mkdir(parents=True, exist_ok=True)
-    lock_file = lock_dir / f"{name}.pid"
-    my_pid = os.getpid()
-    if lock_file.exists():
-        try:
-            old_pid = int(lock_file.read_text().strip())
-            if old_pid != my_pid:
-                # Terminate any previous instance
-                subprocess.run(
-                    ["powershell", "-Command", f"Stop-Process -Id {old_pid} -Force -ErrorAction SilentlyContinue"],
-                    capture_output=True, check=False
-                )
-                logger.info(f"Terminated previous instance PID {old_pid} to enforce single-instance guarantee.")
-        except Exception:
-            pass
-    lock_file.write_text(str(my_pid))
+def acquire_pid_lock(name):
+    acquire_singleton(name, DB_DIR / '.locks')
 
 
 def open_coinglass_footprint_tab() -> Tuple[Optional[str], Optional[str]]:
     """Opens a fresh CoinGlass footprint tab and returns (tab_id, ws_url)."""
     # First clean up any orphaned tabs before creating a new one
-    cleanup_coinglass_tabs()
     try:
         req = urllib.request.Request("http://127.0.0.1:9222/json/new?https://www.coinglass.com/footprint", method="PUT")
         resp = urllib.request.urlopen(req, timeout=5)
@@ -182,26 +165,11 @@ def close_tab(tab_id: str):
         except Exception as e:
             logger.warning(f"Could not close tab {tab_id}: {e}")
     # Enforce zero leftover coinglass tabs
-    cleanup_coinglass_tabs()
 
 
 async def cdp_eval(ws, expr: str, msg_id: int = 1, await_promise: bool = False):
-    payload = {
-        "id": msg_id,
-        "method": "Runtime.evaluate",
-        "params": {
-            "expression": expr,
-            "returnByValue": True,
-            "awaitPromise": await_promise
-        }
-    }
-    await ws.send(json.dumps(payload))
-    while True:
-        raw = await ws.recv()
-        resp = json.loads(raw)
-        if resp.get("id") == msg_id:
-            res = resp.get("result", {})
-            return res.get("result", {}).get("value")
+    return await cdp_result(ws, {"id": msg_id, "method": "Runtime.evaluate", "params": {
+        "expression": expr, "returnByValue": True, "awaitPromise": await_promise}})
 
 
 async def ensure_terminal_ready(ws) -> bool:
@@ -240,48 +208,19 @@ async def ensure_terminal_ready(ws) -> bool:
     return False
 
 
-def dump_signals_parquet(new_signals: List[dict]):
-    if not new_signals:
-        return
-    DB_DIR.mkdir(parents=True, exist_ok=True)
-    new_df = pd.DataFrame(new_signals)
-    if SIGNALS_PARQUET.exists():
-        try:
-            old_df = pd.read_parquet(SIGNALS_PARQUET)
-            combined = pd.concat([old_df, new_df], ignore_index=True)
-            combined = combined.drop_duplicates(subset=["symbol", "sig_code", "time_ms", "price"], keep="last")
-        except Exception:
-            combined = new_df
-    else:
-        combined = new_df
-    combined = combined.sort_values(by="time_ms", ascending=False).reset_index(drop=True)
-    tmp_file = SIGNALS_PARQUET.with_suffix(".tmp")
-    combined.to_parquet(tmp_file, index=False, engine="pyarrow")
-    tmp_file.replace(SIGNALS_PARQUET)
-    logger.info(f"Aggregated Signals saved: {SIGNALS_PARQUET.name} ({len(combined)} rows)")
+def dump_signals_parquet(new_signals):
+    if new_signals:
+        upsert_parquet(pd.DataFrame(new_signals), SIGNALS_PARQUET,
+                       ['symbol', 'sig_code', 'time_ms'], sort_by='time_ms', limit=100000)
 
 
-def upsert_candle_parquet(symbol: str, mt5_sym: str, candles: List[dict]):
+def upsert_candle_parquet(symbol, mt5_sym, candles):
     if not candles:
         return
-    CANDLE_DIR.mkdir(parents=True, exist_ok=True)
-    out_file = CANDLE_DIR / f"{symbol}.parquet"
-    new_df = pd.DataFrame(candles)
-    now_utc = datetime.now(timezone.utc).isoformat()
-    new_df["dumped_at_utc"] = now_utc
-    if out_file.exists():
-        try:
-            old_df = pd.read_parquet(out_file)
-            combined = pd.concat([old_df, new_df], ignore_index=True)
-            combined = combined.drop_duplicates(subset=["open_time_ms"], keep="last")
-        except Exception:
-            combined = new_df
-    else:
-        combined = new_df
-    combined = combined.sort_values(by="open_time_ms", ascending=True).reset_index(drop=True)
-    tmp_out = out_file.with_suffix(".tmp")
-    combined.to_parquet(tmp_out, index=False, engine="pyarrow")
-    tmp_out.replace(out_file)
+    frame = pd.DataFrame(candles)
+    frame['dumped_at_utc'] = datetime.now(timezone.utc).isoformat()
+    upsert_parquet(frame, CANDLE_DIR / f'{symbol}.parquet', ['open_time_ms'],
+                   sort_by='open_time_ms', limit=10000)
 
 
 async def extract_symbol_footprint(ws, sym: str, mt5_sym: str) -> dict:
@@ -436,7 +375,6 @@ async def footprint_sweep_cycle(ws) -> int:
 
 async def run_collector_daemon(cycle_seconds: int = 120):
     acquire_pid_lock("direct_footprint_collector")
-    cleanup_coinglass_tabs()
     global evaluator
     logger.info("Initializing RealtimeSignalEvaluator with DeepMind TimesFM & OLAP...")
     evaluator = RealtimeSignalEvaluator()
@@ -451,7 +389,10 @@ async def run_collector_daemon(cycle_seconds: int = 120):
             continue
 
         cycle_start = time.time()
-        with BrowserLock("Footprint"):
+        with BrowserLock("Footprint") as browser_lock:
+            if not browser_lock.acquired:
+                await asyncio.sleep(2.0)
+                continue
             # 1. Cloudflare WARP IP Rotation BEFORE sweep
             logger.info("Rotating Cloudflare WARP IP BEFORE Footprint dump cycle...")
             await asyncio.to_thread(rotate_warp_ip, "Footprint-Pre")
@@ -461,7 +402,7 @@ async def run_collector_daemon(cycle_seconds: int = 120):
                 try:
                     # Allow page DOM to settle
                     await asyncio.sleep(3.5)
-                    async with websockets.connect(ws_url, max_size=50_000_000) as ws:
+                    async with websockets.connect(ws_url, open_timeout=5, close_timeout=2, max_size=50_000_000) as ws:
                         await footprint_sweep_cycle(ws)
                 except Exception as e:
                     logger.error(f"Error during footprint sweep: {e}")
