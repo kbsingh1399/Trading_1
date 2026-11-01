@@ -5,12 +5,14 @@ Institutional Risk Envelope & Admissible Volume Solver (Single Source of Truth)
 Canonical risk governance and mathematical volume solver.
 Every execution and signal evaluation module imports from here.
 
-Design Principles (From Arena Quant Audit):
-1. Fails Closed: Inverted stops, zero distances, or missing values reject the trade.
-2. Exact Discrete Grid Solver: Solves for the largest legal volume on broker lot grids
-   strictly within [MIN_RISK_USD, MAX_RISK_USD] without rounding traps.
-3. Dual-Constraint Capital Budgeting: Position risk <= 50% of buffer above $4,700 floor.
-4. Hard Invariants: Max 2 concurrent open positions, max 0.45% spread gate.
+Governed by Arena Quant Audit (Round 2 Mathematical Corrections):
+1. Survival Constraint: max_risk = free_buffer / (SURVIVAL_LOSSES * MAX_OPEN_POSITIONS)
+   Guarantees a 10-consecutive loss streak does NOT breach the $4,775 hard floor.
+2. Prospective Halt: Halts trading BEFORE entering if free_buffer <= HALT_CUSHION_USD.
+3. Reservation-Based: Subtracts worst-case stressed risk of all open positions + resting limits.
+4. Exact Integer Grid Solver: Solves discrete lot grid [k_min, k_max].
+   Returns k_min (smallest legal volume >= floor), preserving account survival.
+5. Fails Closed: Inverted stops, zero distances, or spread breach reject instantly.
 ========================================================================================
 """
 
@@ -21,99 +23,137 @@ from typing import Tuple, Optional, Dict, Any
 logger = logging.getLogger("RiskEnvelope")
 
 # ---------------------------------------------------------------------------
-# Canonical Risk Constants (SINGLE SOURCE OF TRUTH)
+# Canonical Risk Constants (SINGLE SOURCE OF TRUTH ACROSS THE ENTIRE SYSTEM)
 # ---------------------------------------------------------------------------
-HARD_FLOOR_USD = 4700.00           # 6% Max Drawdown Floor on $5,000 Prop-Firm Challenge
-OPERATING_BUFFER_MIN = 10.00       # Equity buffer threshold below which all trading halts
-BUFFER_RISK_FRACTION = 0.50        # Max 50% of available buffer risked per trade
-MAX_RISK_USD = 50.00               # Strict hard ceiling per trade ($50.00)
-MIN_RISK_USD = 5.00                # Minimum risk threshold to prevent micro-lot commission drag
-MAX_OPEN_POSITIONS = 2             # Hard mandate: 2 concurrent positions max
-MAX_ALLOWED_SPREAD_PCT = 0.45      # 0.45% maximum allowable spread (45 bps)
-MIN_RR_RATIO = 1.50                # Minimum 1.5:1 reward-to-risk ratio
+HARD_FLOOR_USD = 4775.00       # Contractual floor ($4,700) + Self-imposed safety buffer ($75) = $4,775
+HALT_CUSHION_USD = 20.00       # Prospective halt cushion >= worst-case single-trade execution reserve
+MAX_RISK_USD = 25.00           # Strict nominal ceiling per trade ($25.00)
+MIN_RISK_USD = 5.00            # Minimum risk threshold to prevent micro-lot commission drag
+MAX_OPEN_POSITIONS = 2         # Hard mandate: strictly 2 concurrent positions max
+MAX_RESTING_LIMITS = 2         # Resting pending orders count as future contingent liabilities
+MAX_SPREAD_BPS = 45.0          # 45.0 bps maximum allowable spread (0.45%)
+MAX_ALLOWED_SPREAD_PCT = 0.45  # Same in percentage unit
+MIN_RR_RATIO = 1.50            # Minimum 1.5:1 reward-to-risk ratio
+STRESS_MULT = 1.25             # Stress multiplier on stop-out for gap/slippage reserve
+EXEC_RESERVE_USD = 2.00        # Per-trade execution reserve for broker friction
+SURVIVAL_LOSSES = 10           # Required consecutive loss survival streak
+
+
+def budget_per_trade(
+    equity: float,
+    balance: float,
+    committed_stress_usd: float = 0.0
+) -> Tuple[float, bool, str]:
+    """
+    Survival-constrained, reservation-based capital budgeting.
+    Replaces the flawed '50% of buffer' geometric decay rule.
+
+    Calculates:
+        base = min(balance, equity)
+        buffer = base - HARD_FLOOR_USD
+        free = buffer - committed_stress_usd
+        if free <= HALT_CUSHION_USD -> HALT (prospective)
+        per_trade = free / (SURVIVAL_LOSSES * MAX_OPEN_POSITIONS)
+        budget = min(MAX_RISK_USD, per_trade)
+
+    Returns:
+        (allowed_budget_usd, is_admissible, reason)
+    """
+    base = min(balance, equity)
+    buffer = base - HARD_FLOOR_USD
+
+    if buffer <= 0.0:
+        return 0.0, False, f"EQUITY_BREACH: Base capital ${base:.2f} <= Hard Floor ${HARD_FLOOR_USD:.2f}"
+
+    free = buffer - committed_stress_usd
+    if free <= HALT_CUSHION_USD:
+        return 0.0, False, f"PROSPECTIVE_HALT: Free buffer ${free:.2f} <= Halt Cushion ${HALT_CUSHION_USD:.2f}"
+
+    per_trade = free / (SURVIVAL_LOSSES * MAX_OPEN_POSITIONS)
+    budget = min(MAX_RISK_USD, max(0.0, round(per_trade, 2)))
+
+    if budget < MIN_RISK_USD:
+        return 0.0, False, (
+            f"BUDGET_BELOW_MIN_FLOOR: Computed budget ${budget:.2f} < Min threshold ${MIN_RISK_USD:.2f} "
+            f"(Free buffer: ${free:.2f})"
+        )
+
+    return budget, True, f"OK (Free Buffer: ${free:.2f}, Budget: ${budget:.2f})"
 
 
 def admissible_volume(
-    loss_per_lot: float,
-    step: float,
+    loss_per_lot_step: float,
+    volume_step: float,
     min_lot: float,
     max_lot: float,
     floor_usd: float = MIN_RISK_USD,
     cap_usd: float = MAX_RISK_USD
 ) -> Tuple[Optional[float], str, float]:
     """
-    Solves for the largest broker grid volume whose realized dollar risk
-    lies strictly inside [floor_usd, cap_usd].
-
+    Exact discrete integer-step grid solver.
+    
     Args:
-        loss_per_lot: Dollar loss if 1.0 lot hits stop-loss (points_dist * tick_val / tick_size).
-        step: Broker volume_step (e.g. 0.01 or 0.1).
-        min_lot: Broker minimum lot size (e.g. 0.01).
-        max_lot: Broker maximum lot size (e.g. 100.0).
-        floor_usd: Lower dollar risk bound (e.g. $5.00).
-        cap_usd: Upper dollar risk bound (e.g. $50.00 or buffer * 0.50).
+        loss_per_lot_step: Dollar loss per 1 volume_step (loss_per_lot * volume_step).
+        volume_step: Broker volume step (e.g. 0.01).
+        min_lot: Broker min volume (e.g. 0.01).
+        max_lot: Broker max volume (e.g. 100.0).
+        floor_usd: Minimum risk floor (default $5.00).
+        cap_usd: Maximum risk ceiling (budgeted amount <= $25.00).
 
     Returns:
         (volume, reason_code, realized_risk_usd)
-        If admissible: (float_lots, "OK", dollar_risk)
-        If inadmissible: (None, specific_rejection_reason, 0.0)
+        Chooses k_min (smallest legal size that satisfies the floor constraint)
+        to strictly preserve account survival under the 10-loss streak mandate.
     """
-    if loss_per_lot <= 0.0 or step <= 0.0:
-        return None, "INVALID_LOSS_PER_LOT_OR_STEP", 0.0
+    if loss_per_lot_step <= 0.0 or volume_step <= 0.0:
+        return None, "NO_BROKER_VALUATION", 0.0
 
     if cap_usd < floor_usd:
         return None, f"EMPTY_CAP_WINDOW: cap (${cap_usd:.2f}) < floor (${floor_usd:.2f})", 0.0
 
-    # Risk per single step
-    loss_per_step = loss_per_lot * step
+    # Discrete step boundaries with 1e-12 floating-point margin
+    k_min = math.ceil((floor_usd / loss_per_lot_step) - 1e-12)
+    max_step_bound = min(cap_usd, max_lot * (loss_per_lot_step / volume_step) * volume_step)
+    k_max = math.floor((max_step_bound / loss_per_lot_step) + 1e-12)
 
-    # Calculate discrete integer step bounds
-    k_min = math.ceil((floor_usd / loss_per_step) - 1e-12)
-    k_max = math.floor((cap_usd / loss_per_step) + 1e-12)
+    # Broker min/max constraints in step index space
+    k_broker_min = math.ceil((min_lot / volume_step) - 1e-12)
+    k_broker_max = math.floor((max_lot / volume_step) + 1e-12)
 
-    # Convert broker min_lot/max_lot to step multipliers
-    k_broker_min = math.ceil((min_lot / step) - 1e-12)
-    k_broker_max = math.floor((max_lot / step) + 1e-12)
-
-    # Intersect allowable risk steps with broker allowed range
     effective_k_min = max(k_min, k_broker_min)
     effective_k_max = min(k_max, k_broker_max)
 
-    if effective_k_max < effective_k_min:
-        actual_min_risk = (effective_k_min * step) * loss_per_lot
-        actual_max_risk = (effective_k_max * step) * loss_per_lot
+    if effective_k_max < effective_k_min or effective_k_min <= 0:
+        actual_min_risk = (effective_k_min * loss_per_lot_step)
+        actual_max_risk = (effective_k_max * loss_per_lot_step)
         return None, (
-            f"NO_REPRESENTABLE_VOLUME: grid step {step} gives [{actual_min_risk:.2f}, {actual_max_risk:.2f}] "
-            f"outside target risk window [${floor_usd:.2f}, ${cap_usd:.2f}]"
+            f"NO_REPRESENTABLE_VOLUME: grid=[{actual_min_risk:.2f},{actual_max_risk:.2f}] "
+            f"window=[{floor_usd:.2f},{cap_usd:.2f}]"
         ), 0.0
 
-    # Select the largest legal volume inside the window
-    final_lots = round(effective_k_max * step, 6)
-    actual_risk_usd = round(final_lots * loss_per_lot, 2)
+    # Pick k_min: smallest legal size >= floor, preserving capital survival
+    final_lots = round(effective_k_min * volume_step, 6)
+    actual_risk_usd = round(effective_k_min * loss_per_lot_step, 2)
 
-    # Final safety sanity assert
     if actual_risk_usd > cap_usd + 0.01:
         return None, f"NUMERICAL_OVERFLOW: realized risk ${actual_risk_usd:.2f} > cap ${cap_usd:.2f}", 0.0
 
     return final_lots, "OK", actual_risk_usd
 
 
-def compute_dynamic_capital_budget(current_equity: float) -> Tuple[float, bool, str]:
-    """
-    Computes available dollar risk based on prop-firm floor defense.
-    Risk ceiling = min(MAX_RISK_USD, buffer * 50%).
-    """
-    if current_equity <= HARD_FLOOR_USD:
-        return 0.0, False, f"EQUITY_BREACH: Current equity ${current_equity:.2f} <= Floor ${HARD_FLOOR_USD:.2f}"
-
-    buffer = current_equity - HARD_FLOOR_USD
-    if buffer <= OPERATING_BUFFER_MIN:
-        return 0.0, False, f"HALT_BUFFER: Buffer ${buffer:.2f} <= minimum required ${OPERATING_BUFFER_MIN:.2f}"
-
-    # Capital budgeted: half of buffer or $50.00 max
-    budget = min(MAX_RISK_USD, round(buffer * BUFFER_RISK_FRACTION, 2))
-    budget = max(MIN_RISK_USD, budget)
-    return budget, True, f"OK (Buffer: ${buffer:.2f}, Budget: ${budget:.2f})"
+def solve_volume_from_loss_per_lot(
+    loss_per_lot: float,
+    volume_step: float,
+    min_lot: float,
+    max_lot: float,
+    floor_usd: float = MIN_RISK_USD,
+    cap_usd: float = MAX_RISK_USD
+) -> Tuple[Optional[float], str, float]:
+    """Helper wrapper taking per-lot loss and explicitly converting to per-step loss."""
+    if loss_per_lot <= 0.0 or volume_step <= 0.0:
+        return None, "NO_BROKER_VALUATION", 0.0
+    loss_per_lot_step = loss_per_lot * volume_step
+    return admissible_volume(loss_per_lot_step, volume_step, min_lot, max_lot, floor_usd, cap_usd)
 
 
 def validate_trade_geometry(
@@ -121,13 +161,13 @@ def validate_trade_geometry(
     entry: float,
     stop_loss: float,
     take_profit: float,
-    spread_pct: float
+    spread_bps: float
 ) -> Tuple[bool, str]:
     """
-    Fails closed on any invalid geometry or spread breach.
+    Fails closed on any inverted stop, non-positive price, or spread breach.
     """
-    if spread_pct > MAX_ALLOWED_SPREAD_PCT:
-        return False, f"SPREAD_GATE_BREACH: Spread {spread_pct:.3f}% > Max allowed {MAX_ALLOWED_SPREAD_PCT:.3f}%"
+    if spread_bps > MAX_SPREAD_BPS:
+        return False, f"SPREAD_GATE_BREACH: Spread {spread_bps:.1f} bps > Max allowed {MAX_SPREAD_BPS:.1f} bps"
 
     if entry <= 0.0 or stop_loss <= 0.0 or take_profit <= 0.0:
         return False, "INVALID_PRICE_LEVELS: Non-positive prices"

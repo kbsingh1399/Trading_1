@@ -28,3 +28,10 @@ scratch/
 
 # Runtime locks
 Database/.locks/
+
+# Vector database binary fragments
+Database/Vector_Memory/
+
+# Colibri subrepo
+colibri/
+

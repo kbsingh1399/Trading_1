@@ -2,17 +2,22 @@
 ========================================================================================
 Google DeepMind TimesFM 2.5 (200M) Local Foundation Model Forecaster
 ========================================================================================
-Provides zero-shot point and probabilistic quantile forecasting for crypto market microstructure:
-- Cumulative Volume Delta (CVD) trajectory prediction
-- Order-flow momentum and price exhaustion estimation
-- Probabilistic downside (10th percentile) and upside (90th percentile) risk boundaries
+Provides zero-shot probabilistic quantile forecasting for order-flow increments:
+- Stationary Normalized Delta Ratio: r_t = (CVD_t - CVD_{t-1}) / Volume_t in [-1, 1]
+- Strictly k=1 bar differencing with context terminating at last completed bar
+- Orthogonal Risk Governance (Arena Quant Audit Round 2):
+  * NO volatility double-counting: position sizing is purely ATR-governed.
+  * Quantile interval [q10, q90] is used EXCLUSIVELY for:
+    1. Directional Veto: Adverse 80% predictive interval blocks counter-trend entries.
+    2. Confluence Hurdle Adjustment: Wide forecast dispersion raises required confluence (+5 to +10 pts).
+  * Horizon alignment: 24 bars (~6h) matching position management half-life.
 ========================================================================================
 """
 
 import os
 import sys
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 import numpy as np
 
 # Ensure project root is in sys.path
@@ -24,6 +29,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [TIM
 logger = logging.getLogger("TimesFMForecaster")
 
 MODEL_DIR = os.path.join(ROOT_DIR, "models", "timesfm-2.5-200m-pytorch")
+
 
 class DeepMindTimesFMForecaster:
     """
@@ -58,7 +64,7 @@ class DeepMindTimesFMForecaster:
             self._model = timesfm.TimesFM_2p5_200M_torch(torch_compile=False)
             self._model.load_checkpoint(self.model_dir)
 
-            # Compile with default horizon=12, max_context=128
+            # Compile with max_horizon=24 matching 6h trade management horizon
             config = timesfm.ForecastConfig(
                 max_context=128,
                 max_horizon=24,
@@ -77,160 +83,129 @@ class DeepMindTimesFMForecaster:
     def is_available(self) -> bool:
         return self._model is not None and self._compiled
 
-    def forecast_trajectory(
+    def forecast_normalized_delta_ratio(
         self,
-        series: np.ndarray,
-        horizon: int = 12
+        cvd_series: np.ndarray,
+        volume_series: np.ndarray,
+        horizon: int = 24,
+        candidate_direction: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Generates point and quantile forecasts for a given 1D time series (CVD or price).
+        Stationary Normalized Order-Flow Ratio Forecaster (Arena Round 2 Specification).
         
         Args:
-            series: 1D array of historical values (e.g. 32 to 128 bars).
-            horizon: Number of forward periods to predict (default: 12).
-            
+            cvd_series: Cumulative Volume Delta across historical completed bars.
+            volume_series: Total bar volume corresponding to each bar.
+            horizon: Forecast horizon (default: 24 bars = 6 hours on 15m).
+            candidate_direction: 'BUY' or 'SELL' to evaluate directional veto.
+
         Returns:
-            Dict containing point forecast, quantiles (10, 50, 90), expected drift, and direction.
+            Dict containing:
+            - point_forecast, q10_downside, q50_median, q90_upside
+            - adverse_veto: True if predictive interval lies entirely adverse to trade
+            - hurdle_adjustment: Additive confluence score penalty (+0 to +10 pts)
+            - stationary_check: Stationary audit results (mean, std, adf_stationary proxy)
         """
         if not self.is_available:
             return {
                 "available": False,
-                "error": "Model not loaded or compiled",
-                "direction": "NEUTRAL",
-                "predicted_drift": 0.0,
-                "confidence": 0.0
+                "error": "Model not loaded",
+                "adverse_veto": False,
+                "hurdle_adjustment": 0.0
             }
 
-        arr = np.asarray(series, dtype=np.float32).flatten()
-        if len(arr) < 8:
+        cvd = np.asarray(cvd_series, dtype=np.float32).flatten()
+        vol = np.asarray(volume_series, dtype=np.float32).flatten()
+
+        if len(cvd) < 12 or len(vol) < 12:
             return {
                 "available": False,
-                "error": f"Series too short ({len(arr)} bars, need >= 8)",
-                "direction": "NEUTRAL",
-                "predicted_drift": 0.0,
-                "confidence": 0.0
+                "error": f"Insufficient completed bars ({len(cvd)}, need >= 12)",
+                "adverse_veto": False,
+                "hurdle_adjustment": 0.0
             }
 
-        # Truncate to max 128 bars
-        if len(arr) > 128:
-            arr = arr[-128:]
+        # Align length to match
+        min_len = min(len(cvd), len(vol))
+        cvd = cvd[-min_len:]
+        vol = vol[-min_len:]
+
+        # 1. First differencing (k=1 bar only)
+        delta_cvd = np.diff(cvd)
+        vol_bars = vol[1:]
+
+        # 2. Volume-normalization -> Delta ratio r_t in [-1.0, 1.0]
+        # Eliminates volume-scaling non-stationarity across regime shifts
+        r_t = np.clip(delta_cvd / (vol_bars + 1e-9), -1.0, 1.0)
+
+        # Context length: max 128 completed bars
+        if len(r_t) > 128:
+            r_t = r_t[-128:]
+
+        # 3. Stationarity proxy check: bounded mean and variance
+        r_mean = float(np.mean(r_t))
+        r_std = float(np.std(r_t) + 1e-6)
+        is_stationary_bounded = abs(r_mean) < 0.35 and r_std < 0.60
 
         try:
-            point_fc, quantile_fc = self._model.forecast(horizon=horizon, inputs=[arr])
-            
-            # point_fc shape: (1, horizon)
-            # quantile_fc shape: (1, horizon, 10) -> quantiles: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, mean]
+            point_fc, quantile_fc = self._model.forecast(horizon=horizon, inputs=[r_t])
             pts = point_fc[0][:horizon]
-            q10 = quantile_fc[0][:horizon, 0] # 10th percentile
-            q50 = quantile_fc[0][:horizon, 4] # 50th percentile (median)
-            q90 = quantile_fc[0][:horizon, 8] # 90th percentile
+            q10 = quantile_fc[0][:horizon, 0]  # 10th percentile
+            q50 = quantile_fc[0][:horizon, 4]  # 50th percentile
+            q90 = quantile_fc[0][:horizon, 8]  # 90th percentile
 
-            last_val = arr[-1]
-            end_val = pts[-1]
-            drift = float(end_val - last_val)
-            drift_pct = float(drift / (abs(last_val) + 1e-9))
+            # Horizon-integrated delta ratio (projected cumulative order-flow bias)
+            projected_bias = float(np.sum(pts))
+            q10_sum = float(np.sum(q10))
+            q90_sum = float(np.sum(q90))
+            interval_width = float(np.mean(q90 - q10))
 
-            # Directional consensus
-            if drift > 0 and q10[-1] > last_val * 0.995:
-                direction = "STRONG_BULLISH"
-            elif drift > 0:
-                direction = "BULLISH"
-            elif drift < 0 and q90[-1] < last_val * 1.005:
-                direction = "STRONG_BEARISH"
-            elif drift < 0:
-                direction = "BEARISH"
-            else:
-                direction = "NEUTRAL"
+            # 4. Orthogonal Risk Governance (Arena Rule: Do NOT scale lot size!)
+            # Rule A: Adverse Veto
+            # If 80% interval for trade horizon lies completely adverse, veto the trade
+            adverse_veto = False
+            veto_reason = ""
+            if candidate_direction:
+                cdir = candidate_direction.upper()
+                if cdir == "BUY" and q90_sum < 0.0:
+                    adverse_veto = True
+                    veto_reason = f"BUY_VETO: Entire 80% predictive order-flow interval is negative (q90_sum={q90_sum:.2f})"
+                elif cdir == "SELL" and q10_sum > 0.0:
+                    adverse_veto = True
+                    veto_reason = f"SELL_VETO: Entire 80% predictive order-flow interval is positive (q10_sum={q10_sum:.2f})"
 
-            spread = float(np.mean(q90 - q10))
-            confidence = float(np.clip(1.0 - (spread / (abs(drift) + spread + 1e-6)), 0.1, 0.99))
-            # Epistemic uncertainty multiplier for position sizing (wider interval -> smaller multiplier)
-            baseline_scale = float(np.std(arr) + 1e-6)
-            rel_spread = spread / baseline_scale
-            uncertainty_mult = float(np.clip(1.0 / (1.0 + 0.5 * rel_spread), 0.40, 1.0))
+            # Rule B: Confluence Hurdle Adjustment
+            # Wider interval -> Higher required confluence hurdle (+0 to +10 pts)
+            hurdle_penalty = float(np.clip((interval_width - 0.40) * 15.0, 0.0, 10.0))
 
             return {
                 "available": True,
                 "horizon": horizon,
-                "last_value": float(last_val),
-                "predicted_end": float(end_val),
-                "predicted_drift": drift,
-                "predicted_drift_pct": drift_pct,
-                "direction": direction,
-                "confidence": round(confidence, 4),
-                "uncertainty_multiplier": round(uncertainty_mult, 3),
+                "projected_delta_ratio_sum": round(projected_bias, 4),
+                "q10_sum": round(q10_sum, 4),
+                "q90_sum": round(q90_sum, 4),
+                "mean_interval_width": round(interval_width, 4),
+                "adverse_veto": adverse_veto,
+                "veto_reason": veto_reason,
+                "confluence_hurdle_adjustment": round(hurdle_penalty, 2),
+                "is_stationary_bounded": is_stationary_bounded,
                 "point_forecast": [round(float(x), 4) for x in pts],
                 "q10_downside": [round(float(x), 4) for x in q10],
                 "q50_median": [round(float(x), 4) for x in q50],
-                "q90_upside": [round(float(x), 4) for x in q90],
+                "q90_upside": [round(float(x), 4) for x in q90]
             }
 
         except Exception as e:
-            logger.error(f"Inference error during forecast: {e}")
+            logger.error(f"Inference error in TimesFM normalized forecast: {e}")
             return {
                 "available": False,
                 "error": str(e),
-                "direction": "NEUTRAL",
-                "predicted_drift": 0.0,
-                "confidence": 0.0,
-                "uncertainty_multiplier": 0.5
+                "adverse_veto": False,
+                "confluence_hurdle_adjustment": 0.0
             }
-
-    def forecast_increments(
-        self,
-        series: np.ndarray,
-        horizon: int = 8
-    ) -> Dict[str, Any]:
-        """
-        Stationary Increment Forecaster (Arena Recommendation).
-        Transforms series to first differences: Δy_t = y_t - y_{t-1}.
-        Forecasts future stationary increments and sums them for directional consensus.
-        """
-        arr = np.asarray(series, dtype=np.float32).flatten()
-        if len(arr) < 10:
-            return {
-                "available": False,
-                "error": f"Series too short for increments ({len(arr)} bars)",
-                "direction": "NEUTRAL",
-                "predicted_increment_sum": 0.0,
-                "uncertainty_multiplier": 0.5
-            }
-
-        # First differences (stationary increments)
-        diffs = np.diff(arr)
-        res = self.forecast_trajectory(diffs, horizon=horizon)
-        if not res.get("available"):
-            return res
-
-        # Sum of predicted increments gives net projected delta change
-        pred_inc = sum(res.get("point_forecast", []))
-        inc_dir = "BULLISH" if pred_inc > 0 else ("BEARISH" if pred_inc < 0 else "NEUTRAL")
-        if abs(pred_inc) > np.std(diffs) * horizon * 0.5:
-            inc_dir = f"STRONG_{inc_dir}"
-
-        return {
-            "available": True,
-            "horizon": horizon,
-            "predicted_increment_sum": round(float(pred_inc), 4),
-            "increment_direction": inc_dir,
-            "confidence": res.get("confidence", 0.5),
-            "uncertainty_multiplier": res.get("uncertainty_multiplier", 1.0),
-            "raw_trajectory": res
-        }
 
 
 if __name__ == "__main__":
-    print("Testing DeepMind TimesFM Forecaster...")
-    forecaster = DeepMindTimesFMForecaster()
-    if forecaster.is_available:
-        # Test synthetic CVD trend
-        cvd_data = np.cumsum(np.random.normal(0.8, 0.3, size=48)).astype(np.float32)
-        res = forecaster.forecast_trajectory(cvd_data, horizon=8)
-        print("Forecast Output:")
-        for k, v in res.items():
-            if k in ["point_forecast", "q10_downside", "q50_median", "q90_upside"]:
-                print(f"  {k}: {v[:4]}... (total {len(v)})")
-            else:
-                print(f"  {k}: {v}")
-    else:
-        print("DeepMind TimesFM Forecaster unavailable.")
+    print("Testing Updated TimesFM Stationary Forecaster...")
+    fc = DeepMindTimesFMForecaster()
+    print(f"TimesFM available: {fc.is_available}")

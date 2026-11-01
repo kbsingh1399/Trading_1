@@ -1,11 +1,14 @@
 """
 ========================================================================================
-Shared Collector Coordination & Network Infrastructure
+Shared Collector Coordination, Event-Driven Network & Structural Decay Infrastructure
 ========================================================================================
-Guarantees:
-1. Zero Overlap: Shared browser mutex ensures only ONE collector interacts with Chrome CDP.
-2. Cloudflare WARP IP Rotation: Executed both BEFORE and AFTER each data dump cycle.
-3. Clean Tab Hygiene: Automatic recovery of stale locks and orphan tabs.
+Guarantees (Arena Quant Audit Round 2 Compliant):
+1. Deadlock-Free Browser Mutex: Fast 2.0s acquire timeout. Skips on contention
+   (SKIPPED_LOCK_CONTENTION) rather than creating stale latency queues.
+2. Event-Driven WARP Rotation: Rotates ONLY on detection signals (403/429/Challenge/Empty)
+   rather than blind scheduled churn, preserving session cookies and socket streams.
+3. Structural Wall Exponential Decay: Continuous age decay exp(-age/tau) with tau=1800s (30m)
+   replacing the fragile 30-second binary gate for 15-minute whale book cadences.
 ========================================================================================
 """
 
@@ -13,11 +16,12 @@ import os
 import sys
 import time
 import json
+import math
 import logging
 import urllib.request
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DB_DIR = ROOT_DIR / "Database"
@@ -26,7 +30,12 @@ LOCK_DIR.mkdir(parents=True, exist_ok=True)
 BROWSER_LOCK_FILE = LOCK_DIR / "cdp_browser.lock"
 WARP_CLI = Path(r"C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe")
 
+handler = logging.StreamHandler(sys.stdout)
+handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] [Coordination] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
 logger = logging.getLogger("CollectorCoordination")
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    logger.addHandler(handler)
 
 
 def get_current_ip() -> str:
@@ -40,18 +49,25 @@ def get_current_ip() -> str:
 
 
 _LAST_ROTATION_TIME = 0.0
-MIN_ROTATION_INTERVAL_SECS = 180.0  # Minimum 3 minutes between full network disconnects to preserve OS streaming stability
+MIN_ROTATION_INTERVAL_SECS = 180.0  # 3-minute cooldown between full tunnel re-keys
 
 
-def rotate_warp_ip(context: str = "Collector", force: bool = False) -> str:
+def rotate_warp_ip(context: str = "Collector", reason: str = "SCHEDULED", force: bool = False) -> str:
     """
-    Disconnects and reconnects Cloudflare WARP to rotate IP and re-key the tunnel.
-    Protected by a 3-minute cooldown to prevent interrupting user web streams and chat sessions.
+    Event-driven Cloudflare WARP IP rotation.
+    Rotates tunnel keys and re-connects only when a detection signal occurs (403, 429, challenge)
+    or when forced. Protected by a 3-minute cooldown.
     """
     global _LAST_ROTATION_TIME
     now = time.time()
+
+    valid_reasons = ["CHALLENGE", "HTTP_403", "HTTP_429", "CONSECUTIVE_EMPTY_SCRAPES", "MANUAL_OVERRIDE"]
+    if not force and reason not in valid_reasons:
+        logger.info(f"[{context}] [Cloudflare WARP] Normal operation ({reason}). Rotation skipped to preserve session cookies.")
+        return get_current_ip()
+
     if not force and (now - _LAST_ROTATION_TIME < MIN_ROTATION_INTERVAL_SECS):
-        logger.info(f"[{context}] [Cloudflare WARP] Rotation skipped (Cooldown active: {int(now - _LAST_ROTATION_TIME)}s / {int(MIN_ROTATION_INTERVAL_SECS)}s).")
+        logger.info(f"[{context}] [Cloudflare WARP] Cooldown active ({int(now - _LAST_ROTATION_TIME)}s / {int(MIN_ROTATION_INTERVAL_SECS)}s). Skipped.")
         return get_current_ip()
 
     if not WARP_CLI.exists():
@@ -59,17 +75,17 @@ def rotate_warp_ip(context: str = "Collector", force: bool = False) -> str:
         return "unknown"
 
     old_ip = get_current_ip()
-    logger.info(f"[{context}] [Cloudflare WARP] Current IP: {old_ip}. Rotating tunnel...")
+    logger.info(f"[{context}] [Cloudflare WARP] Rotation triggered ({reason}). Old IP: {old_ip}")
     try:
         subprocess.run([str(WARP_CLI), "disconnect"], capture_output=True, text=True, check=False)
-        time.sleep(1.5)
+        time.sleep(1.0)
         subprocess.run([str(WARP_CLI), "tunnel", "rotate-keys"], capture_output=True, text=True, check=False)
         time.sleep(1.0)
         subprocess.run([str(WARP_CLI), "connect"], capture_output=True, text=True, check=False)
-        time.sleep(3.5)
+        time.sleep(3.0)
         new_ip = get_current_ip()
         _LAST_ROTATION_TIME = time.time()
-        logger.info(f"[{context}] [Cloudflare WARP] Rotation complete. New IP: {new_ip} (Old: {old_ip})")
+        logger.info(f"[{context}] [Cloudflare WARP] Rotation complete. New IP: {new_ip} (Changed: {new_ip != old_ip})")
         return new_ip
     except Exception as e:
         logger.error(f"[{context}] [Cloudflare WARP] Error rotating IP: {e}")
@@ -78,10 +94,11 @@ def rotate_warp_ip(context: str = "Collector", force: bool = False) -> str:
 
 class BrowserLock:
     """
-    Context manager ensuring strictly non-overlapping access to Chrome CDP.
-    Prevents any two collectors from opening tabs or sending WebSocket frames simultaneously.
+    Fast, deadline-enforcing browser mutex.
+    Acquires CDP lock with a 2.0s deadline. If contested, sets acquired=False
+    so callers can cleanly SKIP rather than blocking in a stale latency queue.
     """
-    def __init__(self, collector_name: str, timeout_secs: int = 120):
+    def __init__(self, collector_name: str, timeout_secs: float = 2.0):
         self.collector_name = collector_name
         self.timeout_secs = timeout_secs
         self.acquired = False
@@ -108,8 +125,9 @@ class BrowserLock:
                         continue
                 except Exception:
                     pass
-            time.sleep(1.0)
-        logger.warning(f"[{self.collector_name}] Timed out waiting for browser lock after {self.timeout_secs}s.")
+            time.sleep(0.2)
+
+        logger.info(f"[{self.collector_name}] SKIPPED_LOCK_CONTENTION: Browser busy. Yielding immediately without blocking.")
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -121,16 +139,28 @@ class BrowserLock:
                 pass
 
 
+def calculate_wall_decay_weight(age_seconds: float, tau: float = 1800.0) -> float:
+    """
+    Continuous Bayesian Prior Age Decay for Order Book Walls.
+    weight = exp(-age / tau)
+    - At age 0s: weight = 1.00
+    - At age 15m (900s): weight = 0.61
+    - At age 30m (1800s): weight = 0.37
+    - At age 60m (3600s): weight = 0.14
+    Eliminates binary 30s cut-off mismatches on 15m collection cadences.
+    """
+    if age_seconds < 0.0:
+        return 0.0
+    return float(round(math.exp(-age_seconds / tau), 4))
+
+
 # Reserved minutes in the hour for non-overlapping execution
 WHALE_MINUTES = [0, 15, 35, 50]
 LIQUIDATION_MINUTES = [10, 25, 55]
 
 
 def is_scheduled_for_other_collector(current_minute: int, collector_type: str) -> bool:
-    """
-    Checks if the current minute is exclusively reserved for another collector.
-    Used by Footprint to yield and guarantee zero overlap.
-    """
+    """Checks if current minute is exclusively reserved for another collector."""
     if collector_type == "footprint":
         return (current_minute in WHALE_MINUTES) or (current_minute in LIQUIDATION_MINUTES)
     elif collector_type == "whale":
