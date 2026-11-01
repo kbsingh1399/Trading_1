@@ -115,8 +115,50 @@ def rotate_cloudflare_ip():
         logger.error(f"[Cloudflare WARP] Error during IP rotation: {e}")
 
 
+def cleanup_coinglass_tabs(keep_tab_id: Optional[str] = None):
+    """Closes all orphaned CoinGlass tabs in Chrome to keep browser lean and free."""
+    try:
+        req = urllib.request.Request("http://127.0.0.1:9222/json", headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            tabs = json.loads(resp.read().decode())
+            for t in tabs:
+                tid = t.get("id")
+                url = t.get("url", "").lower()
+                if tid != keep_tab_id and "coinglass.com" in url:
+                    try:
+                        urllib.request.urlopen(f"http://127.0.0.1:9222/json/close/{tid}", timeout=2)
+                        logger.info(f"Cleaned up orphan CoinGlass tab ({tid})")
+                    except Exception:
+                        pass
+    except Exception as e:
+        logger.debug(f"Tab cleanup error: {e}")
+
+
+def acquire_pid_lock(name: str):
+    """Ensures strictly one instance of this daemon runs at any time."""
+    lock_dir = DB_DIR / ".locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    lock_file = lock_dir / f"{name}.pid"
+    my_pid = os.getpid()
+    if lock_file.exists():
+        try:
+            old_pid = int(lock_file.read_text().strip())
+            if old_pid != my_pid:
+                # Terminate any previous instance
+                subprocess.run(
+                    ["powershell", "-Command", f"Stop-Process -Id {old_pid} -Force -ErrorAction SilentlyContinue"],
+                    capture_output=True, check=False
+                )
+                logger.info(f"Terminated previous instance PID {old_pid} to enforce single-instance guarantee.")
+        except Exception:
+            pass
+    lock_file.write_text(str(my_pid))
+
+
 def open_coinglass_footprint_tab() -> Tuple[Optional[str], Optional[str]]:
     """Opens a fresh CoinGlass footprint tab and returns (tab_id, ws_url)."""
+    # First clean up any orphaned tabs before creating a new one
+    cleanup_coinglass_tabs()
     try:
         req = urllib.request.Request("http://127.0.0.1:9222/json/new?https://www.coinglass.com/footprint", method="PUT")
         resp = urllib.request.urlopen(req, timeout=5)
@@ -132,13 +174,14 @@ def open_coinglass_footprint_tab() -> Tuple[Optional[str], Optional[str]]:
 
 def close_tab(tab_id: str):
     """Closes tab immediately after sweep to keep browser lean."""
-    if not tab_id:
-        return
-    try:
-        urllib.request.urlopen(f"http://127.0.0.1:9222/json/close/{tab_id}", timeout=3)
-        logger.info(f"Closed footprint tab ({tab_id}) - Browser lean & free.")
-    except Exception as e:
-        logger.warning(f"Could not close tab {tab_id}: {e}")
+    if tab_id:
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:9222/json/close/{tab_id}", timeout=3)
+            logger.info(f"Closed footprint tab ({tab_id}) - Browser lean & free.")
+        except Exception as e:
+            logger.warning(f"Could not close tab {tab_id}: {e}")
+    # Enforce zero leftover coinglass tabs
+    cleanup_coinglass_tabs()
 
 
 async def cdp_eval(ws, expr: str, msg_id: int = 1, await_promise: bool = False):
@@ -391,6 +434,8 @@ async def footprint_sweep_cycle(ws) -> int:
 
 
 async def run_collector_daemon(cycle_seconds: int = 120):
+    acquire_pid_lock("direct_footprint_collector")
+    cleanup_coinglass_tabs()
     global evaluator
     logger.info("Initializing RealtimeSignalEvaluator with DeepMind TimesFM & OLAP...")
     evaluator = RealtimeSignalEvaluator()

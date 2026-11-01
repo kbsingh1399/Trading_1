@@ -62,8 +62,48 @@ def get_seconds_until_next_quarter_hour() -> float:
     return max(1.0, diff)
 
 
+def cleanup_coinglass_tabs(keep_tab_id: Optional[str] = None):
+    """Closes all orphaned CoinGlass tabs in Chrome to keep browser lean and free."""
+    try:
+        req = urllib.request.Request("http://127.0.0.1:9222/json", headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            tabs = json.loads(resp.read().decode())
+            for t in tabs:
+                tid = t.get("id")
+                url = t.get("url", "").lower()
+                if tid != keep_tab_id and "coinglass.com" in url:
+                    try:
+                        urllib.request.urlopen(f"http://127.0.0.1:9222/json/close/{tid}", timeout=2)
+                        logger.info(f"Cleaned up orphan CoinGlass tab ({tid})")
+                    except Exception:
+                        pass
+    except Exception as e:
+        logger.debug(f"Tab cleanup error: {e}")
+
+
+def acquire_pid_lock(name: str):
+    """Ensures strictly one instance of this daemon runs at any time."""
+    lock_dir = DB_DIR / ".locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    lock_file = lock_dir / f"{name}.pid"
+    my_pid = os.getpid()
+    if lock_file.exists():
+        try:
+            old_pid = int(lock_file.read_text().strip())
+            if old_pid != my_pid:
+                subprocess.run(
+                    ["powershell", "-Command", f"Stop-Process -Id {old_pid} -Force -ErrorAction SilentlyContinue"],
+                    capture_output=True, check=False
+                )
+                logger.info(f"Terminated previous instance PID {old_pid} to enforce single-instance guarantee.")
+        except Exception:
+            pass
+    lock_file.write_text(str(my_pid))
+
+
 def open_coinglass_whale_tab(initial_sym: str = "BTC") -> Tuple[Optional[str], Optional[str]]:
     """Opens a fresh CoinGlass large orderbook tab and returns (tab_id, ws_url)."""
+    cleanup_coinglass_tabs()
     try:
         url = f"https://www.coinglass.com/large-orderbook-statistics?symbol={initial_sym}"
         req = urllib.request.Request(f"http://127.0.0.1:9222/json/new?{url}", method="PUT")
@@ -80,13 +120,13 @@ def open_coinglass_whale_tab(initial_sym: str = "BTC") -> Tuple[Optional[str], O
 
 def close_tab(tab_id: str):
     """Closes tab immediately after sweep to keep browser lean."""
-    if not tab_id:
-        return
-    try:
-        urllib.request.urlopen(f"http://127.0.0.1:9222/json/close/{tab_id}", timeout=3)
-        logger.info(f"Closed whale orders tab ({tab_id}) - Browser lean & free.")
-    except Exception as e:
-        logger.warning(f"Could not close tab {tab_id}: {e}")
+    if tab_id:
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:9222/json/close/{tab_id}", timeout=3)
+            logger.info(f"Closed whale orders tab ({tab_id}) - Browser lean & free.")
+        except Exception as e:
+            logger.warning(f"Could not close tab {tab_id}: {e}")
+    cleanup_coinglass_tabs()
 
 CRYPTO_SYMBOLS = [
     "BTC", "ETH", "SOL", "XRP", "DOGE", "BNB", "ADA", "LINK", "AVAX", "SUI", "NEAR", "HYPE"
@@ -438,6 +478,8 @@ async def sweep_all_cryptos(symbols: list = None) -> dict:
 
 
 async def daemon_loop():
+    acquire_pid_lock("whale_orders_collector")
+    cleanup_coinglass_tabs()
     logger.info("=== Whale Orders Collector Daemon Active (Cadence: :00, :15, :30, :45 of every hour) ===")
     
     # Run initial sweep immediately on startup
