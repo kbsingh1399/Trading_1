@@ -412,26 +412,46 @@ async def execute_liquidation_sweep():
         logger.error("Failed to open liquidation tab. Aborting sweep.")
         return
 
+    ws = None
     try:
-        await asyncio.sleep(3.0)
-        ws = None
-        for attempt in range(4):
-            try:
-                ws = await websockets.connect(ws_url, max_size=50_000_000)
-                break
-            except Exception as conn_err:
-                if attempt == 3:
-                    raise conn_err
-                await asyncio.sleep(2.0)
+        await asyncio.sleep(2.5)
 
-        async with ws:
-            for i, sym in enumerate(CRYPTO_SYMBOLS, 1):
+        async def get_active_ws():
+            for attempt in range(4):
                 try:
-                    logger.info(f"[{i}/{len(CRYPTO_SYMBOLS)}] Sweeping liquidation for {sym}...")
-                    await sweep_symbol_liquidation(ws, sym)
-                except Exception as e:
-                    logger.warning(f"[{sym}] Error during liquidation harvest: {e}")
+                    return await websockets.connect(ws_url, max_size=50_000_000, ping_interval=None)
+                except Exception:
+                    await asyncio.sleep(1.5)
+            return None
+
+        ws = await get_active_ws()
+        if not ws:
+            logger.error("Could not establish CDP WebSocket connection for liquidation sweep.")
+            return
+
+        for i, sym in enumerate(CRYPTO_SYMBOLS, 1):
+            try:
+                if ws is None or ws.closed:
+                    ws = await get_active_ws()
+                    if not ws:
+                        logger.error(f"Failed to reconnect CDP WebSocket for {sym}")
+                        break
+                logger.info(f"[{i}/{len(CRYPTO_SYMBOLS)}] Sweeping liquidation for {sym}...")
+                await sweep_symbol_liquidation(ws, sym)
+            except Exception as e:
+                logger.warning(f"[{sym}] Error during liquidation harvest: {e}")
+                try:
+                    if ws and not ws.closed:
+                        await ws.close()
+                except Exception:
+                    pass
+                ws = await get_active_ws()
     finally:
+        if ws and not ws.closed:
+            try:
+                await ws.close()
+            except Exception:
+                pass
         # Close the tab immediately once done
         close_tab(tab_id)
 

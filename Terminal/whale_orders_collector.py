@@ -459,32 +459,52 @@ async def sweep_all_cryptos(symbols: list = None) -> dict:
     target_symbols = symbols or CRYPTO_SYMBOLS
     tab_id, ws_url = open_coinglass_whale_tab(target_symbols[0])
     if not tab_id or not ws_url:
-        logger.error("Failed to open whale orders tab in Edge!")
+        logger.error("Failed to open whale orders tab in Chrome!")
         return {}
 
     summary = {}
+    ws = None
     try:
-        await asyncio.sleep(3.0)
-        ws = None
-        for attempt in range(4):
-            try:
-                ws = await websockets.connect(ws_url, max_size=50_000_000)
-                break
-            except Exception as conn_err:
-                if attempt == 3:
-                    raise conn_err
-                await asyncio.sleep(2.0)
+        await asyncio.sleep(2.5)
 
-        async with ws:
-            for sym in target_symbols:
+        async def get_active_ws():
+            for attempt in range(4):
                 try:
-                    res = await harvest_whale_orders_for_symbol(ws, sym)
-                    summary[sym] = res
-                    logger.info(f"[{sym}] Complete: {res['open_orders_count']} open, {res['history_orders_count']} history")
-                except Exception as e:
-                    logger.error(f"[{sym}] Error: {e}")
-                    summary[sym] = {"error": str(e)}
+                    return await websockets.connect(ws_url, max_size=50_000_000, ping_interval=None)
+                except Exception:
+                    await asyncio.sleep(1.5)
+            return None
+
+        ws = await get_active_ws()
+        if not ws:
+            logger.error("Could not establish CDP WebSocket connection.")
+            return {}
+
+        for sym in target_symbols:
+            try:
+                if ws is None or ws.closed:
+                    ws = await get_active_ws()
+                    if not ws:
+                        logger.error(f"Failed to reconnect CDP WebSocket for {sym}")
+                        break
+                res = await harvest_whale_orders_for_symbol(ws, sym)
+                summary[sym] = res
+                logger.info(f"[{sym}] Complete: {res['open_orders_count']} open, {res['history_orders_count']} history")
+            except Exception as e:
+                logger.error(f"[{sym}] Error: {e}")
+                summary[sym] = {"error": str(e)}
+                try:
+                    if ws and not ws.closed:
+                        await ws.close()
+                except Exception:
+                    pass
+                ws = await get_active_ws()
     finally:
+        if ws and not ws.closed:
+            try:
+                await ws.close()
+            except Exception:
+                pass
         # Closes CoinGlass tab immediately once done with dumping
         close_tab(tab_id)
     return summary
