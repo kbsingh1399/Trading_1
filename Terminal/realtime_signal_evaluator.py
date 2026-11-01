@@ -20,10 +20,15 @@ import sys
 import json
 import logging
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Optional
 import pandas as pd
 import numpy as np
+
+try:
+    import winsound
+except ImportError:
+    winsound = None
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
@@ -38,6 +43,19 @@ logger = logging.getLogger("RealtimeSignalEvaluator")
 DB_DIR = ROOT_DIR / "Database"
 ALERTS_JSONL = DB_DIR / "realtime_trade_alerts.jsonl"
 ALERTS_PARQUET = DB_DIR / "realtime_trade_alerts.parquet"
+
+
+def utc_to_ist_str(utc_str: Optional[str]) -> str:
+    """Converts standard UTC ISO string to IST (UTC+5:30) display format."""
+    if not utc_str:
+        return ""
+    try:
+        clean = str(utc_str).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(clean)
+        ist_dt = dt.astimezone(timezone(timedelta(hours=5, minutes=30)))
+        return ist_dt.strftime("%Y-%m-%d %H:%M:%S IST")
+    except Exception:
+        return str(utc_str)
 
 
 class RealtimeSignalEvaluator:
@@ -124,40 +142,70 @@ class RealtimeSignalEvaluator:
             confluence_score -= 15
             reasons.append("Vector Memory Unfavorable Veto")
 
-        # 4. Google DeepMind TimesFM 2.5 Zero-Shot CVD Forecast
+        # 4. Google DeepMind TimesFM 2.5 Dual Zero-Shot Forecast (CVD + Price)
         cvd_series = self.olap.get_series(sym, "cumulative_delta", limit=64)
-        tfm_forecast = {"available": False}
-        if len(cvd_series) >= 16 and self.timesfm.is_available:
-            tfm_res = self.timesfm.forecast_trajectory(cvd_series, horizon=8)
-            if tfm_res.get("available"):
-                tfm_forecast = tfm_res
-                tfm_dir = tfm_res.get("direction", "NEUTRAL")
-                tfm_conf = tfm_res.get("confidence", 0.0)
-                if direction == "BUY":
-                    if "BULLISH" in tfm_dir:
-                        confluence_score += 15
-                        reasons.append(f"DeepMind TimesFM {tfm_dir} (conf {tfm_conf:.0%})")
-                    elif "STRONG_BEARISH" in tfm_dir and tfm_conf > 0.6:
-                        confluence_score -= 25
-                        reasons.append(f"DeepMind TimesFM Adverse Veto ({tfm_dir})")
-                elif direction == "SELL":
-                    if "BEARISH" in tfm_dir:
-                        confluence_score += 15
-                        reasons.append(f"DeepMind TimesFM {tfm_dir} (conf {tfm_conf:.0%})")
-                    elif "STRONG_BULLISH" in tfm_dir and tfm_conf > 0.6:
-                        confluence_score -= 25
-                        reasons.append(f"DeepMind TimesFM Adverse Veto ({tfm_dir})")
+        price_series = self.olap.get_series(sym, "close", limit=64)
+        
+        tfm_cvd = {"available": False}
+        tfm_price = {"available": False}
+        
+        if self.timesfm.is_available:
+            if len(cvd_series) >= 16:
+                tfm_cvd = self.timesfm.forecast_trajectory(cvd_series, horizon=8)
+            if len(price_series) >= 16:
+                tfm_price = self.timesfm.forecast_trajectory(price_series, horizon=8)
 
-        # 5. Formulate Trade Risk Levels
-        entry = sig_price
+        cvd_dir = tfm_cvd.get("direction", "NEUTRAL") if tfm_cvd.get("available") else "N/A"
+        cvd_conf = tfm_cvd.get("confidence", 0.0)
+        price_dir = tfm_price.get("direction", "NEUTRAL") if tfm_price.get("available") else "N/A"
+        price_conf = tfm_price.get("confidence", 0.0)
+
         if direction == "BUY":
-            sl = round(entry * 0.992, 6)
-            tp1 = round(poc_price if (poc_price and poc_price > entry * 1.008) else entry * 1.015, 6)
-            tp2 = round(entry * 1.025, 6)
+            if "BULLISH" in cvd_dir:
+                confluence_score += 10
+                reasons.append(f"TimesFM CVD {cvd_dir} ({cvd_conf:.0%})")
+            elif "STRONG_BEARISH" in cvd_dir and cvd_conf > 0.6:
+                confluence_score -= 20
+                reasons.append(f"TimesFM Adverse CVD Veto ({cvd_dir})")
+                
+            if "BULLISH" in price_dir:
+                confluence_score += 10
+                reasons.append(f"TimesFM Price {price_dir} ({price_conf:.0%})")
+            elif "STRONG_BEARISH" in price_dir and price_conf > 0.6:
+                confluence_score -= 20
+                reasons.append(f"TimesFM Adverse Price Veto ({price_dir})")
+                
         elif direction == "SELL":
-            sl = round(entry * 1.008, 6)
-            tp1 = round(poc_price if (poc_price and poc_price < entry * 0.992) else entry * 0.985, 6)
-            tp2 = round(entry * 0.975, 6)
+            if "BEARISH" in cvd_dir:
+                confluence_score += 10
+                reasons.append(f"TimesFM CVD {cvd_dir} ({cvd_conf:.0%})")
+            elif "STRONG_BULLISH" in cvd_dir and cvd_conf > 0.6:
+                confluence_score -= 20
+                reasons.append(f"TimesFM Adverse CVD Veto ({cvd_dir})")
+                
+            if "BEARISH" in price_dir:
+                confluence_score += 10
+                reasons.append(f"TimesFM Price {price_dir} ({price_conf:.0%})")
+            elif "STRONG_BULLISH" in price_dir and price_conf > 0.6:
+                confluence_score -= 20
+                reasons.append(f"TimesFM Adverse Price Veto ({price_dir})")
+
+        # 5. Formulate Trade Risk Levels (ATR Adaptive)
+        entry = sig_price
+        atr_pct = float(reg.get("atr_pct", 1.0))
+        # Adaptive SL distance: 1.5x ATR, bounded between 0.5% and 2.5%
+        sl_pct = max(0.005, min(0.025, (atr_pct * 1.5) / 100.0))
+        
+        if direction == "BUY":
+            sl = round(entry * (1.0 - sl_pct), 6)
+            tp1_target = entry * (1.0 + sl_pct * 1.8)
+            tp1 = round(poc_price if (poc_price and poc_price > entry * (1.0 + sl_pct)) else tp1_target, 6)
+            tp2 = round(entry * (1.0 + sl_pct * 3.0), 6)
+        elif direction == "SELL":
+            sl = round(entry * (1.0 + sl_pct), 6)
+            tp1_target = entry * (1.0 - sl_pct * 1.8)
+            tp1 = round(poc_price if (poc_price and poc_price < entry * (1.0 - sl_pct)) else tp1_target, 6)
+            tp2 = round(entry * (1.0 - sl_pct * 3.0), 6)
         else:
             sl = entry
             tp1 = entry
@@ -169,8 +217,13 @@ class RealtimeSignalEvaluator:
 
         is_actionable = (confluence_score >= 65.0) and (direction != "NEUTRAL") and (rr >= 1.5)
 
+        eval_utc = datetime.now(timezone.utc).isoformat()
+        eval_ist = utc_to_ist_str(eval_utc)
+        candle_ist = utc_to_ist_str(sig_time)
+
         evaluation = {
-            "evaluated_at_utc": datetime.now(timezone.utc).isoformat(),
+            "evaluated_at_utc": eval_utc,
+            "evaluated_at_ist": eval_ist,
             "symbol": sym,
             "mt5_symbol": mt5_sym,
             "direction": direction,
@@ -183,6 +236,7 @@ class RealtimeSignalEvaluator:
                 "title": sig_title,
                 "description": sig_desc,
                 "candle_utc": sig_time,
+                "candle_ist": candle_ist,
                 "price": entry
             },
             "trade_levels": {
@@ -191,6 +245,8 @@ class RealtimeSignalEvaluator:
                 "take_profit_1": tp1,
                 "take_profit_2": tp2,
                 "rr_ratio": rr,
+                "sl_pct": round(sl_pct * 100, 2),
+                "atr_pct": atr_pct,
                 "hard_max_risk_usd": 50.00
             },
             "order_flow_metrics": {
@@ -203,12 +259,16 @@ class RealtimeSignalEvaluator:
             },
             "market_regime": {
                 "regime": current_regime,
-                "volatility": vol_regime
+                "volatility": vol_regime,
+                "atr_pct": atr_pct
             },
             "deepmind_timesfm": {
-                "direction": tfm_forecast.get("direction", "N/A"),
-                "confidence": tfm_forecast.get("confidence", 0.0),
-                "drift": tfm_forecast.get("predicted_drift", 0.0)
+                "cvd_direction": cvd_dir,
+                "cvd_confidence": cvd_conf,
+                "cvd_drift": tfm_cvd.get("predicted_drift", 0.0),
+                "price_direction": price_dir,
+                "price_confidence": price_conf,
+                "price_drift": tfm_price.get("predicted_drift", 0.0)
             },
             "vector_memory": {
                 "verdict": vm_verdict,
@@ -231,14 +291,24 @@ class RealtimeSignalEvaluator:
                 
                 # Prominently log actionable trades
                 if res["is_actionable"]:
-                    logger.info("\n" + "=" * 80)
+                    # Acoustic alert (Windows beep)
+                    if winsound is not None:
+                        try:
+                            winsound.Beep(1200, 350)
+                        except Exception:
+                            pass
+                    print("\a", end="", flush=True)  # Terminal bell
+
+                    logger.info("\n" + "=" * 90)
                     logger.info(f"🚨 ACTIONABLE REAL-TIME TRADE ALERT: [{res['symbol']}] {res['direction']} (Score: {res['confluence_score']}/100)")
-                    logger.info(f"   Entry: {res['trade_levels']['entry_price']} | SL: {res['trade_levels']['stop_loss']} | TP1: {res['trade_levels']['take_profit_1']} (R:R {res['trade_levels']['rr_ratio']}:1)")
-                    logger.info(f"   DeepMind TimesFM: {res['deepmind_timesfm']['direction']} (Conf: {res['deepmind_timesfm']['confidence']:.0%})")
+                    logger.info(f"   Time: {res['evaluated_at_ist']} (UTC: {res['evaluated_at_utc']})")
+                    logger.info(f"   Signal Bar: {res['signal_details']['candle_ist']} | Signal: {res['signal_details']['sig_name']} ({res['signal_details']['side']})")
+                    logger.info(f"   Entry: {res['trade_levels']['entry_price']} | SL: {res['trade_levels']['stop_loss']} (-{res['trade_levels']['sl_pct']}%) | TP1: {res['trade_levels']['take_profit_1']} (R:R {res['trade_levels']['rr_ratio']}:1)")
+                    logger.info(f"   DeepMind TimesFM: CVD={res['deepmind_timesfm']['cvd_direction']} ({res['deepmind_timesfm']['cvd_confidence']:.0%}) | Price={res['deepmind_timesfm']['price_direction']} ({res['deepmind_timesfm']['price_confidence']:.0%})")
                     logger.info(f"   Drivers: {', '.join(res['confluence_reasons'])}")
-                    logger.info("=" * 80)
+                    logger.info("=" * 90)
                 else:
-                    logger.info(f"[EVALUATOR] Evaluated {res['symbol']} {res['signal_details']['sig_name']} ({res['direction']}) -> Score: {res['confluence_score']}/100 (Not actionable)")
+                    logger.info(f"[EVALUATOR] {res['symbol']} {res['signal_details']['sig_name']} ({res['direction']}) -> Score: {res['confluence_score']}/100 [Not actionable]")
             except Exception as e:
                 logger.error(f"Error evaluating signal for {s.get('symbol')}: {e}")
         return results
@@ -256,6 +326,7 @@ class RealtimeSignalEvaluator:
         try:
             flat_record = {
                 "evaluated_at_utc": alert["evaluated_at_utc"],
+                "evaluated_at_ist": alert.get("evaluated_at_ist", ""),
                 "symbol": alert["symbol"],
                 "mt5_symbol": alert["mt5_symbol"],
                 "direction": alert["direction"],
@@ -264,16 +335,19 @@ class RealtimeSignalEvaluator:
                 "sig_name": alert["signal_details"]["sig_name"],
                 "sig_code": alert["signal_details"]["sig_code"],
                 "candle_utc": alert["signal_details"]["candle_utc"],
+                "candle_ist": alert["signal_details"].get("candle_ist", ""),
                 "entry_price": alert["trade_levels"]["entry_price"],
                 "stop_loss": alert["trade_levels"]["stop_loss"],
                 "take_profit_1": alert["trade_levels"]["take_profit_1"],
                 "rr_ratio": alert["trade_levels"]["rr_ratio"],
+                "sl_pct": alert["trade_levels"].get("sl_pct", 0.8),
                 "whale_imbalance": alert["order_flow_metrics"]["whale_imbalance_bid_ratio"],
                 "cvd_slope": alert["order_flow_metrics"]["cvd_slope"],
                 "regime": alert["market_regime"]["regime"],
-                "timesfm_direction": alert["deepmind_timesfm"]["direction"],
-                "timesfm_confidence": alert["deepmind_timesfm"]["confidence"],
-                "timesfm_drift": alert["deepmind_timesfm"]["drift"],
+                "timesfm_cvd_dir": alert["deepmind_timesfm"].get("cvd_direction", "N/A"),
+                "timesfm_cvd_conf": alert["deepmind_timesfm"].get("cvd_confidence", 0.0),
+                "timesfm_price_dir": alert["deepmind_timesfm"].get("price_direction", "N/A"),
+                "timesfm_price_conf": alert["deepmind_timesfm"].get("price_confidence", 0.0),
                 "reasons": ", ".join(alert["confluence_reasons"])
             }
             new_df = pd.DataFrame([flat_record])
