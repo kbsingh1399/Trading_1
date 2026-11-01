@@ -38,24 +38,33 @@ MIN_RR_RATIO = 1.50            # Minimum 1.5:1 reward-to-risk ratio
 STRESS_MULT = 1.25             # Stress multiplier on stop-out for gap/slippage reserve
 EXEC_RESERVE_USD = 2.00        # Per-trade execution reserve for broker friction
 SURVIVAL_LOSSES = 10           # Required consecutive loss survival streak
+# Standard survival divisor (10 loss episodes * 2 positions = 20)
+SURVIVAL_DIVISOR = SURVIVAL_LOSSES * MAX_OPEN_POSITIONS
 
 
 def budget_per_trade(
     equity: float,
     balance: float,
-    committed_stress_usd: float = 0.0
+    committed_stress_usd: float = 0.0,
+    stress_native: bool = False
 ) -> Tuple[float, bool, str]:
     """
     Survival-constrained, reservation-based capital budgeting.
     Replaces the flawed '50% of buffer' geometric decay rule.
+
+    Halt Hierarchy:
+        1. Base capital <= HARD_FLOOR_USD -> EQUITY_BREACH
+        2. Free buffer <= HALT_CUSHION_USD -> PROSPECTIVE_HALT (cushion defense)
+        3. Computed budget < MIN_RISK_USD -> BUDGET_BELOW_MIN_FLOOR (binds when free buffer < $100)
 
     Calculates:
         base = min(balance, equity)
         buffer = base - HARD_FLOOR_USD
         free = buffer - committed_stress_usd
         if free <= HALT_CUSHION_USD -> HALT (prospective)
-        per_trade = free / (SURVIVAL_LOSSES * MAX_OPEN_POSITIONS)
-        budget = min(MAX_RISK_USD, per_trade)
+        divisor = SURVIVAL_DIVISOR * (STRESS_MULT if stress_native else 1.0)
+        per_trade = free / divisor
+        budget = min(MAX_RISK_USD, math.floor(per_trade * 100.0) / 100.0)
 
     Returns:
         (allowed_budget_usd, is_admissible, reason)
@@ -70,8 +79,10 @@ def budget_per_trade(
     if free <= HALT_CUSHION_USD:
         return 0.0, False, f"PROSPECTIVE_HALT: Free buffer ${free:.2f} <= Halt Cushion ${HALT_CUSHION_USD:.2f}"
 
-    per_trade = free / (SURVIVAL_LOSSES * MAX_OPEN_POSITIONS)
-    budget = min(MAX_RISK_USD, max(0.0, round(per_trade, 2)))
+    divisor = SURVIVAL_DIVISOR * (STRESS_MULT if stress_native else 1.0)
+    per_trade = free / divisor
+    # Qwen F-15: Floor to cent (math.floor) to prevent upward rounding on survival constraints
+    budget = min(MAX_RISK_USD, max(0.0, math.floor(per_trade * 100.0) / 100.0))
 
     if budget < MIN_RISK_USD:
         return 0.0, False, (
@@ -125,14 +136,15 @@ def admissible_volume(
     if cap_usd < floor_usd:
         return None, f"EMPTY_CAP_WINDOW: cap (${cap_usd:.2f}) < floor (${floor_usd:.2f})", 0.0
 
-    # Discrete step boundaries with 1e-12 floating-point margin
-    k_min = math.ceil((floor_usd / actual_loss_step) - 1e-12)
+    # Discrete step boundaries with relative floating-point margin (Qwen F-14)
+    eps = 1e-9 * max(1.0, float(actual_loss_step))
+    k_min = math.ceil((floor_usd / actual_loss_step) - eps)
     max_step_bound = min(cap_usd, max_lot * actual_loss_step)
-    k_max = math.floor((max_step_bound / actual_loss_step) + 1e-12)
+    k_max = math.floor((max_step_bound / actual_loss_step) + eps)
 
     # Broker min/max constraints in step index space
-    k_broker_min = math.ceil((min_lot / actual_step) - 1e-12)
-    k_broker_max = math.floor((max_lot / actual_step) + 1e-12)
+    k_broker_min = math.ceil((min_lot / actual_step) - eps)
+    k_broker_max = math.floor((max_lot / actual_step) + eps)
 
     effective_k_min = max(k_min, k_broker_min)
     effective_k_max = min(k_max, k_broker_max)
@@ -149,7 +161,8 @@ def admissible_volume(
     final_lots = round(effective_k_min * actual_step, 6)
     actual_risk_usd = round(effective_k_min * actual_loss_step, 2)
 
-    if actual_risk_usd > cap_usd + 0.01:
+    # Strict fail-closed overflow check
+    if actual_risk_usd > cap_usd + eps:
         return None, f"NUMERICAL_OVERFLOW: realized risk ${actual_risk_usd:.2f} > cap ${cap_usd:.2f}", 0.0
 
     return final_lots, "OK", actual_risk_usd

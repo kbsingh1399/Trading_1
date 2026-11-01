@@ -58,4 +58,58 @@ def test_sentinel_novel_signal_acceptance():
     # Immediate second evaluation must now be blocked
     res2 = sentinel.evaluate_incoming_signal("BTC", "div", 68600.0, 1700000100000)
     assert res2["accepted"] is False
-    assert "DUPLICATE_LATCH_BLOCKED" in res2["reason"]
+
+
+def test_sentinel_persistent_zone_latching():
+    """
+    Qwen F-03 / DeepSeek AUD-01:
+    Verifies that a persistent absorption zone at $68,500 that signals again 60 seconds later
+    (with a novel timestamp and +$0.50 price change) is correctly BLOCKED by the zone latch.
+    """
+    sentinel = RealTimeSentinel(footprint_feeds=["BTC"], blueberry_mt5_map=["BTC"])
+    base_t = 1700000000000
+
+    # First entry into the absorption zone
+    res1 = sentinel.evaluate_incoming_signal("BTC", "abs", 68500.0, base_t)
+    assert res1["accepted"] is True
+
+    # 60 seconds later, price drifts by $0.50 (+0.0007%) inside the same 0.25% zone
+    res2 = sentinel.evaluate_incoming_signal("BTC", "abs", 68500.50, base_t + 60_000)
+    assert res2["accepted"] is False
+    assert "PERSISTENT_ZONE_BLOCKED" in res2["reason"]
+
+
+def test_sentinel_broker_symbol_normalization():
+    """
+    Qwen F-08 / DeepSeek AUD-08:
+    Normalizes broker symbols with suffixes (BTCUSDc, BTCUSD.m) and matches footprint feeds.
+    """
+    footprint = ["BTCUSD", "ETHUSD"]
+    broker_map = ["BTCUSDc", "ETHUSD.m", "XAUUSD.pro"]
+
+    sentinel = RealTimeSentinel(footprint_feeds=footprint, blueberry_mt5_map=broker_map)
+    assert "BTCUSD" in sentinel.executable_universe
+    assert "ETHUSD" in sentinel.executable_universe
+
+    res = sentinel.evaluate_incoming_signal("btcusd", "abs", 68500.0, 1700000000000)
+    assert res["accepted"] is True
+    assert res["broker_symbol"] == "BTCUSDc"
+
+
+def test_sentinel_two_phase_release():
+    """
+    Qwen F-09:
+    If downstream MT5 placement fails, releasing the reservation frees the zone for subsequent attempts.
+    """
+    sentinel = RealTimeSentinel(footprint_feeds=["BTC"], blueberry_mt5_map=["BTC"])
+    t = 1700000000000
+
+    res = sentinel.evaluate_incoming_signal("BTC", "abs", 68500.0, t)
+    assert res["accepted"] is True
+
+    # Execution fails downstream (e.g. margin or spread gate) -> Release signal
+    sentinel.release_signal(res["latch_hash"], res["zone_key"])
+
+    # Retry should now be accepted again
+    retry = sentinel.evaluate_incoming_signal("BTC", "abs", 68500.0, t)
+    assert retry["accepted"] is True

@@ -135,8 +135,11 @@ class DeepMindTimesFMForecaster:
         vol_bars = vol[1:]
 
         # 2. Volume-normalization -> Delta ratio r_t in [-1.0, 1.0]
-        # Eliminates volume-scaling non-stationarity across regime shifts
-        r_t = np.clip(delta_cvd / (vol_bars + 1e-9), -1.0, 1.0)
+        # Qwen F-13: Handle zero-volume bars safely to avoid 1e-9 clipping explosion to +/-1.0
+        with np.errstate(divide='ignore', invalid='ignore'):
+            valid_vol = vol_bars > 0.0
+            r_t = np.zeros_like(delta_cvd, dtype=np.float32)
+            r_t[valid_vol] = np.clip(delta_cvd[valid_vol] / vol_bars[valid_vol], -1.0, 1.0)
 
         # Context length: max 128 completed bars
         if len(r_t) > 128:
@@ -150,9 +153,23 @@ class DeepMindTimesFMForecaster:
         try:
             point_fc, quantile_fc = self._model.forecast(horizon=horizon, inputs=[r_t])
             pts = point_fc[0][:horizon]
-            q10 = quantile_fc[0][:horizon, 0]  # 10th percentile
-            q50 = quantile_fc[0][:horizon, 4]  # 50th percentile
-            q90 = quantile_fc[0][:horizon, 8]  # 90th percentile
+
+            # Qwen F-06: Resolve quantile columns dynamically to support both:
+            # 1. Native TimesFM 2.5 PyTorch API: 10 columns [mean, q10, q20, q30, q40, q50, q60, q70, q80, q90]
+            # 2. Standard 9-column quantile grid: [q10 ... q90]
+            q_cols = quantile_fc.shape[-1]
+            if q_cols >= 10:
+                q10_idx, q50_idx, q90_idx = 1, 5, 9
+            elif q_cols == 9:
+                q10_idx, q50_idx, q90_idx = 0, 4, 8
+            else:
+                q10_idx = int(round(0.1 * (q_cols - 1)))
+                q50_idx = int(round(0.5 * (q_cols - 1)))
+                q90_idx = int(round(0.9 * (q_cols - 1)))
+
+            q10 = quantile_fc[0][:horizon, q10_idx]  # 10th percentile
+            q50 = quantile_fc[0][:horizon, q50_idx]  # 50th percentile (median)
+            q90 = quantile_fc[0][:horizon, q90_idx]  # 90th percentile
 
             # Horizon-integrated delta ratio (projected cumulative order-flow bias)
             projected_bias = float(np.sum(pts))

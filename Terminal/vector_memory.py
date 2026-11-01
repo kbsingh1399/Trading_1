@@ -255,11 +255,15 @@ class VectorMemory:
             logger.error(f"Error simulating counterfactual replays: {e}")
             return {"error": str(e)}
 
-    def calculate_filter_efficiency(self, filter_reason: Optional[str] = None) -> Dict[str, Any]:
+    def calculate_filter_efficiency(
+        self,
+        filter_reason: Optional[str] = None,
+        min_rr: float = 1.50
+    ) -> Dict[str, Any]:
         """
-        Calculates empirical-Bayes shrunk filter efficiency:
-        Shrinkage = n / (n + 50) toward base rate 0.50.
-        Filter is considered value-additive if rejected trades had negative expectancy.
+        Calculates empirical-Bayes shrunk filter efficiency and differential value-add:
+        - Prior base rate is set to break-even win rate 1 / (1 + min_rr) = 0.40 for 1.5:1 RR (Qwen F-10).
+        - Differential value-add compares accepted trade expectancy against rejected trade expectancy (Qwen F-02).
         """
         try:
             df = self.table_counterfactual.to_pandas()
@@ -276,23 +280,43 @@ class VectorMemory:
 
             wins = len(resolved[resolved["counterfactual_outcome"] == "HYPO_WIN"])
             losses = len(resolved[resolved["counterfactual_outcome"] == "HYPO_LOSS"])
-            mean_r = float(resolved["counterfactual_r"].mean())
+            rejected_mean_r = float(resolved["counterfactual_r"].mean())
 
             raw_win_rate = wins / n
-            # Empirical-Bayes shrinkage toward 0.50
+            # Qwen F-10: Break-even win rate for RR=1.5 is 1/(1+1.5) = 0.40
+            break_even_win_rate = 1.0 / (1.0 + max(0.1, min_rr))
             k_prior = 50.0
-            shrunk_win_rate = ((n * raw_win_rate) + (k_prior * 0.50)) / (n + k_prior)
+            shrunk_win_rate = ((n * raw_win_rate) + (k_prior * break_even_win_rate)) / (n + k_prior)
+            prior_weight = k_prior / (n + k_prior)
 
-            # Filter efficiency: positive if rejected trades were indeed losing (saving money)
-            filter_value_add = -mean_r  # If counterfactual R is -0.4, filter saved +0.4 R
+            # Qwen F-02: Differential baseline vs accepted setups
+            accepted_mean_r = 0.0
+            has_accepted_baseline = False
+            try:
+                acc_df = self.table_setups.to_pandas()
+                acc_resolved = acc_df[acc_df["outcome"].isin(["WIN", "LOSS"])]
+                if len(acc_resolved) >= 5 and "pnl_usd" in acc_resolved.columns and "risk_usd" in acc_resolved.columns:
+                    acc_r = acc_resolved["pnl_usd"] / np.maximum(acc_resolved["risk_usd"], 1.0)
+                    accepted_mean_r = float(acc_r.mean())
+                    has_accepted_baseline = True
+            except Exception:
+                pass
+
+            if has_accepted_baseline:
+                differential_value_add = accepted_mean_r - rejected_mean_r
+            else:
+                differential_value_add = -rejected_mean_r  # Fallback to zero-baseline savings
 
             return {
                 "sample_size": n,
                 "raw_win_rate": round(raw_win_rate, 3),
+                "break_even_prior": round(break_even_win_rate, 3),
                 "shrunk_win_rate": round(shrunk_win_rate, 3),
-                "counterfactual_mean_r": round(mean_r, 3),
-                "filter_value_add_r": round(filter_value_add, 3),
-                "verdict": "VALUE_ADDITIVE" if filter_value_add > 0 else "DESTRUCTIVE_DRAG"
+                "prior_weight": round(prior_weight, 3),
+                "counterfactual_mean_r": round(rejected_mean_r, 3),
+                "accepted_mean_r": round(accepted_mean_r, 3) if has_accepted_baseline else None,
+                "differential_value_add_r": round(differential_value_add, 3),
+                "verdict": "VALUE_ADDITIVE" if differential_value_add > 0 else "DESTRUCTIVE_DRAG"
             }
         except Exception as e:
             return {"error": str(e)}

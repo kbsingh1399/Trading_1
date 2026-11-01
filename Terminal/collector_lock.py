@@ -50,13 +50,14 @@ def get_current_ip() -> str:
 
 _LAST_ROTATION_TIME = 0.0
 MIN_ROTATION_INTERVAL_SECS = 180.0  # 3-minute cooldown between full tunnel re-keys
+POST_ROTATION_GRACE_SECS = 45.0     # Qwen F-16: Grace window post-rotation before empty-scrape trigger can re-arm
 
 
 def rotate_warp_ip(context: str = "Collector", reason: str = "SCHEDULED", force: bool = False) -> str:
     """
     Event-driven Cloudflare WARP IP rotation.
     Rotates tunnel keys and re-connects only when a detection signal occurs (403, 429, challenge)
-    or when forced. Protected by a 3-minute cooldown.
+    or when forced. Protected by a 3-minute cooldown and a post-rotation grace window.
     """
     global _LAST_ROTATION_TIME
     now = time.time()
@@ -68,6 +69,11 @@ def rotate_warp_ip(context: str = "Collector", reason: str = "SCHEDULED", force:
 
     if not force and (now - _LAST_ROTATION_TIME < MIN_ROTATION_INTERVAL_SECS):
         logger.info(f"[{context}] [Cloudflare WARP] Cooldown active ({int(now - _LAST_ROTATION_TIME)}s / {int(MIN_ROTATION_INTERVAL_SECS)}s). Skipped.")
+        return get_current_ip()
+
+    # Qwen F-16: Grace window prevents newly rotated IP cookie refresh from re-triggering CONSECUTIVE_EMPTY_SCRAPES
+    if reason == "CONSECUTIVE_EMPTY_SCRAPES" and (now - _LAST_ROTATION_TIME < (MIN_ROTATION_INTERVAL_SECS + POST_ROTATION_GRACE_SECS)):
+        logger.info(f"[{context}] [Cloudflare WARP] Post-rotation grace active. Skipped empty-scrape re-trigger.")
         return get_current_ip()
 
     if not WARP_CLI.exists():
@@ -92,6 +98,10 @@ def rotate_warp_ip(context: str = "Collector", reason: str = "SCHEDULED", force:
         return old_ip
 
 
+# Global lock contention tracking (DeepSeek AUD-07)
+LOCK_CONTENTION_SKIPS = 0
+
+
 class BrowserLock:
     """
     Fast, deadline-enforcing browser mutex.
@@ -104,6 +114,7 @@ class BrowserLock:
         self.acquired = False
 
     def __enter__(self):
+        global LOCK_CONTENTION_SKIPS
         start = time.time()
         while time.time() - start < self.timeout_secs:
             if not BROWSER_LOCK_FILE.exists():
@@ -127,7 +138,8 @@ class BrowserLock:
                     pass
             time.sleep(0.2)
 
-        logger.info(f"[{self.collector_name}] SKIPPED_LOCK_CONTENTION: Browser busy. Yielding immediately without blocking.")
+        LOCK_CONTENTION_SKIPS += 1
+        logger.info(f"[{self.collector_name}] SKIPPED_LOCK_CONTENTION (total skips: {LOCK_CONTENTION_SKIPS}): Browser busy. Yielding immediately without blocking.")
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -139,14 +151,21 @@ class BrowserLock:
                 pass
 
 
-def calculate_wall_decay_weight(age_seconds: float, tau: float = 1800.0) -> float:
+# Canonical 30-minute half-life constant (Qwen F-05, DeepSeek AUD-05)
+# Half-life t_half = tau * ln(2) = 1800 s => tau = 1800 / ln(2) ~= 2596.8437 s
+HALF_LIFE_SECONDS = 1800.0
+TAU_30MIN_HALFLIFE = HALF_LIFE_SECONDS / math.log(2)  # ~2596.8437 s
+
+
+def calculate_wall_decay_weight(age_seconds: float, tau: float = TAU_30MIN_HALFLIFE) -> float:
     """
     Continuous Bayesian Prior Age Decay for Order Book Walls.
     weight = exp(-age / tau)
+    With tau = 1800 / ln(2) (~2596.84s), achieves an exact 30-minute half-life:
     - At age 0s: weight = 1.00
-    - At age 15m (900s): weight = 0.61
-    - At age 30m (1800s): weight = 0.37
-    - At age 60m (3600s): weight = 0.14
+    - At age 15m (900s): weight = 0.7071
+    - At age 30m (1800s): weight = 0.5000 (Exact 30-minute half-life)
+    - At age 60m (3600s): weight = 0.2500 (Two half-lives)
     Eliminates binary 30s cut-off mismatches on 15m collection cadences.
     """
     if age_seconds < 0.0:

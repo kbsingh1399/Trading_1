@@ -83,11 +83,37 @@ def test_survival_constrained_capital_budget():
     equity = 4835.19
     balance = 4835.19
     # If buffer is $135.19 (equity = 4910.19)
-    # per_trade = $135.19 / 20 = $6.76 -> Admissible!
+    # per_trade = $135.19 / 20 = 6.7595 -> Floored to cent: $6.75 -> Admissible!
     budget, ok, reason = budget_per_trade(equity=4910.19, balance=4910.19, committed_stress_usd=0.0)
     assert ok is True
-    assert budget == 6.76
+    assert budget == 6.75
     assert "OK" in reason
+
+    # Test stress-native divisor (divisor = 20 * 1.25 = 25)
+    # 135.19 / 25 = 5.4076 -> Floored to cent: $5.40
+    b_stress, ok_stress, _ = budget_per_trade(equity=4910.19, balance=4910.19, committed_stress_usd=0.0, stress_native=True)
+    assert ok_stress is True
+    assert b_stress == 5.40
+
+
+def test_halt_hierarchy_ordering():
+    """
+    Documents and verifies strict halt hierarchy ordering (Qwen F-04):
+    1. Base capital <= $4,775 -> EQUITY_BREACH
+    2. Free buffer <= $20.00 -> PROSPECTIVE_HALT
+    3. Computed budget < $5.00 -> BUDGET_BELOW_MIN_FLOOR (binds when free buffer < $100)
+    """
+    # 1. Base capital at or below floor
+    _, ok1, r1 = budget_per_trade(equity=4770.0, balance=4770.0)
+    assert not ok1 and "EQUITY_BREACH" in r1
+
+    # 2. Free buffer <= $20 cushion (e.g. buffer = $18)
+    _, ok2, r2 = budget_per_trade(equity=4793.0, balance=4793.0)
+    assert not ok2 and "PROSPECTIVE_HALT" in r2
+
+    # 3. Free buffer > $20 cushion but computed budget < $5 (e.g. buffer = $60 -> budget $3.00)
+    _, ok3, r3 = budget_per_trade(equity=4835.0, balance=4835.0)
+    assert not ok3 and "BUDGET_BELOW_MIN_FLOOR" in r3
 
 
 def test_prospective_halt_on_low_cushion():
