@@ -25,3 +25,6 @@ models/
 
 # Ephemeral scratch scripts
 scratch/
+
+# Runtime locks
+Database/.locks/
