@@ -39,11 +39,21 @@ def get_current_ip() -> str:
         return "unknown"
 
 
-def rotate_warp_ip(context: str = "Collector") -> str:
+_LAST_ROTATION_TIME = 0.0
+MIN_ROTATION_INTERVAL_SECS = 180.0  # Minimum 3 minutes between full network disconnects to preserve OS streaming stability
+
+
+def rotate_warp_ip(context: str = "Collector", force: bool = False) -> str:
     """
     Disconnects and reconnects Cloudflare WARP to rotate IP and re-key the tunnel.
-    Called both BEFORE and AFTER every data collection sweep.
+    Protected by a 3-minute cooldown to prevent interrupting user web streams and chat sessions.
     """
+    global _LAST_ROTATION_TIME
+    now = time.time()
+    if not force and (now - _LAST_ROTATION_TIME < MIN_ROTATION_INTERVAL_SECS):
+        logger.info(f"[{context}] [Cloudflare WARP] Rotation skipped (Cooldown active: {int(now - _LAST_ROTATION_TIME)}s / {int(MIN_ROTATION_INTERVAL_SECS)}s).")
+        return get_current_ip()
+
     if not WARP_CLI.exists():
         logger.warning(f"[{context}] WARP CLI binary not found at: {WARP_CLI}")
         return "unknown"
@@ -58,6 +68,7 @@ def rotate_warp_ip(context: str = "Collector") -> str:
         subprocess.run([str(WARP_CLI), "connect"], capture_output=True, text=True, check=False)
         time.sleep(3.5)
         new_ip = get_current_ip()
+        _LAST_ROTATION_TIME = time.time()
         logger.info(f"[{context}] [Cloudflare WARP] Rotation complete. New IP: {new_ip} (Old: {old_ip})")
         return new_ip
     except Exception as e:
