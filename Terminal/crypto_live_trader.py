@@ -27,9 +27,20 @@ from pathlib import Path
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
 import pandas as pd
 import numpy as np
 import MetaTrader5 as mt5
+
+from Terminal.persistent_memory import (
+    get_rules, get_strategy_weight, record_trade_reflection, sync_to_markdown
+)
+from Terminal.olap_engine import OlapEngine
+from Terminal.vector_memory import VectorMemory
+from Terminal.regime_detector import RegimeDetector
 
 # Reconfigure stdout for UTF-8 and non-buffered logging
 sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
@@ -57,6 +68,8 @@ MAX_CONCURRENT_POSITIONS = 2
 MAX_ALLOWED_SPREAD_PCT = 0.45       # Max 0.45% spread
 RISK_PERCENT = 0.01                 # 1.0% account risk
 HARD_MAX_LOSS_USD = 50.00           # Strict Hard Max Loss Ceiling per trade ($50.00)
+PROP_FIRM_FLOOR_EQUITY = 4700.00    # 6% Max Drawdown Floor on $5,000 Challenge
+PROP_FIRM_HALT_BUFFER = 10.00       # Buffer threshold below which trading halts
 MIN_RR_RATIO = 1.5                  # Minimum 1.5:1 reward to risk
 
 logging.basicConfig(
@@ -127,6 +140,10 @@ class CryptoLiveTrader:
         self.crypto_map = load_crypto_registry()
         self.magic = MAGIC_NUMBER
         self.active_signals_processed = set()
+        self.olap = OlapEngine()
+        self.vector_mem = VectorMemory()
+        self.regime_det = RegimeDetector()
+        self.known_open_tickets = set()
 
     def connect_mt5(self) -> bool:
         """Initialize connection to MetaTrader 5."""
@@ -203,6 +220,22 @@ class CryptoLiveTrader:
                 close_res = mt5.order_send(close_req)
                 if close_res and close_res.retcode == mt5.TRADE_RETCODE_DONE:
                     logger.info(f"[{mt5_sym}] Emergency market close completed for Ticket #{pos['ticket']}!")
+                    try:
+                        record_trade_reflection(
+                            ticket_id=str(pos["ticket"]),
+                            symbol=pos["symbol"],
+                            direction=pos["type"],
+                            strategy="Emergency Circuit Breaker Triggered",
+                            outcome="LOSS",
+                            pnl_usd=pos["profit"],
+                            risk_usd=50.00,
+                            root_cause="Adverse market momentum exceeded -$48.00 threshold",
+                            lesson_learned="Avoid fading high-volatility momentum without confirmed multi-timeframe CVD divergence."
+                        )
+                        self.vector_mem.update_setup_outcome(str(pos["ticket"]), "LOSS", pos["profit"])
+                        sync_to_markdown()
+                    except Exception as ex:
+                        logger.warning(f"Failed to record reflection: {ex}")
                 else:
                     logger.error(f"[{mt5_sym}] Emergency market close failed: {close_res.comment if close_res else 'Unknown'}")
                 continue
@@ -303,51 +336,19 @@ class CryptoLiveTrader:
         if sig_key in self.active_signals_processed:
             return None
 
-        # 3. Pull Whale Orders Context (Table 2)
-        whale_open_p = WHALE_DIR / "Open_Orders" / f"{symbol}_whale_open_orders.parquet"
-        whale_bids = pd.DataFrame()
-        whale_asks = pd.DataFrame()
-        top_bid_wall_usd = 0.0
-        top_ask_wall_usd = 0.0
-        top_bid_price = 0.0
-        top_ask_price = 0.0
+        # 3. Pull High-Speed OLAP Confluence Analytics (DuckDB)
+        whale_data = self.olap.query_whale_walls(symbol)
+        liq_data = self.olap.query_liquidation_confluence(symbol)
+        cvd_data = self.olap.query_cvd_trend(symbol)
+        regime_data = self.regime_det.analyze_symbol(symbol)
 
-        if whale_open_p.exists():
-            w_df = pd.read_parquet(whale_open_p)
-            if not w_df.empty:
-                bids = w_df[w_df["side"].str.upper() == "BID"]
-                asks = w_df[w_df["side"].str.upper() == "ASK"]
-                if not bids.empty:
-                    top_b = bids.sort_values(by="remaining_usd", ascending=False).iloc[0]
-                    top_bid_wall_usd = top_b["remaining_usd"]
-                    top_bid_price = top_b["price"]
-                if not asks.empty:
-                    top_a = asks.sort_values(by="remaining_usd", ascending=False).iloc[0]
-                    top_ask_wall_usd = top_a["remaining_usd"]
-                    top_ask_price = top_a["price"]
-
-        # 4. Pull Liquidation Magnet Zones
-        magnet_p = LIQ_DIR / "Magnet_Zones" / f"{symbol}_magnet_zones.parquet"
-        nearest_long_liq = None
-        nearest_short_liq = None
-
-        if magnet_p.exists():
-            m_df = pd.read_parquet(magnet_p)
-            if not m_df.empty:
-                long_bands = m_df[m_df["side"] == "long"]
-                short_bands = m_df[m_df["side"] == "short"]
-                if not long_bands.empty:
-                    nearest_long_liq = long_bands.iloc[0].to_dict()
-                if not short_bands.empty:
-                    nearest_short_liq = short_bands.iloc[0].to_dict()
-
-        # 5. Pull 15m Footprint POC
-        candle_p = CANDLE_DIR / f"{symbol}.parquet"
-        poc_price = mid
-        if candle_p.exists():
-            c_df = pd.read_parquet(candle_p)
-            if not c_df.empty:
-                poc_price = c_df.iloc[-1].get("poc_price", mid)
+        whale_imbalance = whale_data.get("whale_imbalance_bid_ratio", 0.5)
+        top_bid_wall_usd = whale_data.get("tight_bid_walls_usd", 0.0)
+        top_ask_wall_usd = whale_data.get("tight_ask_walls_usd", 0.0)
+        near_field_shorts = liq_data.get("near_field_shorts_pct", 50.0)
+        cvd_slope = cvd_data.get("cvd_slope", "NEUTRAL")
+        poc_price = cvd_data.get("recent_poc") or mid
+        current_regime = regime_data.get("regime", "UNKNOWN")
 
         # -------------------------------------------------------------
         # Confluence Formulation
@@ -364,22 +365,27 @@ class CryptoLiveTrader:
            ("divergence" in sig_name.lower() and sig_side in ["buy", "bullish"]):
 
             direction = "BUY"
-            strategy = "Footprint Absorption & Whale Wall Support"
+            strategy = "Whale Bid Wall Support Fade"
             entry_price = tick.ask
             reasons.append(f"Footprint {sig_name} ({sig_side})")
 
             # Check Whale Bid Wall Support
-            if top_bid_wall_usd >= 500_000 and top_bid_price > 0 and top_bid_price < entry_price:
-                dist_pct = (entry_price - top_bid_price) / entry_price * 100.0
-                if dist_pct <= 2.5:
-                    confluence_score += 20
-                    reasons.append(f"Whale Bid Wall Support (${top_bid_wall_usd/1e6:.2f}M @ {top_bid_price})")
-                    # Set SL just below the Whale Wall
-                    sl_price = top_bid_price * 0.997
-                else:
-                    sl_price = entry_price * 0.995
+            if top_bid_wall_usd >= 500_000:
+                confluence_score += 15
+                reasons.append(f"Whale Bid Wall (${top_bid_wall_usd/1e6:.1f}M, {whale_imbalance*100:.0f}% bid depth)")
+                sl_price = entry_price * 0.995
             else:
                 sl_price = entry_price * 0.995
+
+            # CVD Alignment
+            if cvd_slope in ["BULLISH_DIVERGENCE", "BULLISH_FLOW"]:
+                confluence_score += 15
+                reasons.append(f"CVD {cvd_slope}")
+
+            # Near Field Short Liquidation Fuel
+            if near_field_shorts >= 55.0:
+                confluence_score += 10
+                reasons.append(f"Short Squeeze Fuel ({near_field_shorts:.0f}% shorts)")
 
             # Target POC or next resistance
             tp1_price = poc_price if poc_price > entry_price * 1.008 else entry_price * 1.015
@@ -393,22 +399,27 @@ class CryptoLiveTrader:
              ("divergence" in sig_name.lower() and sig_side in ["sell", "bearish"]):
 
             direction = "SELL"
-            strategy = "Footprint Absorption & Whale Wall Resistance"
+            strategy = "Whale Ask Wall Resistance Fade"
             entry_price = tick.bid
             reasons.append(f"Footprint {sig_name} ({sig_side})")
 
             # Check Whale Ask Wall Resistance
-            if top_ask_wall_usd >= 500_000 and top_ask_price > 0 and top_ask_price > entry_price:
-                dist_pct = (top_ask_price - entry_price) / entry_price * 100.0
-                if dist_pct <= 2.5:
-                    confluence_score += 20
-                    reasons.append(f"Whale Ask Wall Resistance (${top_ask_wall_usd/1e6:.2f}M @ {top_ask_price})")
-                    # Set SL just above the Whale Wall
-                    sl_price = top_ask_price * 1.003
-                else:
-                    sl_price = entry_price * 1.005
+            if top_ask_wall_usd >= 500_000:
+                confluence_score += 15
+                reasons.append(f"Whale Ask Wall (${top_ask_wall_usd/1e6:.1f}M, {(1-whale_imbalance)*100:.0f}% ask depth)")
+                sl_price = entry_price * 1.005
             else:
                 sl_price = entry_price * 1.005
+
+            # CVD Alignment
+            if cvd_slope in ["BEARISH_DIVERGENCE", "BEARISH_FLOW"]:
+                confluence_score += 15
+                reasons.append(f"CVD {cvd_slope}")
+
+            # Near Field Long Liquidation Fuel
+            if near_field_shorts <= 45.0:
+                confluence_score += 10
+                reasons.append(f"Long Liquidation Cascade Fuel ({100-near_field_shorts:.0f}% longs)")
 
             # Target POC or next support
             tp1_price = poc_price if poc_price < entry_price * 0.992 else entry_price * 0.985
@@ -416,6 +427,16 @@ class CryptoLiveTrader:
 
         else:
             return None
+
+        # 4. Check Semantic Vector Memory for Historical Analogs
+        setup_desc = f"{symbol} {direction} {strategy} with Whale Imbalance {whale_imbalance:.1%}, CVD {cvd_slope}, Regime {current_regime}"
+        past_analogs = self.vector_mem.query_similar_setups(setup_desc, top_k=5)
+        if past_analogs.get("verdict") == "UNFAVORABLE":
+            logger.warning(f"[{symbol}] Vetoed by Vector Memory: historical win rate is only {past_analogs.get('win_rate'):.1%} < 40%!")
+            return None
+        elif past_analogs.get("verdict") == "FAVORABLE":
+            confluence_score += 10
+            reasons.append(f"Vector Memory Historical Win Rate {past_analogs.get('win_rate')*100:.0f}%")
 
         # Check Risk to Reward Ratio
         risk_dist = abs(entry_price - sl_price)
@@ -431,12 +452,26 @@ class CryptoLiveTrader:
             reward_dist = abs(tp1_price - entry_price)
             rr_ratio = round(reward_dist / risk_dist, 2)
 
-        # 6. Calculate Position Sizing
+        # 5. Dual-Constraint Capital Budgeting & Prop-Firm Floor Guardrail
         acct = mt5.account_info()
         balance = acct.balance if acct else 4714.57
-        risk_usd = balance * RISK_PERCENT
+        equity = acct.equity if acct else balance
 
-        final_lots, actual_risk = calculate_lot_size(info, risk_usd, entry_price, sl_price)
+        buffer_above_floor = max(0.0, equity - PROP_FIRM_FLOOR_EQUITY)
+        if buffer_above_floor <= PROP_FIRM_HALT_BUFFER:
+            logger.warning(f"[{symbol}] TRADING HALTED: Equity (${equity:.2f}) buffer above floor (${PROP_FIRM_FLOOR_EQUITY:.2f}) is only ${buffer_above_floor:.2f} <= ${PROP_FIRM_HALT_BUFFER:.2f}!")
+            return None
+
+        # Base risk: never risk more than 50% of the remaining drawdown buffer OR $50 hard cap
+        floor_budget_risk = min(HARD_MAX_LOSS_USD, max(5.0, buffer_above_floor * 0.50))
+
+        # Dynamic Strategy & Regime Multipliers
+        strat_weight = get_strategy_weight(strategy)
+        regime_mult = regime_data.get("strategy_multipliers", {}).get(strategy, 1.0)
+        final_target_risk = floor_budget_risk * strat_weight * regime_mult
+        final_target_risk = min(HARD_MAX_LOSS_USD, max(5.0, final_target_risk))
+
+        final_lots, actual_risk = calculate_lot_size(info, final_target_risk, entry_price, sl_price)
         if final_lots <= 0:
             return None
 
@@ -588,6 +623,23 @@ class CryptoLiveTrader:
 
         with open(EXECUTION_LOG_JSONL, "a", encoding="utf-8") as f:
             f.write(json.dumps(audit_record) + "\n")
+
+        # Record setup into Vector Memory for pattern retrieval
+        try:
+            self.vector_mem.record_setup(
+                ticket_id=str(deal_ticket),
+                symbol=ticket["symbol"],
+                strategy=ticket["strategy"],
+                setup_text=ticket["reasons"],
+                direction=ticket["direction"],
+                confluence_score=ticket["confluence_score"],
+                whale_imbalance=ticket.get("whale_imbalance", 0.5),
+                outcome="PENDING",
+                pnl_usd=0.0,
+                risk_usd=ticket["risk_usd"]
+            )
+        except Exception as e:
+            logger.warning(f"Could not index setup into VectorMemory: {e}")
 
         return True
 

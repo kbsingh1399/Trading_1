@@ -24,6 +24,10 @@ Data Streams Collected:
 
 import sys
 import os
+try:
+    sys.stdout.reconfigure(line_buffering=True, encoding="utf-8")
+except Exception:
+    pass
 import time
 import json
 import logging
@@ -63,12 +67,11 @@ FOOTPRINT_REST_SECONDS = 60  # Rest between footprint passes
 
 REGISTRY_FILE = DB_DIR / "mutual_asset_capability_registry.json"
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
-)
+handler = logging.StreamHandler(sys.stdout)
+handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
 logger = logging.getLogger("DataCollector")
+logger.setLevel(logging.INFO)
+logger.handlers = [handler]
 
 
 def load_capability_registry() -> tuple[dict, list, list, list, dict, dict]:
@@ -1281,6 +1284,25 @@ async def liquidation_worker(context, warp_lock: asyncio.Lock, run_initial: bool
 # ---------------------------------------------------------------------------
 # Main Entry Point
 # ---------------------------------------------------------------------------
+async def whale_orders_worker(browser_context, warp_lock):
+    """Pipe 3: Continuous Whale Orders Blotter Sweep across 12 cryptos every 180s."""
+    logger.info("[Pipe 3: Whale Orders] Worker initialized. Target cadence: every 180s.")
+    try:
+        from Terminal.whale_orders_collector import sweep_all_cryptos_in_context
+    except ImportError:
+        from whale_orders_collector import sweep_all_cryptos_in_context
+
+    # Small initial stagger so Footprint starts first
+    await asyncio.sleep(5)
+    while True:
+        try:
+            async with warp_lock:
+                await sweep_all_cryptos_in_context(browser_context)
+        except Exception as e:
+            logger.error(f"[Pipe 3: Whale Orders] Error during sweep: {e}")
+        await asyncio.sleep(180)
+
+
 async def main_collector(args):
     """Main orchestrator connecting to Edge CDP and launching parallel workers."""
     DB_DIR.mkdir(parents=True, exist_ok=True)
@@ -1294,8 +1316,10 @@ async def main_collector(args):
     warp_lock = asyncio.Lock()
 
     async with async_playwright() as p:
+        logger.info(f"Connecting to Edge CDP at {CDP_URL}...")
         try:
-            browser = await p.chromium.connect_over_cdp(CDP_URL)
+            browser = await p.chromium.connect_over_cdp(CDP_URL, timeout=25000)
+            logger.info("Successfully connected to Edge CDP context.")
         except Exception as e:
             logger.error(f"Cannot connect to CDP at {CDP_URL}: {e}")
             logger.error("Please ensure Edge/Chrome is running with: --remote-debugging-port=9222")
@@ -1352,11 +1376,13 @@ async def main_collector(args):
         logger.info("Launching parallel continuous production pipes:")
         logger.info(" - Pipe 1: Continuous Footprint stream with Cloudflare WARP IP rotation.")
         logger.info(" - Pipe 2: Scheduled 44-asset Liquidation sweep at :00:05 and :30:05 local time.")
+        logger.info(" - Pipe 3: Periodic Table 2 Whale Orders Sweep across active cryptos every 180s.")
         logger.info(" - Automatic tab lifecycle: Liquidation tab will open on schedule and close when done.")
 
         await asyncio.gather(
             footprint_worker(ctx, warp_lock),
-            liquidation_worker(ctx, warp_lock, run_initial=args.initial_liquidation)
+            liquidation_worker(ctx, warp_lock, run_initial=args.initial_liquidation),
+            whale_orders_worker(ctx, warp_lock)
         )
 
 
