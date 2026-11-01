@@ -42,6 +42,11 @@ from Terminal.olap_engine import OlapEngine
 from Terminal.vector_memory import VectorMemory
 from Terminal.regime_detector import RegimeDetector
 from Terminal.deepmind_timesfm_forecaster import DeepMindTimesFMForecaster
+from Terminal.risk_envelope import (
+    admissible_volume, compute_dynamic_capital_budget, validate_trade_geometry,
+    HARD_FLOOR_USD, OPERATING_BUFFER_MIN, MAX_RISK_USD, MIN_RISK_USD,
+    MAX_OPEN_POSITIONS, MAX_ALLOWED_SPREAD_PCT, MIN_RR_RATIO
+)
 
 # Reconfigure stdout for UTF-8 and non-buffered logging
 sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
@@ -65,13 +70,11 @@ ACTIVE_POSITIONS_PARQUET = DB_DIR / "active_crypto_positions.parquet"
 
 # Magic number identifying trades placed by this autonomous engine
 MAGIC_NUMBER = 888123
-MAX_CONCURRENT_POSITIONS = 2
-MAX_ALLOWED_SPREAD_PCT = 0.45       # Max 0.45% spread
-RISK_PERCENT = 0.01                 # 1.0% account risk
-HARD_MAX_LOSS_USD = 50.00           # Strict Hard Max Loss Ceiling per trade ($50.00)
-PROP_FIRM_FLOOR_EQUITY = 4700.00    # 6% Max Drawdown Floor on $5,000 Challenge
-PROP_FIRM_HALT_BUFFER = 10.00       # Buffer threshold below which trading halts
-MIN_RR_RATIO = 1.5                  # Minimum 1.5:1 reward to risk
+MAX_CONCURRENT_POSITIONS = MAX_OPEN_POSITIONS
+HARD_MAX_LOSS_USD = MAX_RISK_USD
+PROP_FIRM_FLOOR_EQUITY = HARD_FLOOR_USD
+PROP_FIRM_HALT_BUFFER = OPERATING_BUFFER_MIN
+RISK_PERCENT = 0.01                 # 1.0% account risk baseline
 
 logging.basicConfig(
     level=logging.INFO,
@@ -97,8 +100,8 @@ def calculate_lot_size(
     sl_price: float
 ) -> Tuple[float, float]:
     """
-    Calculates exact broker lot size based on fixed dollar risk.
-    Returns (final_lots, expected_loss_usd).
+    Exact mathematical volume solver based on Terminal.risk_envelope.admissible_volume.
+    Guarantees realized dollar loss lies strictly inside [MIN_RISK_USD, cap_usd].
     """
     price_dist = abs(entry_price - sl_price)
     if price_dist <= 0 or info.point <= 0:
@@ -112,28 +115,22 @@ def calculate_lot_size(
     cost_per_point_per_lot = tick_val * (point / tick_size)
     loss_per_lot = points_dist * cost_per_point_per_lot
 
-    if loss_per_lot <= 0:
-        return 0.0, 0.0
-
-    calculated_lots = min(risk_dollars, HARD_MAX_LOSS_USD) / loss_per_lot
-
-    # Round to volume_step
     step = info.volume_step if info.volume_step > 0 else 0.01
-    rounded_lots = round(math.floor(calculated_lots / step) * step, 2)
-    final_lots = max(info.volume_min, min(info.volume_max, rounded_lots))
+    cap_usd = min(risk_dollars, MAX_RISK_USD)
 
-    actual_loss_usd = round(final_lots * loss_per_lot, 2)
-
-    # HARD CEILING: Strictly enforce $50.00 maximum dollar loss
-    while actual_loss_usd > HARD_MAX_LOSS_USD and final_lots > info.volume_min:
-        final_lots = round(final_lots - step, 2)
-        actual_loss_usd = round(final_lots * loss_per_lot, 2)
-
-    if actual_loss_usd > HARD_MAX_LOSS_USD:
-        # Minimum lot size exceeds $50 hard limit
+    lots, status, actual_loss = admissible_volume(
+        loss_per_lot=loss_per_lot,
+        step=step,
+        min_lot=info.volume_min,
+        max_lot=info.volume_max,
+        floor_usd=MIN_RISK_USD,
+        cap_usd=cap_usd
+    )
+    if lots is None or lots <= 0:
+        logger.warning(f"Admissible volume solver rejected sizing: {status}")
         return 0.0, 0.0
 
-    return final_lots, actual_loss_usd
+    return lots, actual_loss
 
 
 class CryptoLiveTrader:
@@ -476,18 +473,20 @@ class CryptoLiveTrader:
             reward_dist = abs(tp1_price - entry_price)
             rr_ratio = round(reward_dist / risk_dist, 2)
 
-        # 5. Dual-Constraint Capital Budgeting & Prop-Firm Floor Guardrail
+        # 5. Canonical Risk Envelope & Prop-Firm Floor Defense
         acct = mt5.account_info()
         balance = acct.balance if acct else 4714.57
         equity = acct.equity if acct else balance
 
-        buffer_above_floor = max(0.0, equity - PROP_FIRM_FLOOR_EQUITY)
-        if buffer_above_floor <= PROP_FIRM_HALT_BUFFER:
-            logger.warning(f"[{symbol}] TRADING HALTED: Equity (${equity:.2f}) buffer above floor (${PROP_FIRM_FLOOR_EQUITY:.2f}) is only ${buffer_above_floor:.2f} <= ${PROP_FIRM_HALT_BUFFER:.2f}!")
+        floor_budget_risk, ok, budget_msg = compute_dynamic_capital_budget(equity)
+        if not ok:
+            logger.warning(f"[{symbol}] TRADING HALTED: {budget_msg}")
             return None
 
-        # Base risk: never risk more than 50% of the remaining drawdown buffer OR $50 hard cap
-        floor_budget_risk = min(HARD_MAX_LOSS_USD, max(5.0, buffer_above_floor * 0.50))
+        valid_geo, geo_msg = validate_trade_geometry(direction, entry_price, sl_price, tp1_price, spread_pct)
+        if not valid_geo:
+            logger.warning(f"[{symbol}] Trade geometry rejected: {geo_msg}")
+            return None
 
         # Dynamic Strategy & Regime Multipliers
         strat_weight = get_strategy_weight(strategy)

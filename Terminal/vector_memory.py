@@ -79,13 +79,76 @@ class VectorMemory:
             pa.field("timestamp", pa.string())
         ])
 
+        schema_counterfactual = pa.schema([
+            pa.field("vector", pa.list_(pa.float32(), 384)),
+            pa.field("alert_id", pa.string()),
+            pa.field("symbol", pa.string()),
+            pa.field("direction", pa.string()),
+            pa.field("rejection_reason", pa.string()),
+            pa.field("setup_text", pa.string()),
+            pa.field("entry_price", pa.float32()),
+            pa.field("stop_loss", pa.float32()),
+            pa.field("take_profit", pa.float32()),
+            pa.field("confluence_score", pa.float32()),
+            pa.field("counterfactual_outcome", pa.string()),  # UNEVALUATED, HYPOTHETICAL_WIN, HYPOTHETICAL_LOSS
+            pa.field("hypothetical_pnl_usd", pa.float32()),
+            pa.field("timestamp", pa.string())
+        ])
+
         existing_tables = self.db.list_tables()
         table_names = [t if isinstance(t, str) else getattr(t, 'name', str(t)) for t in existing_tables]
+        
         if "trade_setups" not in table_names:
             self.table_setups = self.db.create_table("trade_setups", schema=schema_setups)
             logger.info("Created 'trade_setups' LanceDB vector table.")
         else:
             self.table_setups = self.db.open_table("trade_setups")
+
+        if "counterfactual_setups" not in table_names:
+            self.table_counterfactual = self.db.create_table("counterfactual_setups", schema=schema_counterfactual)
+            logger.info("Created 'counterfactual_setups' LanceDB vector table.")
+        else:
+            self.table_counterfactual = self.db.open_table("counterfactual_setups")
+
+    def record_rejected_setup(
+        self,
+        alert_id: str,
+        symbol: str,
+        direction: str,
+        rejection_reason: str,
+        setup_text: str,
+        entry_price: float,
+        stop_loss: float,
+        take_profit: float,
+        confluence_score: float
+    ):
+        """
+        Records a trade setup that was rejected or failed gates into LanceDB.
+        Allows subsequent counterfactual replay: Did rejecting this setup save capital
+        or forfeit a profitable move?
+        """
+        try:
+            vec = self._embed_text(setup_text)
+            now_iso = datetime.now(timezone.utc).isoformat()
+            data = [{
+                "vector": vec,
+                "alert_id": str(alert_id),
+                "symbol": str(symbol),
+                "direction": str(direction),
+                "rejection_reason": str(rejection_reason),
+                "setup_text": str(setup_text),
+                "entry_price": float(entry_price),
+                "stop_loss": float(stop_loss),
+                "take_profit": float(take_profit),
+                "confluence_score": float(confluence_score),
+                "counterfactual_outcome": "UNEVALUATED",
+                "hypothetical_pnl_usd": 0.0,
+                "timestamp": now_iso
+            }]
+            self.table_counterfactual.add(data)
+            logger.info(f"Recorded rejected setup for {symbol} ({rejection_reason}) in LanceDB counterfactual memory.")
+        except Exception as e:
+            logger.error(f"Error recording rejected setup to LanceDB: {e}")
 
     def record_setup(
         self,
@@ -139,6 +202,28 @@ class VectorMemory:
             logger.info(f"Updated LanceDB outcome for Ticket #{ticket_id}: {outcome} (${pnl_usd:.2f})")
         except Exception as e:
             logger.error(f"Error updating LanceDB setup outcome: {e}")
+
+    def query_counterfactual_expectancy(self, top_k: int = 50) -> Dict[str, Any]:
+        """
+        Analyzes the opportunity cost of past rejected setups:
+        How many rejected trades would have hit TP vs SL?
+        """
+        try:
+            if len(self.table_counterfactual) == 0:
+                return {"count": 0, "status": "NO_REJECTED_SETUPS"}
+            
+            df = self.table_counterfactual.to_pandas()
+            total = len(df)
+            hypo_wins = len(df[df["counterfactual_outcome"] == "HYPOTHETICAL_WIN"])
+            hypo_losses = len(df[df["counterfactual_outcome"] == "HYPOTHETICAL_LOSS"])
+            return {
+                "total_rejected": total,
+                "hypothetical_wins": hypo_wins,
+                "hypothetical_losses": hypo_losses,
+                "filter_efficiency": round(hypo_losses / (hypo_wins + hypo_losses + 1e-6), 3) if (hypo_wins + hypo_losses) > 0 else 1.0
+            }
+        except Exception as e:
+            return {"error": str(e)}
 
     def query_similar_setups(self, query_text: str, top_k: int = 5) -> Dict[str, Any]:
         """

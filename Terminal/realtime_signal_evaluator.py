@@ -38,6 +38,16 @@ from Terminal.olap_engine import OlapEngine
 from Terminal.regime_detector import RegimeDetector
 from Terminal.vector_memory import VectorMemory
 from Terminal.deepmind_timesfm_forecaster import DeepMindTimesFMForecaster
+from Terminal.risk_envelope import (
+    admissible_volume,
+    validate_trade_geometry,
+    HARD_FLOOR_USD,
+    OPERATING_BUFFER_MIN,
+    MAX_RISK_USD,
+    MIN_RISK_USD,
+    MAX_ALLOWED_SPREAD_PCT,
+    MIN_RR_RATIO
+)
 
 logger = logging.getLogger("RealtimeSignalEvaluator")
 DB_DIR = ROOT_DIR / "Database"
@@ -142,7 +152,7 @@ class RealtimeSignalEvaluator:
             confluence_score -= 15
             reasons.append("Vector Memory Unfavorable Veto")
 
-        # 4. Google DeepMind TimesFM 2.5 Dual Zero-Shot Forecast (CVD + Price)
+        # 4. Google DeepMind TimesFM 2.5 Dual Stationary Increments (CVD + Price)
         cvd_series = self.olap.get_series(sym, "cumulative_delta", limit=64)
         price_series = self.olap.get_series(sym, "close", limit=64)
         
@@ -151,19 +161,26 @@ class RealtimeSignalEvaluator:
         
         if self.timesfm.is_available:
             if len(cvd_series) >= 16:
-                tfm_cvd = self.timesfm.forecast_trajectory(cvd_series, horizon=8)
+                # Stationary increments forecast: ΔCVD_t = CVD_t - CVD_{t-1}
+                tfm_cvd = self.timesfm.forecast_increments(cvd_series, horizon=8)
             if len(price_series) >= 16:
-                tfm_price = self.timesfm.forecast_trajectory(price_series, horizon=8)
+                tfm_price = self.timesfm.forecast_increments(price_series, horizon=8)
 
-        cvd_dir = tfm_cvd.get("direction", "NEUTRAL") if tfm_cvd.get("available") else "N/A"
+        cvd_dir = tfm_cvd.get("increment_direction", "NEUTRAL") if tfm_cvd.get("available") else "N/A"
         cvd_conf = tfm_cvd.get("confidence", 0.0)
-        price_dir = tfm_price.get("direction", "NEUTRAL") if tfm_price.get("available") else "N/A"
+        cvd_unc_mult = tfm_cvd.get("uncertainty_multiplier", 1.0)
+
+        price_dir = tfm_price.get("increment_direction", "NEUTRAL") if tfm_price.get("available") else "N/A"
         price_conf = tfm_price.get("confidence", 0.0)
+
+        # Epistemic uncertainty discounts maximum risk budget
+        effective_max_risk = round(MAX_RISK_USD * cvd_unc_mult, 2)
+        effective_max_risk = max(MIN_RISK_USD, effective_max_risk)
 
         if direction == "BUY":
             if "BULLISH" in cvd_dir:
                 confluence_score += 10
-                reasons.append(f"TimesFM CVD {cvd_dir} ({cvd_conf:.0%})")
+                reasons.append(f"TimesFM CVD {cvd_dir} (conf {cvd_conf:.0%}, unc_mult {cvd_unc_mult:.2f})")
             elif "STRONG_BEARISH" in cvd_dir and cvd_conf > 0.6:
                 confluence_score -= 20
                 reasons.append(f"TimesFM Adverse CVD Veto ({cvd_dir})")
@@ -178,7 +195,7 @@ class RealtimeSignalEvaluator:
         elif direction == "SELL":
             if "BEARISH" in cvd_dir:
                 confluence_score += 10
-                reasons.append(f"TimesFM CVD {cvd_dir} ({cvd_conf:.0%})")
+                reasons.append(f"TimesFM CVD {cvd_dir} (conf {cvd_conf:.0%}, unc_mult {cvd_unc_mult:.2f})")
             elif "STRONG_BULLISH" in cvd_dir and cvd_conf > 0.6:
                 confluence_score -= 20
                 reasons.append(f"TimesFM Adverse CVD Veto ({cvd_dir})")
@@ -190,7 +207,7 @@ class RealtimeSignalEvaluator:
                 confluence_score -= 20
                 reasons.append(f"TimesFM Adverse Price Veto ({price_dir})")
 
-        # 5. Formulate Trade Risk Levels (ATR Adaptive)
+        # 5. Formulate Trade Risk Levels (ATR Adaptive & Fails Closed)
         entry = sig_price
         atr_pct = float(reg.get("atr_pct", 1.0))
         # Adaptive SL distance: 1.5x ATR, bounded between 0.5% and 2.5%
@@ -215,7 +232,66 @@ class RealtimeSignalEvaluator:
         reward_dist = abs(tp1 - entry)
         rr = round(reward_dist / (risk_dist + 1e-9), 2) if risk_dist > 0 else 0.0
 
-        is_actionable = (confluence_score >= 65.0) and (direction != "NEUTRAL") and (rr >= 1.5)
+        # Validate geometry via Canonical Risk Envelope
+        geom_valid, geom_reason = validate_trade_geometry(
+            direction=direction,
+            entry=entry,
+            stop_loss=sl,
+            take_profit=tp1,
+            spread_pct=0.05
+        )
+        if not geom_valid and direction != "NEUTRAL":
+            reasons.append(f"Geometry Veto: {geom_reason}")
+
+        # Exact discrete grid volume solver: adapts step and min_lot based on asset price scale
+        loss_per_unit = risk_dist if risk_dist > 0 else 1.0
+        if entry >= 100.0:
+            grid_step = 0.01
+            min_lot = 0.01
+            max_lot = 50.0
+        elif entry >= 1.0:
+            grid_step = 0.1
+            min_lot = 0.1
+            max_lot = 5000.0
+        else:
+            grid_step = 1.0
+            min_lot = 1.0
+            max_lot = 50000.0
+
+        solved_lot, vol_status, realized_risk = admissible_volume(
+            loss_per_lot=loss_per_unit,
+            step=grid_step,
+            min_lot=min_lot,
+            max_lot=max_lot,
+            floor_usd=MIN_RISK_USD,
+            cap_usd=effective_max_risk
+        )
+        if solved_lot is None and direction != "NEUTRAL":
+            reasons.append(f"Volume Solver Veto: {vol_status}")
+
+        is_actionable = (
+            (confluence_score >= 65.0) and
+            (direction != "NEUTRAL") and
+            (rr >= MIN_RR_RATIO) and
+            geom_valid and
+            (solved_lot is not None)
+        )
+
+        # Counterfactual Logging (Arena Quant Audit Recommendation)
+        # Store rejected setup so subsequent price movements evaluate filter efficiency
+        if (not is_actionable) and (direction in ["BUY", "SELL"]) and (entry > 0):
+            rejection_summary = "; ".join([r for r in reasons if "Veto" in r] or [f"Score {confluence_score:.1f} < 65.0"])
+            self.vector_mem.record_rejected_setup(
+                alert_id=f"{sym}_{sig.get('sig_code', 'sig')}_{datetime.now(timezone.utc).strftime('%H%M%S')}",
+                symbol=sym,
+                direction=direction,
+                rejection_reason=rejection_summary,
+                setup_text=setup_desc,
+                entry_price=entry,
+                stop_loss=sl,
+                take_profit=tp1,
+                confluence_score=confluence_score
+            )
 
         eval_utc = datetime.now(timezone.utc).isoformat()
         eval_ist = utc_to_ist_str(eval_utc)
@@ -247,7 +323,10 @@ class RealtimeSignalEvaluator:
                 "rr_ratio": rr,
                 "sl_pct": round(sl_pct * 100, 2),
                 "atr_pct": atr_pct,
-                "hard_max_risk_usd": 50.00
+                "admissible_lots": solved_lot,
+                "realized_risk_usd": realized_risk,
+                "effective_max_risk_usd": effective_max_risk,
+                "hard_max_risk_usd": MAX_RISK_USD
             },
             "order_flow_metrics": {
                 "whale_imbalance_bid_ratio": round(whale_imbalance, 3),
@@ -265,10 +344,11 @@ class RealtimeSignalEvaluator:
             "deepmind_timesfm": {
                 "cvd_direction": cvd_dir,
                 "cvd_confidence": cvd_conf,
-                "cvd_drift": tfm_cvd.get("predicted_drift", 0.0),
+                "cvd_uncertainty_multiplier": cvd_unc_mult,
+                "cvd_increment_sum": tfm_cvd.get("predicted_increment_sum", 0.0),
                 "price_direction": price_dir,
                 "price_confidence": price_conf,
-                "price_drift": tfm_price.get("predicted_drift", 0.0)
+                "price_increment_sum": tfm_price.get("predicted_increment_sum", 0.0)
             },
             "vector_memory": {
                 "verdict": vm_verdict,

@@ -144,6 +144,10 @@ class DeepMindTimesFMForecaster:
 
             spread = float(np.mean(q90 - q10))
             confidence = float(np.clip(1.0 - (spread / (abs(drift) + spread + 1e-6)), 0.1, 0.99))
+            # Epistemic uncertainty multiplier for position sizing (wider interval -> smaller multiplier)
+            baseline_scale = float(np.std(arr) + 1e-6)
+            rel_spread = spread / baseline_scale
+            uncertainty_mult = float(np.clip(1.0 / (1.0 + 0.5 * rel_spread), 0.40, 1.0))
 
             return {
                 "available": True,
@@ -154,6 +158,7 @@ class DeepMindTimesFMForecaster:
                 "predicted_drift_pct": drift_pct,
                 "direction": direction,
                 "confidence": round(confidence, 4),
+                "uncertainty_multiplier": round(uncertainty_mult, 3),
                 "point_forecast": [round(float(x), 4) for x in pts],
                 "q10_downside": [round(float(x), 4) for x in q10],
                 "q50_median": [round(float(x), 4) for x in q50],
@@ -167,8 +172,51 @@ class DeepMindTimesFMForecaster:
                 "error": str(e),
                 "direction": "NEUTRAL",
                 "predicted_drift": 0.0,
-                "confidence": 0.0
+                "confidence": 0.0,
+                "uncertainty_multiplier": 0.5
             }
+
+    def forecast_increments(
+        self,
+        series: np.ndarray,
+        horizon: int = 8
+    ) -> Dict[str, Any]:
+        """
+        Stationary Increment Forecaster (Arena Recommendation).
+        Transforms series to first differences: Δy_t = y_t - y_{t-1}.
+        Forecasts future stationary increments and sums them for directional consensus.
+        """
+        arr = np.asarray(series, dtype=np.float32).flatten()
+        if len(arr) < 10:
+            return {
+                "available": False,
+                "error": f"Series too short for increments ({len(arr)} bars)",
+                "direction": "NEUTRAL",
+                "predicted_increment_sum": 0.0,
+                "uncertainty_multiplier": 0.5
+            }
+
+        # First differences (stationary increments)
+        diffs = np.diff(arr)
+        res = self.forecast_trajectory(diffs, horizon=horizon)
+        if not res.get("available"):
+            return res
+
+        # Sum of predicted increments gives net projected delta change
+        pred_inc = sum(res.get("point_forecast", []))
+        inc_dir = "BULLISH" if pred_inc > 0 else ("BEARISH" if pred_inc < 0 else "NEUTRAL")
+        if abs(pred_inc) > np.std(diffs) * horizon * 0.5:
+            inc_dir = f"STRONG_{inc_dir}"
+
+        return {
+            "available": True,
+            "horizon": horizon,
+            "predicted_increment_sum": round(float(pred_inc), 4),
+            "increment_direction": inc_dir,
+            "confidence": res.get("confidence", 0.5),
+            "uncertainty_multiplier": res.get("uncertainty_multiplier", 1.0),
+            "raw_trajectory": res
+        }
 
 
 if __name__ == "__main__":

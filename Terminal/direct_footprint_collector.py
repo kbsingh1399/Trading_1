@@ -116,7 +116,7 @@ def rotate_cloudflare_ip():
 
 
 def cleanup_coinglass_tabs(keep_tab_id: Optional[str] = None):
-    """Closes all orphaned CoinGlass tabs in Chrome to keep browser lean and free."""
+    """Closes all orphaned CoinGlass footprint tabs in Chrome to keep browser lean and free."""
     try:
         req = urllib.request.Request("http://127.0.0.1:9222/json", headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=3) as resp:
@@ -124,10 +124,10 @@ def cleanup_coinglass_tabs(keep_tab_id: Optional[str] = None):
             for t in tabs:
                 tid = t.get("id")
                 url = t.get("url", "").lower()
-                if tid != keep_tab_id and "coinglass.com" in url:
+                if tid != keep_tab_id and "coinglass.com/footprint" in url:
                     try:
                         urllib.request.urlopen(f"http://127.0.0.1:9222/json/close/{tid}", timeout=2)
-                        logger.info(f"Cleaned up orphan CoinGlass tab ({tid})")
+                        logger.info(f"Cleaned up orphan Footprint tab ({tid})")
                     except Exception:
                         pass
     except Exception as e:

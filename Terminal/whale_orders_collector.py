@@ -48,24 +48,25 @@ logger.handlers = [handler]
 
 
 def get_seconds_until_next_quarter_hour() -> float:
-    """Calculate exact seconds until next :00:05, :15:05, :30:05, or :45:05 local wall-clock time."""
+    """Calculate exact seconds until next :00:30, :15:05, :30:30, or :45:05 (offset from liquidation)."""
     now = datetime.now()
     minute = now.minute
-    if minute < 15 or (minute == 15 and now.second < 5):
+    second = now.second
+    if minute < 15 or (minute == 15 and second < 5):
         target = now.replace(minute=15, second=5, microsecond=0)
-    elif minute < 30 or (minute == 30 and now.second < 5):
-        target = now.replace(minute=30, second=5, microsecond=0)
-    elif minute < 45 or (minute == 45 and now.second < 5):
+    elif minute < 30 or (minute == 30 and second < 30):
+        target = now.replace(minute=30, second=30, microsecond=0)
+    elif minute < 45 or (minute == 45 and second < 5):
         target = now.replace(minute=45, second=5, microsecond=0)
     else:
         next_hour = now + timedelta(hours=1)
-        target = next_hour.replace(minute=0, second=5, microsecond=0)
+        target = next_hour.replace(minute=0, second=30, microsecond=0)
     diff = (target - now).total_seconds()
     return max(1.0, diff)
 
 
 def cleanup_coinglass_tabs(keep_tab_id: Optional[str] = None):
-    """Closes all orphaned CoinGlass tabs in Chrome to keep browser lean and free."""
+    """Closes all orphaned CoinGlass whale order tabs in Chrome to keep browser lean and free."""
     try:
         req = urllib.request.Request("http://127.0.0.1:9222/json", headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=3) as resp:
@@ -73,10 +74,10 @@ def cleanup_coinglass_tabs(keep_tab_id: Optional[str] = None):
             for t in tabs:
                 tid = t.get("id")
                 url = t.get("url", "").lower()
-                if tid != keep_tab_id and "coinglass.com" in url:
+                if tid != keep_tab_id and "coinglass.com/large-orderbook" in url:
                     try:
                         urllib.request.urlopen(f"http://127.0.0.1:9222/json/close/{tid}", timeout=2)
-                        logger.info(f"Cleaned up orphan CoinGlass tab ({tid})")
+                        logger.info(f"Cleaned up orphan Whale Orders tab ({tid})")
                     except Exception:
                         pass
     except Exception as e:
