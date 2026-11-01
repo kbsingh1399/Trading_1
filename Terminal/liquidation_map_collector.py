@@ -19,6 +19,7 @@ Persists to:
 
 import sys
 import os
+import subprocess
 import re
 import json
 import time
@@ -412,8 +413,18 @@ async def execute_liquidation_sweep():
         return
 
     try:
-        await asyncio.sleep(4.0)
-        async with websockets.connect(ws_url, max_size=50_000_000) as ws:
+        await asyncio.sleep(3.0)
+        ws = None
+        for attempt in range(4):
+            try:
+                ws = await websockets.connect(ws_url, max_size=50_000_000)
+                break
+            except Exception as conn_err:
+                if attempt == 3:
+                    raise conn_err
+                await asyncio.sleep(2.0)
+
+        async with ws:
             for i, sym in enumerate(CRYPTO_SYMBOLS, 1):
                 try:
                     logger.info(f"[{i}/{len(CRYPTO_SYMBOLS)}] Sweeping liquidation for {sym}...")

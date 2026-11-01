@@ -13,6 +13,8 @@ Persists to:
 """
 
 import sys
+import os
+import subprocess
 import re
 import json
 import logging
@@ -461,8 +463,18 @@ async def sweep_all_cryptos(symbols: list = None) -> dict:
 
     summary = {}
     try:
-        await asyncio.sleep(4.0)
-        async with websockets.connect(ws_url, max_size=50_000_000) as ws:
+        await asyncio.sleep(3.0)
+        ws = None
+        for attempt in range(4):
+            try:
+                ws = await websockets.connect(ws_url, max_size=50_000_000)
+                break
+            except Exception as conn_err:
+                if attempt == 3:
+                    raise conn_err
+                await asyncio.sleep(2.0)
+
+        async with ws:
             for sym in target_symbols:
                 try:
                     res = await harvest_whale_orders_for_symbol(ws, sym)
