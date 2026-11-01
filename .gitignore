@@ -22,3 +22,6 @@ venv/
 models/
 *.safetensors
 *.bin
+
+# Ephemeral scratch scripts
+scratch/
