@@ -19,7 +19,7 @@ import logging
 import asyncio
 import urllib.request
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Tuple, Optional
 
 try:
@@ -43,6 +43,50 @@ handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"
 logger = logging.getLogger("WhaleCollector")
 logger.setLevel(logging.INFO)
 logger.handlers = [handler]
+
+
+def get_seconds_until_next_quarter_hour() -> float:
+    """Calculate exact seconds until next :00:05, :15:05, :30:05, or :45:05 local wall-clock time."""
+    now = datetime.now()
+    minute = now.minute
+    if minute < 15 or (minute == 15 and now.second < 5):
+        target = now.replace(minute=15, second=5, microsecond=0)
+    elif minute < 30 or (minute == 30 and now.second < 5):
+        target = now.replace(minute=30, second=5, microsecond=0)
+    elif minute < 45 or (minute == 45 and now.second < 5):
+        target = now.replace(minute=45, second=5, microsecond=0)
+    else:
+        next_hour = now + timedelta(hours=1)
+        target = next_hour.replace(minute=0, second=5, microsecond=0)
+    diff = (target - now).total_seconds()
+    return max(1.0, diff)
+
+
+def open_coinglass_whale_tab(initial_sym: str = "BTC") -> Tuple[Optional[str], Optional[str]]:
+    """Opens a fresh CoinGlass large orderbook tab and returns (tab_id, ws_url)."""
+    try:
+        url = f"https://www.coinglass.com/large-orderbook-statistics?symbol={initial_sym}"
+        req = urllib.request.Request(f"http://127.0.0.1:9222/json/new?{url}", method="PUT")
+        resp = urllib.request.urlopen(req, timeout=5)
+        data = json.loads(resp.read().decode())
+        tab_id = data.get("id")
+        ws_url = data.get("webSocketDebuggerUrl")
+        logger.info(f"Opened fresh CoinGlass Whale Orders tab ({tab_id})")
+        return tab_id, ws_url
+    except Exception as e:
+        logger.error(f"Failed to open whale tab via CDP: {e}")
+        return None, None
+
+
+def close_tab(tab_id: str):
+    """Closes tab immediately after sweep to keep browser lean."""
+    if not tab_id:
+        return
+    try:
+        urllib.request.urlopen(f"http://127.0.0.1:9222/json/close/{tab_id}", timeout=3)
+        logger.info(f"Closed whale orders tab ({tab_id}) - Browser lean & free.")
+    except Exception as e:
+        logger.warning(f"Could not close tab {tab_id}: {e}")
 
 CRYPTO_SYMBOLS = [
     "BTC", "ETH", "SOL", "XRP", "DOGE", "BNB", "ADA", "LINK", "AVAX", "SUI", "NEAR", "HYPE"
@@ -370,45 +414,54 @@ async def harvest_whale_orders_for_symbol(ws, symbol: str) -> dict:
 
 async def sweep_all_cryptos(symbols: list = None) -> dict:
     target_symbols = symbols or CRYPTO_SYMBOLS
-    ws_url = get_large_orderbook_ws_url()
-    if not ws_url:
-        logger.error("No large-orderbook tab found in Edge!")
+    tab_id, ws_url = open_coinglass_whale_tab(target_symbols[0])
+    if not tab_id or not ws_url:
+        logger.error("Failed to open whale orders tab in Edge!")
         return {}
 
     summary = {}
-    async with websockets.connect(ws_url, max_size=50_000_000) as ws:
-        for sym in target_symbols:
-            try:
-                res = await harvest_whale_orders_for_symbol(ws, sym)
-                summary[sym] = res
-                logger.info(f"[{sym}] Complete: {res['open_orders_count']} open, {res['history_orders_count']} history")
-            except Exception as e:
-                logger.error(f"[{sym}] Error: {e}")
-                summary[sym] = {"error": str(e)}
+    try:
+        await asyncio.sleep(4.0)
+        async with websockets.connect(ws_url, max_size=50_000_000) as ws:
+            for sym in target_symbols:
+                try:
+                    res = await harvest_whale_orders_for_symbol(ws, sym)
+                    summary[sym] = res
+                    logger.info(f"[{sym}] Complete: {res['open_orders_count']} open, {res['history_orders_count']} history")
+                except Exception as e:
+                    logger.error(f"[{sym}] Error: {e}")
+                    summary[sym] = {"error": str(e)}
+    finally:
+        # Closes CoinGlass tab immediately once done with dumping
+        close_tab(tab_id)
     return summary
 
 
-async def daemon_loop(interval_seconds: int = 180):
-    logger.info(f"Starting Whale Orders Direct CDP Daemon (Interval: {interval_seconds}s)")
+async def daemon_loop():
+    logger.info("=== Whale Orders Collector Daemon Active (Cadence: :00, :15, :30, :45 of every hour) ===")
+    
+    # Run initial sweep immediately on startup
+    await sweep_all_cryptos()
+
     while True:
-        try:
-            await sweep_all_cryptos()
-        except Exception as e:
-            logger.error(f"Error during whale sweep loop: {e}")
-        logger.info(f"Cycle complete. Sleeping {interval_seconds}s before next pass...")
-        await asyncio.sleep(interval_seconds)
+        wait_secs = get_seconds_until_next_quarter_hour()
+        next_dt = datetime.now() + timedelta(seconds=wait_secs)
+        logger.info(f"Next whale orders sweep scheduled at {next_dt.strftime('%H:%M:%S')} (in {round(wait_secs / 60, 1)} mins). Sleeping...")
+        await asyncio.sleep(wait_secs)
+
+        # Trigger sweep at :00, :15, :30, or :45
+        await sweep_all_cryptos()
 
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="CoinGlass Whale Orders Collector")
     parser.add_argument("--daemon", action="store_true", help="Run continuously in background daemon loop")
-    parser.add_argument("--interval", type=int, default=180, help="Seconds between sweeps in daemon mode")
     parser.add_argument("--symbol", type=str, default=None, help="Target a single symbol")
     args = parser.parse_args()
 
     if args.daemon:
-        asyncio.run(daemon_loop(args.interval))
+        asyncio.run(daemon_loop())
     elif args.symbol:
         asyncio.run(sweep_all_cryptos([args.symbol.upper()]))
     else:

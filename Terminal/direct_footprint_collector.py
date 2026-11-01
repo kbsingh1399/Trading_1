@@ -1,11 +1,16 @@
 """
-Direct WebSocket CoinGlass Footprint & Signals Collector
-========================================================
-Ultra-fast, non-blocking ingestion engine using native Page WebSocket CDP.
-Connects directly to the existing CoinGlass Footprint tab:
-- Extracts real-time order-flow signals (Absorption, Trapped Traders, Divergence, Exhaustion).
-- Extracts 15m order-flow candles with volume, delta, cumulative delta, and POC.
-- Triggers reactive trade evaluation immediately on new signals.
+CoinGlass Direct Footprint & Signals Collector (Standalone Daemon)
+==================================================================
+Runs continuously in background:
+- Triggers every 2 minutes.
+- Dynamic tab lifecycle: Opens tab, harvests all assets, dumps Parquet, and CLOSES the tab.
+- Embedded Cloudflare WARP IP rotation between sweeps.
+- Extracts order-flow signals (Absorption, Trapped Traders, Divergence, Exhaustion).
+- Extracts 15m order-flow candles (Volume, Delta, Cumulative Delta, POC).
+
+Persists to:
+- Database/coinglass_aggregated_futures_signals.parquet
+- Database/Candle_Data/<SYMBOL>.parquet
 """
 
 import sys
@@ -14,10 +19,11 @@ import json
 import time
 import logging
 import asyncio
+import subprocess
 import urllib.request
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 
 try:
     sys.stdout.reconfigure(line_buffering=True, encoding="utf-8")
@@ -28,19 +34,15 @@ import pandas as pd
 import websockets
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
-if str(ROOT_DIR / "Terminal") not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR / "Terminal"))
-
 DB_DIR = ROOT_DIR / "Database"
 CANDLE_DIR = DB_DIR / "Candle_Data"
 SIGNALS_PARQUET = DB_DIR / "coinglass_aggregated_futures_signals.parquet"
 REGISTRY_FILE = DB_DIR / "mutual_asset_capability_registry.json"
+WARP_CLI = Path(r"C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe")
 
 handler = logging.StreamHandler(sys.stdout)
-handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
-logger = logging.getLogger("DirectFootprint")
+handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] [FOOTPRINT] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+logger = logging.getLogger("FootprintCollector")
 logger.setLevel(logging.INFO)
 logger.handlers = [handler]
 
@@ -63,16 +65,60 @@ def load_registry_symbols():
 TARGET_SYMBOLS, MT5_MAP = load_registry_symbols()
 
 
-def get_footprint_ws_url() -> Optional[str]:
+def get_current_ip() -> str:
     try:
-        req = urllib.request.urlopen("http://127.0.0.1:9222/json", timeout=3)
-        tabs = json.loads(req.read().decode())
-        for t in tabs:
-            if "footprint" in t.get("url", ""):
-                return t.get("webSocketDebuggerUrl")
+        req = urllib.request.Request("https://api.ipify.org?format=json", headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=4) as response:
+            return json.loads(response.read().decode()).get("ip", "unknown")
+    except Exception:
+        return "unknown"
+
+
+def rotate_cloudflare_ip():
+    """Disconnect and reconnect Cloudflare WARP to rotate IP and re-key tunnel."""
+    if not WARP_CLI.exists():
+        logger.warning(f"WARP CLI binary not found at: {WARP_CLI}")
+        return
+
+    old_ip = get_current_ip()
+    logger.info(f"[Cloudflare WARP] Current IP: {old_ip}. Rotating tunnel...")
+    try:
+        subprocess.run([str(WARP_CLI), "disconnect"], capture_output=True, text=True, check=False)
+        time.sleep(1.5)
+        subprocess.run([str(WARP_CLI), "tunnel", "rotate-keys"], capture_output=True, text=True, check=False)
+        time.sleep(1)
+        subprocess.run([str(WARP_CLI), "connect"], capture_output=True, text=True, check=False)
+        time.sleep(3.5)
+        new_ip = get_current_ip()
+        logger.info(f"[Cloudflare WARP] Rotation complete. New IP: {new_ip} (Old: {old_ip})")
     except Exception as e:
-        logger.warning(f"Error finding footprint tab: {e}")
-    return None
+        logger.error(f"[Cloudflare WARP] Error during IP rotation: {e}")
+
+
+def open_coinglass_footprint_tab() -> Tuple[Optional[str], Optional[str]]:
+    """Opens a fresh CoinGlass footprint tab and returns (tab_id, ws_url)."""
+    try:
+        req = urllib.request.Request("http://127.0.0.1:9222/json/new?https://www.coinglass.com/footprint", method="PUT")
+        resp = urllib.request.urlopen(req, timeout=5)
+        data = json.loads(resp.read().decode())
+        tab_id = data.get("id")
+        ws_url = data.get("webSocketDebuggerUrl")
+        logger.info(f"Opened fresh CoinGlass Footprint tab ({tab_id})")
+        return tab_id, ws_url
+    except Exception as e:
+        logger.error(f"Failed to open footprint tab via CDP: {e}")
+        return None, None
+
+
+def close_tab(tab_id: str):
+    """Closes tab immediately after sweep to keep browser lean."""
+    if not tab_id:
+        return
+    try:
+        urllib.request.urlopen(f"http://127.0.0.1:9222/json/close/{tab_id}", timeout=3)
+        logger.info(f"Closed footprint tab ({tab_id}) - Browser lean & free.")
+    except Exception as e:
+        logger.warning(f"Could not close tab {tab_id}: {e}")
 
 
 async def cdp_eval(ws, expr: str, msg_id: int = 1, await_promise: bool = False):
@@ -94,14 +140,47 @@ async def cdp_eval(ws, expr: str, msg_id: int = 1, await_promise: bool = False):
             return res.get("result", {}).get("value")
 
 
+async def ensure_terminal_ready(ws) -> bool:
+    init_js = """(() => {
+        if (window.__cg_term) return true;
+        const nextEl = document.getElementById('__next');
+        if (!nextEl) return false;
+        const containerKey = Object.keys(nextEl).find(k => k.startsWith('__reactContainer$'));
+        if (!containerKey) return false;
+        const rootFiber = nextEl[containerKey];
+
+        let term = null;
+        function findTerm(fiber, depth = 0) {
+            if (!fiber || depth > 80 || term) return;
+            try {
+                if (fiber.memoizedProps && fiber.memoizedProps.value && fiber.memoizedProps.value.term) {
+                    term = fiber.memoizedProps.value.term;
+                    return;
+                }
+            } catch(e) {}
+            findTerm(fiber.child, depth + 1);
+            findTerm(fiber.sibling, depth);
+        }
+        findTerm(rootFiber);
+        if (term) {
+            window.__cg_term = term;
+            return true;
+        }
+        return false;
+    })()"""
+    for _ in range(8):
+        ready = await cdp_eval(ws, init_js)
+        if ready:
+            return True
+        await asyncio.sleep(1.0)
+    return False
+
+
 def dump_signals_parquet(new_signals: List[dict]):
     if not new_signals:
         return
     DB_DIR.mkdir(parents=True, exist_ok=True)
     new_df = pd.DataFrame(new_signals)
-    now_utc = datetime.now(timezone.utc).isoformat()
-    new_df["dumped_at_utc"] = now_utc
-
     if SIGNALS_PARQUET.exists():
         try:
             old_df = pd.read_parquet(SIGNALS_PARQUET)
@@ -111,28 +190,19 @@ def dump_signals_parquet(new_signals: List[dict]):
             combined = new_df
     else:
         combined = new_df
-
-    combined = combined.sort_values(by=["symbol", "time_ms"], ascending=[True, True]).reset_index(drop=True)
+    combined = combined.sort_values(by="time_ms", ascending=False).reset_index(drop=True)
     combined.to_parquet(SIGNALS_PARQUET, index=False, engine="pyarrow")
-    logger.info(f"Signals Parquet updated: {SIGNALS_PARQUET.name} ({len(combined)} rows across {combined['symbol'].nunique()} assets)")
-
-    # Trigger reactive trade engine
-    try:
-        from Terminal.reactive_trade_engine import scan_and_react_to_signals
-        scan_and_react_to_signals()
-    except Exception as e:
-        logger.warning(f"[Wakeup-Engine] Error during reactive trade formulation: {e}")
+    logger.info(f"Aggregated Signals saved: {SIGNALS_PARQUET.name} ({len(combined)} rows)")
 
 
-def upsert_candle_parquet(symbol: str, mt5_sym: str, bars: List[dict]):
-    if not bars:
+def upsert_candle_parquet(symbol: str, mt5_sym: str, candles: List[dict]):
+    if not candles:
         return
     CANDLE_DIR.mkdir(parents=True, exist_ok=True)
     out_file = CANDLE_DIR / f"{symbol}.parquet"
-    new_df = pd.DataFrame(bars)
+    new_df = pd.DataFrame(candles)
     now_utc = datetime.now(timezone.utc).isoformat()
     new_df["dumped_at_utc"] = now_utc
-
     if out_file.exists():
         try:
             old_df = pd.read_parquet(out_file)
@@ -142,7 +212,6 @@ def upsert_candle_parquet(symbol: str, mt5_sym: str, bars: List[dict]):
             combined = new_df
     else:
         combined = new_df
-
     combined = combined.sort_values(by="open_time_ms", ascending=True).reset_index(drop=True)
     combined.to_parquet(out_file, index=False, engine="pyarrow")
 
@@ -255,46 +324,14 @@ async def extract_symbol_footprint(ws, sym: str, mt5_sym: str) -> dict:
     return res or {"signals": [], "candles": []}
 
 
-async def ensure_terminal_ready(ws) -> bool:
-    init_js = """(() => {
-        if (window.__cg_term) return true;
-        const nextEl = document.getElementById('__next');
-        if (!nextEl) return false;
-        const containerKey = Object.keys(nextEl).find(k => k.startsWith('__reactContainer$'));
-        if (!containerKey) return false;
-        const rootFiber = nextEl[containerKey];
-
-        let term = null;
-        function findTerm(fiber, depth = 0) {
-            if (!fiber || depth > 80 || term) return;
-            try {
-                if (fiber.memoizedProps && fiber.memoizedProps.value && fiber.memoizedProps.value.term) {
-                    term = fiber.memoizedProps.value.term;
-                    return;
-                }
-            } catch(e) {}
-            findTerm(fiber.child, depth + 1);
-            findTerm(fiber.sibling, depth);
-        }
-        findTerm(rootFiber);
-        if (term) {
-            window.__cg_term = term;
-            return true;
-        }
-        return false;
-    })()"""
-    for _ in range(5):
-        ready = await cdp_eval(ws, init_js)
-        if ready:
-            return True
-        await asyncio.sleep(1)
-    return False
-
-
 async def footprint_sweep_cycle(ws) -> int:
-    await ensure_terminal_ready(ws)
+    ready = await ensure_terminal_ready(ws)
+    if not ready:
+        logger.error("Terminal not ready on footprint page. Aborting cycle.")
+        return 0
+
     all_signals = []
-    logger.info(f"Starting Footprint extraction cycle across {len(TARGET_SYMBOLS)} symbols...")
+    logger.info(f"Starting Footprint sweep across {len(TARGET_SYMBOLS)} symbols...")
     for i, sym in enumerate(TARGET_SYMBOLS, 1):
         try:
             mt5_sym = MT5_MAP.get(sym, "")
@@ -305,35 +342,44 @@ async def footprint_sweep_cycle(ws) -> int:
                 all_signals.extend(sigs)
             if bars:
                 upsert_candle_parquet(sym, mt5_sym, bars)
-            logger.info(f"[{i}/{len(TARGET_SYMBOLS)}] {sym}: {len(sigs)} signals, {len(bars)} candles")
+            if i % 5 == 0 or i == len(TARGET_SYMBOLS):
+                logger.info(f"[{i}/{len(TARGET_SYMBOLS)}] {sym}: {len(sigs)} signals, {len(bars)} candles")
         except Exception as e:
             logger.warning(f"[{sym}] Extraction error: {e}")
 
     if all_signals:
         dump_signals_parquet(all_signals)
-    logger.info(f"Footprint extraction complete: {len(all_signals)} total signals harvested.")
+    logger.info(f"Footprint sweep complete: {len(all_signals)} total signals harvested.")
     return len(all_signals)
 
 
-async def run_collector_daemon(interval_seconds: int = 60):
-    logger.info(f"Starting Direct WebSocket Footprint Collector Daemon (Cadence: {interval_seconds}s)")
+async def run_collector_daemon(cycle_seconds: int = 120):
+    logger.info(f"=== Footprint & Signals Daemon Active (Cadence: Every 2 Minutes / {cycle_seconds}s) ===")
     while True:
-        try:
-            ws_url = get_footprint_ws_url()
-            if not ws_url:
-                logger.warning("Footprint tab not found! Retrying in 10s...")
-                await asyncio.sleep(10)
-                continue
+        cycle_start = time.time()
+        tab_id, ws_url = open_coinglass_footprint_tab()
+        if tab_id and ws_url:
+            try:
+                # Allow page DOM to settle
+                await asyncio.sleep(4.0)
+                async with websockets.connect(ws_url, max_size=50_000_000) as ws:
+                    await footprint_sweep_cycle(ws)
+            except Exception as e:
+                logger.error(f"Error during footprint sweep: {e}")
+            finally:
+                # Closes tab once done with dumping
+                close_tab(tab_id)
 
-            async with websockets.connect(ws_url, max_size=50_000_000) as ws:
-                await footprint_sweep_cycle(ws)
+        # Embedded Cloudflare WARP IP Rotation
+        logger.info("Executing embedded Cloudflare WARP IP rotation between sweeps...")
+        await asyncio.to_thread(rotate_cloudflare_ip)
 
-        except Exception as e:
-            logger.error(f"Error in footprint daemon cycle: {e}")
-
-        logger.info(f"Resting for {interval_seconds}s before next footprint sweep...")
-        await asyncio.sleep(interval_seconds)
+        # Sleep for remainder of 2 minutes
+        elapsed = time.time() - cycle_start
+        rest_time = max(5.0, cycle_seconds - elapsed)
+        logger.info(f"Resting {rest_time:.1f}s until next 2-minute cycle...")
+        await asyncio.sleep(rest_time)
 
 
 if __name__ == "__main__":
-    asyncio.run(run_collector_daemon(60))
+    asyncio.run(run_collector_daemon(120))
