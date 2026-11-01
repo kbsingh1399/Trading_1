@@ -34,6 +34,10 @@ import pandas as pd
 import websockets
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from Terminal.realtime_signal_evaluator import RealtimeSignalEvaluator
 DB_DIR = ROOT_DIR / "Database"
 CANDLE_DIR = DB_DIR / "Candle_Data"
 SIGNALS_PARQUET = DB_DIR / "coinglass_aggregated_futures_signals.parquet"
@@ -45,6 +49,22 @@ handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] [FOOTPRINT] 
 logger = logging.getLogger("FootprintCollector")
 logger.setLevel(logging.INFO)
 logger.handlers = [handler]
+
+# In-memory tracking of known signals to trigger instant evaluation on newly appeared signals
+KNOWN_SIGNAL_KEYS = set()
+evaluator: Optional[RealtimeSignalEvaluator] = None
+
+def load_known_signals():
+    global KNOWN_SIGNAL_KEYS
+    if SIGNALS_PARQUET.exists():
+        try:
+            df = pd.read_parquet(SIGNALS_PARQUET)
+            for _, r in df.iterrows():
+                key = (r['symbol'], str(r.get('sig_code', '')), int(r.get('time_ms', 0)), float(r.get('price', 0.0)))
+                KNOWN_SIGNAL_KEYS.add(key)
+            logger.info(f"[REALTIME SENTINEL] Pre-loaded {len(KNOWN_SIGNAL_KEYS)} known signal keys into memory.")
+        except Exception as e:
+            logger.warning(f"Could not pre-load known signals: {e}")
 
 
 def load_registry_symbols():
@@ -352,12 +372,29 @@ async def footprint_sweep_cycle(ws) -> int:
             logger.warning(f"[{sym}] Extraction error: {e}")
 
     if all_signals:
+        global KNOWN_SIGNAL_KEYS, evaluator
+        new_signals = []
+        for s in all_signals:
+            key = (s['symbol'], str(s.get('sig_code', '')), int(s.get('time_ms', 0)), float(s.get('price', 0.0)))
+            if key not in KNOWN_SIGNAL_KEYS:
+                new_signals.append(s)
+                KNOWN_SIGNAL_KEYS.add(key)
+
         dump_signals_parquet(all_signals)
+
+        if new_signals and evaluator:
+            logger.info(f"🚨 [REALTIME SENTINEL] Discovered {len(new_signals)} brand NEW signal(s) in this iteration! Waking up deep evaluation pipeline...")
+            evaluator.evaluate_new_signals(new_signals)
+
     logger.info(f"Footprint sweep complete: {len(all_signals)} total signals harvested.")
     return len(all_signals)
 
 
 async def run_collector_daemon(cycle_seconds: int = 120):
+    global evaluator
+    logger.info("Initializing RealtimeSignalEvaluator with DeepMind TimesFM & OLAP...")
+    evaluator = RealtimeSignalEvaluator()
+    load_known_signals()
     logger.info(f"=== Footprint & Signals Daemon Active (Cadence: Every 2 Minutes / {cycle_seconds}s) ===")
     while True:
         cycle_start = time.time()
