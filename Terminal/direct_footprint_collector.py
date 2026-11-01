@@ -255,7 +255,44 @@ async def extract_symbol_footprint(ws, sym: str, mt5_sym: str) -> dict:
     return res or {"signals": [], "candles": []}
 
 
+async def ensure_terminal_ready(ws) -> bool:
+    init_js = """(() => {
+        if (window.__cg_term) return true;
+        const nextEl = document.getElementById('__next');
+        if (!nextEl) return false;
+        const containerKey = Object.keys(nextEl).find(k => k.startsWith('__reactContainer$'));
+        if (!containerKey) return false;
+        const rootFiber = nextEl[containerKey];
+
+        let term = null;
+        function findTerm(fiber, depth = 0) {
+            if (!fiber || depth > 80 || term) return;
+            try {
+                if (fiber.memoizedProps && fiber.memoizedProps.value && fiber.memoizedProps.value.term) {
+                    term = fiber.memoizedProps.value.term;
+                    return;
+                }
+            } catch(e) {}
+            findTerm(fiber.child, depth + 1);
+            findTerm(fiber.sibling, depth);
+        }
+        findTerm(rootFiber);
+        if (term) {
+            window.__cg_term = term;
+            return true;
+        }
+        return false;
+    })()"""
+    for _ in range(5):
+        ready = await cdp_eval(ws, init_js)
+        if ready:
+            return True
+        await asyncio.sleep(1)
+    return False
+
+
 async def footprint_sweep_cycle(ws) -> int:
+    await ensure_terminal_ready(ws)
     all_signals = []
     logger.info(f"Starting Footprint extraction cycle across {len(TARGET_SYMBOLS)} symbols...")
     for i, sym in enumerate(TARGET_SYMBOLS, 1):
