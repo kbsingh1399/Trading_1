@@ -119,3 +119,12 @@ def test_validate_trade_geometry_fails_closed():
     ok, reason = validate_trade_geometry("BUY", entry=100.0, stop_loss=95.0, take_profit=110.0, spread_bps=50.0)
     assert ok is False
     assert "SPREAD_GATE_BREACH" in reason
+
+
+def test_equity_breach_at_or_below_hard_floor():
+    """Confirms immediate halt when base capital <= HARD_FLOOR_USD ($4,775.00)."""
+    budget, ok, msg = budget_per_trade(equity=4775.00, balance=4850.00, committed_stress_usd=0.0)
+    assert ok is False
+    assert budget == 0.0
+    assert "EQUITY_BREACH" in msg
+
