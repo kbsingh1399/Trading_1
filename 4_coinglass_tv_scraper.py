@@ -162,7 +162,7 @@ async def setup_cdp_session(ws) -> bool:
         return !!cwc;
     })()"""
     chart_ready = False
-    for attempt in range(25):
+    for attempt in range(40):
         eval_res = await cdp_eval(ws, check_chart, msg_id=10 + attempt)
         if eval_res is True:
             chart_ready = True
@@ -170,7 +170,7 @@ async def setup_cdp_session(ws) -> bool:
         await asyncio.sleep(0.5)
 
     if not chart_ready:
-        logger.error("TradingView chart widget not ready within 12.5s.")
+        logger.error("TradingView chart widget not ready within 20.0s.")
         return False
 
     ensure_study = """(async () => {
