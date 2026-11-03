@@ -377,10 +377,20 @@ class FootprintSignalSentinel:
                 card = format_confluence_card(eval_res)
                 print(card, flush=True)
 
-                # Record in Evaluated Ledger so reviewed signals NEVER re-trigger evaluation
+                # Update Asset Signal Stack Matrix
+                candidate, _ = self.stack.register_candle_cluster(cluster, now_ms=now_ms)
                 action_str = "DISPATCHED" if is_actionable and direction in ("BUY", "SELL") else "FILTERED_SUB_THRESHOLD"
                 sig_codes = [s.get("sig_code", "") for s in cluster]
                 sig_id = eval_res.get("signal_id") or generate_signal_id(sym, open_ms, direction, sig_codes)
+
+                if sym in self.stack.stack:
+                    self.stack.stack[sym]["confluence_score"] = score
+                    self.stack.stack[sym]["ev_300bar"] = float(eval_res.get("ev_300bar", 0.0))
+                    self.stack.stack[sym]["rr_ratio"] = float(eval_res.get("trade_levels", {}).get("rr_ratio", 0.0))
+                    self.stack.stack[sym]["state"] = action_str
+                self.stack.persist_stack()
+
+                # Record in Evaluated Ledger so reviewed signals NEVER re-trigger evaluation
                 self.stack.ledger.mark_evaluated(
                     symbol=sym,
                     open_time_ms=open_ms,
@@ -390,15 +400,6 @@ class FootprintSignalSentinel:
                     sig_name=sig_name,
                     direction=direction
                 )
-
-                # Update Asset Signal Stack Matrix
-                candidate, _ = self.stack.register_candle_cluster(cluster, now_ms=now_ms)
-                if sym in self.stack.stack:
-                    self.stack.stack[sym]["confluence_score"] = score
-                    self.stack.stack[sym]["ev_300bar"] = float(eval_res.get("ev_300bar", 0.0))
-                    self.stack.stack[sym]["rr_ratio"] = float(eval_res.get("trade_levels", {}).get("rr_ratio", 0.0))
-                    self.stack.stack[sym]["state"] = action_str
-                self.stack.persist_stack()
 
                 # Phase 4: Actionable Trade Dispatch (Direct Delta Exchange India Auto-Wake Execution)
                 if is_actionable and direction in ("BUY", "SELL"):

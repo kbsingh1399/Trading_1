@@ -535,7 +535,7 @@ class DeltaExchangeTrader:
         if avail_margin > 0.02 and contract_val > 0:
             req_margin = (entry * contract_val * size) / float(leverage)
             if req_margin > avail_margin:
-                sized_down = int((avail_margin * 0.95 * leverage) / (entry * contract_val))
+                sized_down = int((avail_margin * 0.80 * leverage) / (entry * contract_val))
                 size = max(1, min(size, sized_down))
                 logger.info(f"Scaled size to {size} contracts to fit available margin (${avail_margin:.2f} USD)")
 
