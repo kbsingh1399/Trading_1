@@ -171,6 +171,12 @@ class RealtimeSignalEvaluator:
             self.vector_mem = None
 
         self.timesfm = DeepMindTimesFMForecaster()
+        try:
+            from Terminal.empirical_signal_learner import EmpiricalSignalLearner
+            self.empirical_learner = EmpiricalSignalLearner()
+        except Exception as exc:
+            logger.warning('EmpiricalSignalLearner unavailable: %s', exc)
+            self.empirical_learner = None
 
 
 
@@ -244,11 +250,17 @@ class RealtimeSignalEvaluator:
 
         whales = self.olap.query_whale_walls(sym)
 
+        whale_history = self.olap.query_whale_history_orders(sym)
+
         liq = self.olap.query_liquidation_confluence(sym)
+
+        key_barriers = self.olap.query_key_liquidation_levels(sym, sig_price)
 
         cvd = self.olap.query_cvd_trend(sym, lookback_bars=16)
 
         auction = self.olap.query_auction_profile(sym)
+
+        emp_edge = self.empirical_learner.get_signal_expectancy(sym, sig_name) if self.empirical_learner else {}
 
 
 
@@ -324,21 +336,16 @@ class RealtimeSignalEvaluator:
 
         # Bullish Setups
 
-        if ("absorption" in sig_name.lower() and sig_side in ["buy", "bullish"]) or \
-
-           ("trapped shorts" in sig_name.lower()) or \
-
-           ("bull div" in sig_name.lower()) or \
-
-           ("divergence" in sig_name.lower() and sig_side in ["buy", "bullish"]) or \
-
-           ("seller exhaustion" in sig_name.lower()) or \
-
-           ("exhaustion" in sig_name.lower() and "liquidation" not in sig_name.lower() and "seller" in sig_name.lower()) or \
-
-           ("exhaustion" in sig_name.lower() and sig_side in ["buy", "bullish"]) or \
-
-           ("liquidation exhaustion" in sig_name.lower() and sig_side in ["buy", "bullish"]):
+        if (
+            ("absorption" in sig_name.lower() and sig_side in ["buy", "bullish"]) or
+            ("trapped shorts" in sig_name.lower()) or 
+            ("bull div" in sig_name.lower()) or 
+            ("divergence" in sig_name.lower() and sig_side in ["buy", "bullish"]) or 
+            ("seller exhaustion" in sig_name.lower()) or 
+            ("exhaustion" in sig_name.lower() and "liquidation" not in sig_name.lower() and "seller" in sig_name.lower()) or 
+            ("exhaustion" in sig_name.lower() and sig_side in ["buy", "bullish"]) or 
+            ("liquidation exhaustion" in sig_name.lower() and sig_side in ["buy", "bullish"])
+        ):
 
             direction = "BUY"
 
@@ -428,21 +435,16 @@ class RealtimeSignalEvaluator:
 
         # Bearish Setups
 
-        elif ("absorption" in sig_name.lower() and sig_side in ["sell", "bearish"]) or \
-
-             ("trapped longs" in sig_name.lower()) or \
-
-             ("bear div" in sig_name.lower()) or \
-
-             ("divergence" in sig_name.lower() and sig_side in ["sell", "bearish"]) or \
-
-             ("buyer exhaustion" in sig_name.lower()) or \
-
-             ("exhaustion" in sig_name.lower() and "liquidation" not in sig_name.lower() and "buyer" in sig_name.lower()) or \
-
-             ("exhaustion" in sig_name.lower() and sig_side in ["sell", "bearish"]) or \
-
-             ("liquidation exhaustion" in sig_name.lower() and sig_side in ["sell", "bearish"]):
+        elif (
+            ("absorption" in sig_name.lower() and sig_side in ["sell", "bearish"]) or
+            ("trapped longs" in sig_name.lower()) or 
+            ("bear div" in sig_name.lower()) or 
+            ("divergence" in sig_name.lower() and sig_side in ["sell", "bearish"]) or 
+            ("buyer exhaustion" in sig_name.lower()) or 
+            ("exhaustion" in sig_name.lower() and "liquidation" not in sig_name.lower() and "buyer" in sig_name.lower()) or 
+            ("exhaustion" in sig_name.lower() and sig_side in ["sell", "bearish"]) or 
+            ("liquidation exhaustion" in sig_name.lower() and sig_side in ["sell", "bearish"])
+        ):
 
             direction = "SELL"
 
@@ -607,6 +609,30 @@ class RealtimeSignalEvaluator:
                 reasons.append(f"Adverse Long Liq Cascade Bottom (${tv_liq_long_usd:,.0f} long liq already exhausted)")
 
 
+
+        # 3.6 Empirical 300-Bar Statistical Edge
+        emp_adj = float(emp_edge.get("confluence_adj", 0.0))
+        if emp_adj != 0:
+            confluence_score += emp_adj
+            reasons.append(f"Empirical 300-Bar Edge ({emp_edge.get('recommendation')}: WR {emp_edge.get('win_rate', 0.5)*100:.0f}%, EV {emp_edge.get('ev_r', 0.0):+.2f}R, Adj {emp_adj:+.0f}pts)")
+
+        # 3.7 Whale History Aggressive Sweep Confluence
+        sweep_bias = str(whale_history.get("sweep_bias", "NEUTRAL"))
+        net_whale_flow = float(whale_history.get("net_whale_flow_usd", 0.0))
+        if direction == "BUY" and sweep_bias == "BULLISH_SWEEP":
+            confluence_score += 5
+            reasons.append(f"Whale Sweep Aggressive Buying (+${net_whale_flow/1e6:.1f}M net filled)")
+        elif direction == "SELL" and sweep_bias == "BEARISH_SWEEP":
+            confluence_score += 5
+            reasons.append(f"Whale Sweep Aggressive Selling (-${abs(net_whale_flow)/1e6:.1f}M net filled)")
+
+        # 3.8 Key Liquidation Cluster Barriers
+        if direction == "BUY" and key_barriers.get("nearest_overhead"):
+            confluence_score += 5
+            reasons.append(f"Key Short Liq Strike Barrier: ${float(key_barriers['nearest_overhead']['price']):,.2f}")
+        elif direction == "SELL" and key_barriers.get("nearest_underlying"):
+            confluence_score += 5
+            reasons.append(f"Key Long Liq Strike Barrier: ${float(key_barriers['nearest_underlying']['price']):,.2f}")
 
         # Forecast aligned completed-bar flow ratios through the implemented API.
 
@@ -774,17 +800,13 @@ class RealtimeSignalEvaluator:
 
         is_macro = sym in ('EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'XAUUSD', 'XAGUSD', 'SPX500', 'NDX100', 'DJI30', 'US500', 'US100', 'US30') or sig.get('asset_class') in ('Forex', 'Metals', 'Indices', 'Metals_Commodities')
 
-        if is_macro:
+        # Mandatory Tier 1 Feeds (CVD and Auction from 300 completed bars)
+        if not (cvd.get('data_valid') is True and auction.get('data_valid') is True):
+            validation_errors.append('MICROSTRUCTURE_DATA_UNQUALIFIED')
 
-            if not (cvd.get('data_valid') is True and auction.get('data_valid') is True):
-
-                validation_errors.append('MICROSTRUCTURE_DATA_UNQUALIFIED')
-
-        else:
-
-            if not all(feed.get('data_valid') is True for feed in (whales, liq, cvd)):
-
-                validation_errors.append('MICROSTRUCTURE_DATA_UNQUALIFIED')
+        # Statistical Veto from Empirical 300-Bar Learner
+        if emp_edge.get('recommendation') == 'STATISTICAL_VETO':
+            validation_errors.append('STATISTICAL_VETO_NEGATIVE_EXPECTANCY')
 
         if current_regime in ('UNKNOWN', 'ERROR', 'INSUFFICIENT_DATA'):
 
@@ -798,7 +820,7 @@ class RealtimeSignalEvaluator:
 
         if mtr_sym:
 
-            from Terminal.matchtrader_live_trader import calculate_lot_size, MAX_RISK_USD
+            from Terminal.matchtrader_live_trader import calculate_lot_size
 
             solved_lot = calculate_lot_size(sym, entry, sl, MAX_RISK_USD)
 

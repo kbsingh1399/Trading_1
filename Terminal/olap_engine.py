@@ -1,3 +1,4 @@
+import time
 from Terminal.auction_indicators import compute_auction_profile
 """
 High-Speed OLAP Analytical Engine (Powered by DuckDB)
@@ -65,7 +66,12 @@ class OlapEngine:
     def query_whale_walls(self, symbol):
         try:
             self._validate_symbol(symbol)
-            frame = pd.read_parquet(OPEN_ORDERS_DIR / f'{symbol}_whale_open_orders.parquet')
+            whale_path = OPEN_ORDERS_DIR / f'{symbol}_whale_open_orders.parquet'
+            if not whale_path.exists():
+                return {'data_valid': True, 'feed_status': 'FAIL_SOFT_UNTRACKED', 'tight_bid_walls_usd': 0.0,
+                        'tight_ask_walls_usd': 0.0, 'whale_imbalance_bid_ratio': 0.5, 'total_bids_usd': 0.0,
+                        'total_asks_usd': 0.0, 'age_seconds': 0.0}
+            frame = pd.read_parquet(whale_path)
             frame = self._latest_snapshot(frame)
             age = (datetime.now(timezone.utc) - pd.to_datetime(frame.snapshot_time_utc.iloc[0], utc=True)).total_seconds()
             if not 0 <= age <= 7200:
@@ -89,6 +95,48 @@ class OlapEngine:
                     'age_seconds': age}
         except Exception as exc:
             return {'data_valid': False, 'error': str(exc), 'whale_imbalance_bid_ratio': 0.5}
+
+    def query_whale_history_orders(self, symbol: str, lookback_secs: float = 3600.0) -> Dict[str, Any]:
+        """Queries recent aggressive filled whale orders to determine institutional market sweep bias."""
+        res = {'data_valid': True, 'feed_status': 'FAIL_SOFT_UNTRACKED', 'recent_filled_buys_usd': 0.0,
+               'recent_filled_sells_usd': 0.0, 'net_whale_flow_usd': 0.0, 'sweep_bias': 'NEUTRAL', 'filled_trades_count': 0}
+        try:
+            self._validate_symbol(symbol)
+            hist_path = HISTORY_ORDERS_DIR / f'{symbol}_whale_history_orders.parquet'
+            if not hist_path.exists():
+                return res
+            df = pd.read_parquet(hist_path)
+            if df.empty:
+                return res
+            now_ms = time.time() * 1000
+            cutoff_ms = now_ms - (lookback_secs * 1000)
+            if 'time_ms' in df.columns:
+                df['time_ms'] = pd.to_numeric(df['time_ms'], errors='coerce')
+                recent = df[df['time_ms'] >= cutoff_ms].copy()
+            else:
+                recent = df.tail(50).copy()
+            if recent.empty:
+                return res
+            recent['filled_usd'] = pd.to_numeric(recent.get('filled_usd', 0.0), errors='coerce').fillna(0.0)
+            side_str = recent.get('side', pd.Series(dtype=str)).astype(str).str.lower()
+            buys = float(recent[side_str.str.contains('bid') | side_str.str.contains('buy')]['filled_usd'].sum())
+            sells = float(recent[side_str.str.contains('ask') | side_str.str.contains('sell')]['filled_usd'].sum())
+            net_flow = buys - sells
+            bias = 'BULLISH_SWEEP' if net_flow > 500_000 else 'BEARISH_SWEEP' if net_flow < -500_000 else 'NEUTRAL'
+            return {
+                'data_valid': True,
+                'feed_status': 'ACTIVE',
+                'recent_filled_buys_usd': buys,
+                'recent_filled_sells_usd': sells,
+                'net_whale_flow_usd': net_flow,
+                'sweep_bias': bias,
+                'filled_trades_count': len(recent)
+            }
+        except Exception as exc:
+            return {'data_valid': True, 'feed_status': 'ERROR_FALLBACK', 'error': str(exc),
+                    'recent_filled_buys_usd': 0.0, 'recent_filled_sells_usd': 0.0,
+                    'net_whale_flow_usd': 0.0, 'sweep_bias': 'NEUTRAL', 'filled_trades_count': 0}
+
 
     def query_liquidation_confluence(self, symbol):
         result = {
@@ -201,7 +249,10 @@ class OlapEngine:
             kl_df = self._latest_snapshot(pd.read_parquet(kl_path))
             if kl_df.empty:
                 return res
-            kl_df['price'] = pd.to_numeric(kl_df['price'], errors='coerce')
+            kl_df.columns = [c.lower() for c in kl_df.columns]
+            if 'price_1' in kl_df.columns and 'price' not in kl_df.columns:
+                kl_df['price'] = kl_df['price_1']
+            kl_df['price'] = pd.to_numeric(kl_df.get('price'), errors='coerce')
             kl_df['distance_pct'] = pd.to_numeric(kl_df['distance_pct'], errors='coerce')
             kl_df['strength'] = pd.to_numeric(kl_df['strength'], errors='coerce')
             kl_df = kl_df.dropna(subset=['price'])

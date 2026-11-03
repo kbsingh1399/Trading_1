@@ -293,211 +293,212 @@ async def execute_market_order(ws, side: str, lot_size: float = 0.01, symbol: st
     except Exception:
         pass
 
-    with BrowserLock("MatchTraderLiveExecution", timeout_secs=8.0) as browser_lock:
-        if not browser_lock.acquired:
-            return {"status": "REJECTED", "ok": False, "reason": "BROWSER_LOCK_CONTENTION_DURING_ORDER"}
-        state = await inspect_account_and_positions(ws)
-        if not state.get("can_trade"):
-            return {
-                "status": "REJECTED",
-                "ok": False,
-                "reason": f"Risk guardrail active: can_trade=False (Account={state.get('account_number')}, OpenPos={state.get('open_positions_count')}, DailyFloorBreached={state.get('daily_floor_breached')})"
-            }
-
-        # 1. If symbol provided, search and focus on that symbol
-        if symbol:
-            search_script = f"""
-            (() => {{
-                try {{
-                    const search = document.querySelector('input[data-testid="input-element"][placeholder*="Search"]');
-                    if (search) {{
-                        search.focus();
-                        search.value = '{symbol}';
-                        search.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                        search.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                        return {{ ok: true, symbol: '{symbol}' }};
-                    }}
-                    return {{ ok: false, error: 'search_input_not_found' }};
-                }} catch(e) {{
-                    return {{ ok: false, error: e.toString() }};
-                }}
-            }})()
-            """
-            await ws.send(json.dumps({
-                "id": 103,
-                "method": "Runtime.evaluate",
-                "params": {"expression": search_script, "returnByValue": True}
-            }))
-            await ws.recv()
-            await asyncio.sleep(0.3)
-
-            # Click the searched symbol row to reveal its order panel
-            click_script = f"""
-            (() => {{
-                try {{
-                    const el = Array.from(document.querySelectorAll('*')).find(e => {{
-                        return e.children.length === 0 && e.innerText && e.innerText.trim().toUpperCase() === '{symbol}'.toUpperCase();
-                    }});
-                    if (el) {{
-                        el.click();
-                        const row = el.closest('trade-market-watch-item, ui-list-row, [role="row"], tr') || el.parentElement;
-                        if (row) row.click();
-                        return {{ ok: true, action: 'row_clicked' }};
-                    }}
-                    return {{ ok: false, error: 'symbol_row_not_found' }};
-                }} catch(e) {{
-                    return {{ ok: false, error: e.toString() }};
-                }}
-            }})()
-            """
-            await ws.send(json.dumps({
-                "id": 1031,
-                "method": "Runtime.evaluate",
-                "params": {"expression": click_script, "returnByValue": True}
-            }))
-            await ws.recv()
-            await asyncio.sleep(0.3)
-
-        # 2. Set lot size in the input stepper (Goldfish Finding 5)
-        lot_str = f"{lot_size:.2f}"
-        stepper_script = f"""
-        (() => {{
-            try {{
-                const stepper = document.querySelector('[data-testid="input-stepper-input"], .ui-input-stepper__input');
-                if (stepper) {{
-                    stepper.focus();
-                    if ('value' in stepper) {{
-                        const proto = Object.getPrototypeOf(stepper);
-                        const setVal = Object.getOwnPropertyDescriptor(proto, 'value')?.set || Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
-                        if (setVal) setVal.call(stepper, '{lot_str}');
-                        else stepper.value = '{lot_str}';
-                    }}
-                    stepper.innerText = '{lot_str}';
-                    stepper.textContent = '{lot_str}';
-                    stepper.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                    stepper.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                    stepper.dispatchEvent(new Event('blur', {{ bubbles: true }}));
-                    return {{ ok: true, lot: '{lot_str}' }};
-                }}
-                return {{ ok: false, error: 'stepper_not_found' }};
-            }} catch(e) {{
-                return {{ ok: false, error: e.toString() }};
-            }}
-        }})()
-        """
-        await ws.send(json.dumps({
-            "id": 104,
-            "method": "Runtime.evaluate",
-            "params": {"expression": stepper_script, "returnByValue": True}
-        }))
-        await ws.recv()
-        await asyncio.sleep(0.1)
-
-        # 3. Select and punch order on MatchTrader DOM via Native CDP Mouse Click
-        side_lower = side.lower()
-        get_btn_coords = f"""
-        (() => {{
-            try {{
-                const btn = document.querySelector('[data-testid="order-panel-{side_lower}-button"], .trade-order-panel__order-{side_lower}');
-                if (btn) {{
-                    const r = btn.getBoundingClientRect();
-                    return {{ ok: true, x: r.left + r.width / 2, y: r.top + r.height / 2 }};
-                }}
-                return {{ ok: false, error: 'order_button_not_found' }};
-            }} catch(e) {{
-                return {{ ok: false, error: e.toString() }};
-            }}
-        }})()
-        """
-        await ws.send(json.dumps({
-            "id": 105,
-            "method": "Runtime.evaluate",
-            "params": {"expression": get_btn_coords, "returnByValue": True}
-        }))
-        raw_b = await ws.recv()
-        val = json.loads(raw_b).get("result", {}).get("result", {}).get("value", {})
-
-        if val and val.get("ok") and val.get("x") is not None:
-            bx, by = val["x"], val["y"]
-            await ws.send(json.dumps({"id": 1051, "method": "Input.dispatchMouseEvent", "params": {"type": "mouseMoved", "x": bx, "y": by}}))
-            await ws.recv()
-            await ws.send(json.dumps({"id": 1052, "method": "Input.dispatchMouseEvent", "params": {"type": "mousePressed", "button": "left", "clickCount": 1, "x": bx, "y": by}}))
-            await ws.recv()
-            await ws.send(json.dumps({"id": 1053, "method": "Input.dispatchMouseEvent", "params": {"type": "mouseReleased", "button": "left", "clickCount": 1, "x": bx, "y": by}}))
-            await ws.recv()
-            await asyncio.sleep(0.4)
-
-            # Auto-confirm modal if present
-            get_confirm_coords = """
-            (() => {
-                try {
-                    const confirmBtn = Array.from(document.querySelectorAll('button')).find(b => b.innerText && b.innerText.trim() === 'Confirm');
-                    if (confirmBtn) {
-                        const r = confirmBtn.getBoundingClientRect();
-                        return { ok: true, x: r.left + r.width / 2, y: r.top + r.height / 2 };
-                    }
-                    return { ok: false };
-                } catch(e) {
-                    return { ok: false, error: e.toString() };
+    try:
+        with BrowserLock("MatchTraderLiveExecution", timeout_secs=8.0) as browser_lock:
+            if not browser_lock.acquired:
+                return {"status": "REJECTED", "ok": False, "reason": "BROWSER_LOCK_CONTENTION_DURING_ORDER"}
+            state = await inspect_account_and_positions(ws)
+            if not state.get("can_trade"):
+                return {
+                    "status": "REJECTED",
+                    "ok": False,
+                    "reason": f"Risk guardrail active: can_trade=False (Account={state.get('account_number')}, OpenPos={state.get('open_positions_count')}, DailyFloorBreached={state.get('daily_floor_breached')})"
                 }
-            })()
-            """
-            await ws.send(json.dumps({
-                "id": 1054,
-                "method": "Runtime.evaluate",
-                "params": {"expression": get_confirm_coords, "returnByValue": True}
-            }))
-            raw_c = await ws.recv()
-            val_c = json.loads(raw_c).get("result", {}).get("result", {}).get("value", {})
-            if val_c and val_c.get("ok") and val_c.get("x") is not None:
-                cx, cy = val_c["x"], val_c["y"]
-                await ws.send(json.dumps({"id": 1055, "method": "Input.dispatchMouseEvent", "params": {"type": "mouseMoved", "x": cx, "y": cy}}))
+
+            # 1. If symbol provided, search and focus on that symbol
+            if symbol:
+                search_script = f"""
+                (() => {{
+                    try {{
+                        const search = document.querySelector('input[data-testid="input-element"][placeholder*="Search"]');
+                        if (search) {{
+                            search.focus();
+                            search.value = '{symbol}';
+                            search.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                            search.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                            return {{ ok: true, symbol: '{symbol}' }};
+                        }}
+                        return {{ ok: false, error: 'search_input_not_found' }};
+                    }} catch(e) {{
+                        return {{ ok: false, error: e.toString() }};
+                    }}
+                }})()
+                """
+                await ws.send(json.dumps({
+                    "id": 103,
+                    "method": "Runtime.evaluate",
+                    "params": {"expression": search_script, "returnByValue": True}
+                }))
                 await ws.recv()
-                await ws.send(json.dumps({"id": 1056, "method": "Input.dispatchMouseEvent", "params": {"type": "mousePressed", "button": "left", "clickCount": 1, "x": cx, "y": cy}}))
-                await ws.recv()
-                await ws.send(json.dumps({"id": 1057, "method": "Input.dispatchMouseEvent", "params": {"type": "mouseReleased", "button": "left", "clickCount": 1, "x": cx, "y": cy}}))
-                await ws.recv()
-                val["confirmed"] = True
                 await asyncio.sleep(0.3)
 
-        now_utc = datetime.now(timezone.utc)
-        now_ist = now_utc + timedelta(hours=5, minutes=30)
-        record = {
-            "executed_at_utc": now_utc.isoformat(),
-            "executed_at_ist": now_ist.strftime("%Y-%m-%d %H:%M:%S IST"),
-            "account": state.get("account_number"),
-            "equity": state.get("current_equity"),
-            "symbol": symbol,
-            "side": side.upper(),
-            "lots": lot_size,
-            "stop_loss": stop_loss,
-            "take_profit": take_profit,
-            "status": "DISPATCHED" if val.get("ok") else "FAILED_CLICK",
-            "details": val
-        }
+                # Click the searched symbol row to reveal its order panel
+                click_script = f"""
+                (() => {{
+                    try {{
+                        const el = Array.from(document.querySelectorAll('*')).find(e => {{
+                            return e.children.length === 0 && e.innerText && e.innerText.trim().toUpperCase() === '{symbol}'.toUpperCase();
+                        }});
+                        if (el) {{
+                            el.click();
+                            const row = el.closest('trade-market-watch-item, ui-list-row, [role="row"], tr') || el.parentElement;
+                            if (row) row.click();
+                            return {{ ok: true, action: 'row_clicked' }};
+                        }}
+                        return {{ ok: false, error: 'symbol_row_not_found' }};
+                    }} catch(e) {{
+                        return {{ ok: false, error: e.toString() }};
+                    }}
+                }})()
+                """
+                await ws.send(json.dumps({
+                    "id": 1031,
+                    "method": "Runtime.evaluate",
+                    "params": {"expression": click_script, "returnByValue": True}
+                }))
+                await ws.recv()
+                await asyncio.sleep(0.3)
+
+            # 2. Set lot size in the input stepper (Goldfish Finding 5)
+            lot_str = f"{lot_size:.2f}"
+            stepper_script = f"""
+            (() => {{
+                try {{
+                    const stepper = document.querySelector('[data-testid="input-stepper-input"], .ui-input-stepper__input');
+                    if (stepper) {{
+                        stepper.focus();
+                        if ('value' in stepper) {{
+                            const proto = Object.getPrototypeOf(stepper);
+                            const setVal = Object.getOwnPropertyDescriptor(proto, 'value')?.set || Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+                            if (setVal) setVal.call(stepper, '{lot_str}');
+                            else stepper.value = '{lot_str}';
+                        }}
+                        stepper.innerText = '{lot_str}';
+                        stepper.textContent = '{lot_str}';
+                        stepper.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        stepper.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                        stepper.dispatchEvent(new Event('blur', {{ bubbles: true }}));
+                        return {{ ok: true, lot: '{lot_str}' }};
+                    }}
+                    return {{ ok: false, error: 'stepper_not_found' }};
+                }} catch(e) {{
+                    return {{ ok: false, error: e.toString() }};
+                }}
+            }})()
+            """
+            await ws.send(json.dumps({
+                "id": 104,
+                "method": "Runtime.evaluate",
+                "params": {"expression": stepper_script, "returnByValue": True}
+            }))
+            await ws.recv()
+            await asyncio.sleep(0.1)
+
+            # 3. Select and punch order on MatchTrader DOM via Native CDP Mouse Click
+            side_lower = side.lower()
+            get_btn_coords = f"""
+            (() => {{
+                try {{
+                    const btn = document.querySelector('[data-testid="order-panel-{side_lower}-button"], .trade-order-panel__order-{side_lower}');
+                    if (btn) {{
+                        const r = btn.getBoundingClientRect();
+                        return {{ ok: true, x: r.left + r.width / 2, y: r.top + r.height / 2 }};
+                    }}
+                    return {{ ok: false, error: 'order_button_not_found' }};
+                }} catch(e) {{
+                    return {{ ok: false, error: e.toString() }};
+                }}
+            }})()
+            """
+            await ws.send(json.dumps({
+                "id": 105,
+                "method": "Runtime.evaluate",
+                "params": {"expression": get_btn_coords, "returnByValue": True}
+            }))
+            raw_b = await ws.recv()
+            val = json.loads(raw_b).get("result", {}).get("result", {}).get("value", {})
+
+            if val and val.get("ok") and val.get("x") is not None:
+                bx, by = val["x"], val["y"]
+                await ws.send(json.dumps({"id": 1051, "method": "Input.dispatchMouseEvent", "params": {"type": "mouseMoved", "x": bx, "y": by}}))
+                await ws.recv()
+                await ws.send(json.dumps({"id": 1052, "method": "Input.dispatchMouseEvent", "params": {"type": "mousePressed", "button": "left", "clickCount": 1, "x": bx, "y": by}}))
+                await ws.recv()
+                await ws.send(json.dumps({"id": 1053, "method": "Input.dispatchMouseEvent", "params": {"type": "mouseReleased", "button": "left", "clickCount": 1, "x": bx, "y": by}}))
+                await ws.recv()
+                await asyncio.sleep(0.4)
+
+                # Auto-confirm modal if present
+                get_confirm_coords = """
+                (() => {
+                    try {
+                        const confirmBtn = Array.from(document.querySelectorAll('button')).find(b => b.innerText && b.innerText.trim() === 'Confirm');
+                        if (confirmBtn) {
+                            const r = confirmBtn.getBoundingClientRect();
+                            return { ok: true, x: r.left + r.width / 2, y: r.top + r.height / 2 };
+                        }
+                        return { ok: false };
+                    } catch(e) {
+                        return { ok: false, error: e.toString() };
+                    }
+                })()
+                """
+                await ws.send(json.dumps({
+                    "id": 1054,
+                    "method": "Runtime.evaluate",
+                    "params": {"expression": get_confirm_coords, "returnByValue": True}
+                }))
+                raw_c = await ws.recv()
+                val_c = json.loads(raw_c).get("result", {}).get("result", {}).get("value", {})
+                if val_c and val_c.get("ok") and val_c.get("x") is not None:
+                    cx, cy = val_c["x"], val_c["y"]
+                    await ws.send(json.dumps({"id": 1055, "method": "Input.dispatchMouseEvent", "params": {"type": "mouseMoved", "x": cx, "y": cy}}))
+                    await ws.recv()
+                    await ws.send(json.dumps({"id": 1056, "method": "Input.dispatchMouseEvent", "params": {"type": "mousePressed", "button": "left", "clickCount": 1, "x": cx, "y": cy}}))
+                    await ws.recv()
+                    await ws.send(json.dumps({"id": 1057, "method": "Input.dispatchMouseEvent", "params": {"type": "mouseReleased", "button": "left", "clickCount": 1, "x": cx, "y": cy}}))
+                    await ws.recv()
+                    val["confirmed"] = True
+                    await asyncio.sleep(0.3)
+
+            now_utc = datetime.now(timezone.utc)
+            now_ist = now_utc + timedelta(hours=5, minutes=30)
+            record = {
+                "executed_at_utc": now_utc.isoformat(),
+                "executed_at_ist": now_ist.strftime("%Y-%m-%d %H:%M:%S IST"),
+                "account": state.get("account_number"),
+                "equity": state.get("current_equity"),
+                "symbol": symbol,
+                "side": side.upper(),
+                "lots": lot_size,
+                "stop_loss": stop_loss,
+                "take_profit": take_profit,
+                "status": "DISPATCHED" if val.get("ok") else "FAILED_CLICK",
+                "details": val
+            }
         
-        try:
-            trades_file = DB_DIR / "Signals" / "matchtrader_executed_trades.jsonl"
-            trades_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(trades_file, "a", encoding="utf-8") as f:
-                f.write(json.dumps(record) + "\n")
-        except Exception as e:
-            logger.warning(f"Failed to record trade log: {e}")
+            try:
+                trades_file = DB_DIR / "Signals" / "matchtrader_executed_trades.jsonl"
+                trades_file.parent.mkdir(parents=True, exist_ok=True)
+                with open(trades_file, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(record) + "\n")
+            except Exception as e:
+                logger.warning(f"Failed to record trade log: {e}")
 
-        logger.info(f"⚡ [MATCHTRADER DISPATCH] Account {state.get('account_number')} | {symbol} {side.upper()} {lot_size} Lots (SL: {stop_loss}, TP: {take_profit}) | Status: {record['status']}")
+            logger.info(f"⚡ [MATCHTRADER DISPATCH] Account {state.get('account_number')} | {symbol} {side.upper()} {lot_size} Lots (SL: {stop_loss}, TP: {take_profit}) | Status: {record['status']}")
 
-        return {
-            "status": "DISPATCHED",
-            "ok": bool(val.get("ok", True)),
-            "account": state.get("account_number"),
-            "equity": state.get("current_equity"),
-            "symbol": symbol,
-            "side": side.upper(),
-            "lots": lot_size,
-            "stop_loss": stop_loss,
-            "take_profit": take_profit,
-            "details": val
-        }
+            return {
+                "status": "DISPATCHED",
+                "ok": bool(val.get("ok", True)),
+                "account": state.get("account_number"),
+                "equity": state.get("current_equity"),
+                "symbol": symbol,
+                "side": side.upper(),
+                "lots": lot_size,
+                "stop_loss": stop_loss,
+                "take_profit": take_profit,
+                "details": val
+            }
     finally:
         if inflight_lock.exists():
             try:
