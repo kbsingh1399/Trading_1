@@ -862,22 +862,26 @@ class RealtimeSignalEvaluator:
 
         geom_valid = False
 
-        mtr_sym = matchtrader_symbol(sym)
+        # Primary Execution Venue: Delta Exchange India Discrete Contract Solver
+        from Terminal.delta_exchange_live_trader import delta_client
+        delta_prod = delta_client.resolve_product(sym)
 
-        if mtr_sym:
-
-            from Terminal.matchtrader_live_trader import calculate_lot_size
-
-            solved_lot = calculate_lot_size(sym, entry, sl, MAX_RISK_USD)
-
-            realized_risk = MAX_RISK_USD
-
-            effective_max_risk = MAX_RISK_USD
-
-            geom_valid = True
-
-            vol_status = 'MATCHTRADER_QUALIFIED'
-
+        if delta_prod:
+            contract_val = float(delta_prod.get('contract_value', 1.0) or 1.0)
+            risk_dist = abs(entry - sl)
+            single_risk = risk_dist * contract_val
+            if single_risk > 0 and single_risk <= MAX_RISK_USD:
+                solved_lot = max(1, int(MAX_RISK_USD / single_risk))
+                realized_risk = min(MAX_RISK_USD, solved_lot * single_risk)
+                effective_max_risk = MAX_RISK_USD
+                geom_valid = True
+                vol_status = 'DELTA_QUALIFIED'
+            else:
+                solved_lot = 1
+                realized_risk = single_risk
+                effective_max_risk = MAX_RISK_USD
+                geom_valid = (single_risk <= MAX_RISK_USD)
+                vol_status = 'DELTA_QUALIFIED' if geom_valid else 'RISK_CAP_EXCEEDED'
         else:
 
             try:
@@ -984,7 +988,9 @@ class RealtimeSignalEvaluator:
 
                              and not validation_errors and not forecast_veto)
 
-        matchtrader_authorized = bool(is_actionable and mtr_sym is not None)
+        delta_authorized = bool(is_actionable and delta_prod is not None)
+
+        matchtrader_authorized = False
 
         mt5_authorized = bool(is_actionable and vol_status == 'OK')
 
@@ -1102,9 +1108,13 @@ class RealtimeSignalEvaluator:
 
             "mt5_symbol": mt5_sym,
 
-            "matchtrader_symbol": matchtrader_symbol(sym),
+            "delta_product_symbol": delta_prod.get("symbol") if delta_prod else None,
 
-            "matchtrader_execution_authorized": matchtrader_authorized,
+            "delta_execution_authorized": delta_authorized,
+
+            "matchtrader_symbol": None,
+
+            "matchtrader_execution_authorized": False,
 
             "mt5_execution_authorized": mt5_authorized,
 
@@ -1189,7 +1199,9 @@ class RealtimeSignalEvaluator:
 
                 "cvd_slope": cvd_slope,
 
-                "recent_poc": poc_price
+                "recent_poc": poc_price,
+                "whale_tracked": bool(whales.get("feed_status") == "ACTIVE" and whales.get("data_valid", False)),
+                "liq_tracked": bool(liq.get("data_valid", False) is True and bool(nf_meta))
 
             },
 

@@ -183,7 +183,15 @@ class DeltaExchangeTrader:
         }
 
         url = BASE_URL + path + query_str
-        req_func = requests.get if method.upper() == "GET" else requests.post
+        method_upper = method.upper()
+        if method_upper == 'GET':
+            req_func = requests.get
+        elif method_upper == 'PUT':
+            req_func = requests.put
+        elif method_upper == 'DELETE':
+            req_func = requests.delete
+        else:
+            req_func = requests.post
         resp = req_func(url, headers=headers, data=body_str if body_str else None, timeout=10)
 
         # Re-sync server time if signature expired error occurs
@@ -322,9 +330,19 @@ class DeltaExchangeTrader:
                 return True
         return False
 
+    def quantize_price(self, price: float, product_id: int) -> str:
+        """Quantizes price to the instrument's exact legal tick size and precision."""
+        prod = next((p for p in self.products_cache.values() if p.get("id") == product_id), None)
+        tick = float(prod.get("tick_size", 0.01)) if prod else 0.01
+        if tick <= 0:
+            tick = 0.01
+        quantized = round(price / tick) * tick
+        decimals = max(0, -int(math.floor(math.log10(tick)))) if tick < 1.0 else 0
+        return f"{quantized:.{decimals}f}"
+
     def get_open_orders(self) -> List[Dict[str, Any]]:
-        """Returns all pending open orders (including bracket TP/SL)."""
-        res = self.request("GET", "/v2/orders")
+        """Returns all open and pending conditional orders (including bracket TP/SL)."""
+        res = self.request("GET", "/v2/orders", params={"states": "open,pending"})
         return res.get("result", [])
 
     def set_leverage(self, product_id: int, leverage: int = 10) -> Dict[str, Any]:
@@ -364,17 +382,280 @@ class DeltaExchangeTrader:
         }
 
         if order_type == "limit_order" and limit_price is not None:
-            body["limit_price"] = str(round(limit_price, 4))
+            body["limit_price"] = self.quantize_price(limit_price, prod_id)
 
         if stop_loss_price is not None:
-            body["bracket_stop_loss_price"] = str(round(stop_loss_price, 4))
+            body["bracket_stop_loss_price"] = self.quantize_price(stop_loss_price, prod_id)
             body["bracket_stop_trigger_method"] = "last_traded_price"
 
         if take_profit_price is not None:
-            body["bracket_take_profit_price"] = str(round(take_profit_price, 4))
+            body["bracket_take_profit_price"] = self.quantize_price(take_profit_price, prod_id)
 
         res = self.request("POST", "/v2/orders", body=body)
         return res
+
+    def edit_order(
+        self,
+        order_id: int,
+        product_id: int,
+        size: int,
+        stop_price: Optional[float] = None,
+        limit_price: Optional[float] = None,
+        reduce_only: bool = True
+    ) -> Dict[str, Any]:
+        """Edits an existing open or pending conditional order on Delta Exchange India."""
+        body: Dict[str, Any] = {
+            "id": int(order_id),
+            "product_id": int(product_id),
+            "size": int(size),
+            "reduce_only": bool(reduce_only)
+        }
+        if stop_price is not None:
+            body["stop_price"] = self.quantize_price(stop_price, product_id)
+        if limit_price is not None:
+            body["limit_price"] = self.quantize_price(limit_price, product_id)
+        return self.request("PUT", "/v2/orders", body=body)
+
+    def reanchor_brackets_to_fill(
+        self,
+        symbol: str,
+        fill_price: float,
+        sl_price: float,
+        min_rr: float = 2.0
+    ) -> Dict[str, Any]:
+        """
+        Ensures that the Take-Profit bracket order strictly achieves >= min_rr (default 2.0:1)
+        calibrated against the actual executed market fill price (P_fill) and caps dollar risk.
+        """
+        if not fill_price or fill_price <= 0:
+            return {"ok": False, "status": "SKIPPED", "reason": "INVALID_FILL_PRICE"}
+        prod = self.resolve_product(symbol)
+        if not prod:
+            return {"ok": False, "status": "SKIPPED", "reason": "PROD_NOT_FOUND"}
+        prod_id = prod["id"]
+        contract_val = float(prod.get("contract_value", 1.0) or 1.0)
+
+        # Retry loop to wait for Delta backend to persist child bracket orders
+        tp_order = None
+        sl_order = None
+        for attempt in range(4):
+            orders = self.get_open_orders()
+            for o in orders:
+                if o.get("product_id") == prod_id:
+                    s_type = str(o.get("stop_order_type", "")).lower()
+                    if "take_profit" in s_type:
+                        tp_order = o
+                    elif "stop_loss" in s_type:
+                        sl_order = o
+            if tp_order and sl_order:
+                break
+            time.sleep(0.25)
+
+        if not tp_order:
+            return {"ok": False, "status": "NOT_FOUND", "reason": "TP_ORDER_NOT_LOCATED"}
+
+        # Determine position direction from TP side (TP side is opposing)
+        pos_direction = "BUY" if tp_order.get("side", "").lower() == "sell" else "SELL"
+        dir_mult = 1.0 if pos_direction == "BUY" else -1.0
+        size = int(tp_order.get("size", 1))
+
+        # Actual risk distance from fill
+        actual_risk = abs(fill_price - sl_price)
+        from Terminal.risk_envelope import MAX_RISK_USD
+        max_allowed_risk_usd = MAX_RISK_USD
+
+        # Check if slippage inflated dollar risk beyond MAX_RISK_USD
+        realized_risk_usd = actual_risk * size * contract_val
+        calibrated_sl = sl_price
+        if realized_risk_usd > max_allowed_risk_usd:
+            # Capping SL inward towards fill to preserve MAX_RISK_USD
+            capped_dist = max_allowed_risk_usd / (size * contract_val)
+            calibrated_sl = fill_price - (dir_mult * capped_dist)
+            actual_risk = capped_dist
+            if sl_order:
+                self.edit_order(
+                    order_id=sl_order["id"],
+                    product_id=prod_id,
+                    size=size,
+                    stop_price=calibrated_sl
+                )
+                logger.info(f"[{symbol}] Calibrated SL inward to  to preserve  cap")
+
+        # Calibrate TP to guarantee at least min_rr:1
+        target_reward = actual_risk * min_rr
+        calibrated_tp = fill_price + (dir_mult * target_reward)
+
+        # Check current TP
+        current_tp = float(tp_order.get("stop_price", 0.0) or 0.0)
+        current_reward = abs(current_tp - fill_price)
+        current_rr = current_reward / max(actual_risk, 1e-8)
+
+        if current_rr < min_rr or abs(calibrated_tp - current_tp) > float(prod.get("tick_size", 0.01)):
+            edit_res = self.edit_order(
+                order_id=tp_order["id"],
+                product_id=prod_id,
+                size=size,
+                stop_price=calibrated_tp
+            )
+            logger.info(f"[{symbol}] Re-anchored TP from {current_tp} to {calibrated_tp} (R:R calibrated from {current_rr:.2f}:1 to {min_rr:.1f}:1 relative to fill {fill_price})")
+            return {
+                "ok": True,
+                "status": "REANCHORED",
+                "calibrated_tp": calibrated_tp,
+                "calibrated_sl": calibrated_sl,
+                "rr": min_rr,
+                "edit_res": edit_res
+            }
+        return {"ok": True, "status": "ALREADY_COMPLIANT", "current_rr": current_rr}
+
+    def audit_and_trail_positions(self) -> List[Dict[str, Any]]:
+        """
+        Audits all active Delta Exchange positions, enforces R:R >= 2.0, and ratchets
+        trailing stop-loss to Breakeven (+1R) and trailing profit locks (+2R, +3R).
+        """
+        reports = []
+        active_positions = self.get_active_positions()
+        if not active_positions:
+            return reports
+
+        # 1. Fetch live mark prices via bulk tickers endpoint
+        mark_prices = {}
+        try:
+            t_res = self.request("GET", "/v2/tickers")
+            ticker_list = t_res.get("result", []) if isinstance(t_res, dict) else []
+            for tk in ticker_list:
+                sym = tk.get("symbol")
+                if sym and "mark_price" in tk:
+                    mark_prices[sym] = float(tk.get("mark_price") or 0.0)
+        except Exception as e:
+            logger.warning(f"Could not load live tickers for trailing SL: {e}")
+
+        open_orders = self.get_open_orders()
+
+        for pos in active_positions:
+            p_sym = pos.get("product_symbol", "")
+            size = int(pos.get("size", 0))
+            if size == 0 or not p_sym:
+                continue
+
+            prod = self.resolve_product(p_sym)
+            if not prod:
+                continue
+            prod_id = prod["id"]
+            tick_size = float(prod.get("tick_size", 0.01) or 0.01)
+
+            entry_price = float(pos.get("entry_price", 0.0) or 0.0)
+            mark_price = mark_prices.get(p_sym) or float(pos.get("mark_price", 0.0) or 0.0)
+            if entry_price <= 0 or mark_price <= 0:
+                continue
+
+            direction = "BUY" if size > 0 else "SELL"
+            dir_mult = 1.0 if direction == "BUY" else -1.0
+
+            # Locate associated Stop-Loss and Take-Profit orders
+            sl_order = None
+            tp_order = None
+            for o in open_orders:
+                if o.get("product_id") == prod_id:
+                    s_type = str(o.get("stop_order_type", "")).lower()
+                    if "stop_loss" in s_type:
+                        sl_order = o
+                    elif "take_profit" in s_type:
+                        tp_order = o
+
+            if not sl_order:
+                continue
+
+            cur_sl_price = float(sl_order.get("stop_price", 0.0) or 0.0)
+            risk_dist = abs(entry_price - cur_sl_price)
+            if risk_dist <= 0:
+                continue
+
+            # Calculate current profit in R-multiples
+            unrealized_dist = dir_mult * (mark_price - entry_price)
+            r_gain = unrealized_dist / risk_dist
+
+            # Check R:R compliance on TP
+            if tp_order:
+                cur_tp_price = float(tp_order.get("stop_price", 0.0) or 0.0)
+                reward_dist = abs(cur_tp_price - entry_price)
+                rr = reward_dist / risk_dist
+                if rr < 1.95:  # Margin for rounding
+                    target_tp = entry_price + (dir_mult * 2.0 * risk_dist)
+                    self.edit_order(
+                        order_id=tp_order["id"],
+                        product_id=prod_id,
+                        size=abs(size),
+                        stop_price=target_tp
+                    )
+                    reports.append({
+                        "symbol": p_sym,
+                        "action": "CALIBRATED_TP",
+                        "old_tp": cur_tp_price,
+                        "new_tp": target_tp,
+                        "rr": 2.0
+                    })
+
+            # Multi-Tier Trailing SL State Machine
+            target_sl = None
+            tier_tag = None
+
+            if r_gain >= 3.0:
+                # Tier 3 (+2R Profit Lock)
+                target_sl = entry_price + (dir_mult * 2.0 * risk_dist)
+                tier_tag = "TIER_3_PLUS_2R_LOCK"
+            elif r_gain >= 2.0:
+                # Tier 2 (+1R Profit Lock and widen TP)
+                target_sl = entry_price + (dir_mult * 1.0 * risk_dist)
+                tier_tag = "TIER_2_PLUS_1R_LOCK"
+                if tp_order:
+                    # Widen TP to +3R so position can achieve Tier 3
+                    widen_tp = entry_price + (dir_mult * 3.0 * risk_dist)
+                    cur_tp_val = float(tp_order.get("stop_price", 0.0) or 0.0)
+                    if (direction == "BUY" and widen_tp > cur_tp_val) or (direction == "SELL" and widen_tp < cur_tp_val):
+                        self.edit_order(
+                            order_id=tp_order["id"],
+                            product_id=prod_id,
+                            size=abs(size),
+                            stop_price=widen_tp
+                        )
+            elif r_gain >= 1.0:
+                # Tier 1 (Breakeven + 1 tick buffer)
+                target_sl = entry_price + (dir_mult * 1.0 * tick_size)
+                tier_tag = "TIER_1_BREAKEVEN"
+
+            # Monotonicity & Validity Checks
+            if target_sl is not None and tier_tag is not None:
+                # Check monotonic improvement (never move SL backwards)
+                is_better = (target_sl > cur_sl_price + tick_size * 0.5) if direction == "BUY" else (target_sl < cur_sl_price - tick_size * 0.5)
+                # Check stop trigger validity (must not trigger immediately)
+                is_valid_trigger = (target_sl < mark_price) if direction == "BUY" else (target_sl > mark_price)
+
+                if is_better and is_valid_trigger:
+                    try:
+                        edit_res = self.edit_order(
+                            order_id=sl_order["id"],
+                            product_id=prod_id,
+                            size=abs(size),
+                            stop_price=target_sl
+                        )
+                        if edit_res.get("success"):
+                            logger.info(f"🛡️ [{p_sym}] Ratcheted Stop Loss to {target_sl} ({tier_tag}, gain: +{r_gain:.2f}R, mark: {mark_price})")
+                            reports.append({
+                                "symbol": p_sym,
+                                "action": "RATCHET_SL",
+                                "tier": tier_tag,
+                                "old_sl": cur_sl_price,
+                                "new_sl": target_sl,
+                                "gain_r": round(r_gain, 2),
+                                "mark_price": mark_price
+                            })
+                        else:
+                            logger.warning(f"[{p_sym}] Failed to ratchet SL: {edit_res.get('error')}")
+                    except Exception as exc:
+                        logger.warning(f"[{p_sym}] Error during SL ratchet: {exc}")
+
+        return reports
 
     def close_position(self, symbol: str) -> Dict[str, Any]:
         """
@@ -553,6 +834,20 @@ class DeltaExchangeTrader:
             )
 
             ok = res.get("success", False) or ("result" in res and "id" in res.get("result", {}))
+            if ok:
+                order_info = res.get("result", {})
+                fill_price_raw = order_info.get("average_fill_price")
+                fill_price = float(fill_price_raw) if fill_price_raw and float(fill_price_raw) > 0 else entry
+                try:
+                    self.reanchor_brackets_to_fill(
+                        symbol=prod["symbol"],
+                        fill_price=fill_price,
+                        sl_price=sl,
+                        min_rr=2.0
+                    )
+                except Exception as e:
+                    logger.warning(f"[{prod['symbol']}] Post-fill bracket re-anchoring error: {e}")
+
             return {
                 "ok": ok,
                 "status": "EXECUTED" if ok else "FAILED",

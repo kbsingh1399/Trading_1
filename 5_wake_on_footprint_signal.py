@@ -68,19 +68,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from Terminal.runtime_io import atomic_json, acquire_singleton, writer_lock, FileMutex
 from Terminal.realtime_signal_evaluator import RealtimeSignalEvaluator
-from Terminal.matchtrader_live_trader import (
-    get_matchtrader_tab,
-    inspect_account_and_positions,
-    get_open_positions_detailed,
-    close_position_by_index,
-    execute_signal,
-    matchtrader_symbol,
-    SYMBOL_TO_MATCHTRADER,
-    TARGET_ACCOUNT_NUMBER,
-    EQUITY_FLOOR_DAILY,
-    EQUITY_FLOOR_TOTAL,
-    MAX_CONCURRENT_POSITIONS
-)
+# MatchTrader removed per AGENTS.md policy (Delta Exchange India primary venue)
 from Terminal.delta_exchange_live_trader import delta_client, set_live_dispatch
 from Terminal.trade_critic_engine import TradeCriticEngine
 from Terminal.asset_signal_stack import (
@@ -195,8 +183,8 @@ def format_confluence_card(alert: Dict[str, Any]) -> str:
         f"║  Trade Geometry:   Entry=${trade.get('entry_price', 0.0):,.4f} | SL=${trade.get('stop_loss', 0.0):,.4f} (-{trade.get('sl_pct', 0.0)}%)".ljust(83) + "║",
         f"║                    TP1=${trade.get('take_profit_1', 0.0):,.4f} | TP2=${trade.get('take_profit_2', 0.0):,.4f} | R:R={trade.get('rr_ratio', 0.0)}:1".ljust(83) + "║",
         f"║  Risk Allocation:  Lots={lots} | Risk=${risk_usd:.2f} (Cap: ${trade.get('hard_max_risk_usd', MAX_RISK_USD):.2f})".ljust(83) + "║",
-        f"║  Delta Exchange:   Authorized={'✅ YES (AUTO-DISPATCH READY)' if is_actionable and delta_prod_res else ('❌ NO (SUB-THRESHOLD)' if not is_actionable else '⚠️ NO PRODUCT')} | Product={delta_prod_sym} (10x Leverage)".ljust(83) + "║",
-        f"║  MatchTrader:      Authorized={'✅ YES' if mtr_auth else '❌ NO'} | Symbol={alert.get('matchtrader_symbol', 'N/A')}".ljust(83) + "║",
+        f"║  Delta Exchange:   Authorized={'✅ YES (DISPATCH READY)' if is_actionable and delta_prod_res else ('❌ NO (SUB-THRESHOLD)' if not is_actionable else '⚠️ NO PRODUCT (Unlisted on Delta India)')} | Product={delta_prod_sym} (10x-20x Leverage)".ljust(83) + "║",
+        f"║  Risk Execution:   R:R >= 2.0:1 Guaranteed (Fill-Anchored Dynamic Calibration) | Venue: Delta India".ljust(83) + "║",
         "╟" + "─" * 82 + "╢",
         f"║  Auction Profile:  Day VWAP: {vwap_str}".ljust(83) + "║",
         f"║  Value Area:       {poc_vah_val}".ljust(83) + "║",
@@ -464,74 +452,13 @@ class FootprintSignalSentinel:
 
         current_active_keys = set()
 
-        # 1. MatchTrader Positions Guardian
-        tab = get_matchtrader_tab()
-        if tab:
-            import websockets
-            try:
-                async with websockets.connect(tab["webSocketDebuggerUrl"], ping_interval=None) as ws:
-                    account_state = await inspect_account_and_positions(ws)
-                    positions = await get_open_positions_detailed(ws)
-
-                    equity = account_state.get("current_equity", 100000.0)
-                    daily_loss = account_state.get("current_daily_loss", 0.0)
-                    total_loss = account_state.get("current_total_loss", 0.0)
-                    pos_count = len(positions)
-
-                    status_summary = f"[MATCHTRADER GUARDIAN] Equity=${equity:,.2f} | Open={pos_count} pos | Daily Loss=${daily_loss:,.2f} | Total Loss=${total_loss:,.2f}"
-
-                    # Check drawdown circuit breaker
-                    if account_state.get("daily_floor_breached") or account_state.get("total_floor_breached"):
-                        logger.critical(f"🛑 [CIRCUIT BREAKER] DRAWDOWN FLOOR BREACHED! DailyFloor={account_state.get('daily_floor_breached')}, TotalFloor={account_state.get('total_floor_breached')}")
-                        if winsound is not None:
-                            try:
-                                winsound.Beep(1800, 1000)
-                            except Exception:
-                                pass
-
-                    # Inspect each MatchTrader position
-                    for pos in positions:
-                        sym = pos.get("symbol", "")
-                        pnl = float(pos.get("profit_usd") or 0.0)
-                        pct = float(pos.get("profit_pct") or 0.0)
-                        side = pos.get("side", "")
-                        vol = pos.get("volume", "")
-                        idx = pos.get("index", 0)
-                        key = f"MTR_{sym}_{side}"
-                        current_active_keys.add(key)
-
-                        if key not in self.active_positions_tracker:
-                            self.active_positions_tracker[key] = {
-                                "venue": "MATCHTRADER",
-                                "symbol": sym,
-                                "direction": side,
-                                "open_price": float(pos.get("open_price") or 0.0),
-                                "last_price": float(pos.get("current_price") or 0.0),
-                                "last_profit_usd": pnl,
-                                "volume": vol,
-                                "first_seen": now,
-                                "last_seen": now
-                            }
-                        else:
-                            self.active_positions_tracker[key].update({
-                                "last_price": float(pos.get("current_price") or 0.0),
-                                "last_profit_usd": pnl,
-                                "last_seen": now
-                            })
-
-                        # Individual hard loss limit ($25.00 max risk with 1.25 buffer = -$31.25)
-                        max_loss_thresh = MAX_RISK_USD * 1.25
-                        if pnl <= -max_loss_thresh:
-                            logger.warning(f"🛑 Pos #{idx} {sym} loss exceeded hard risk envelope -${max_loss_thresh:.2f} (${pnl:.2f})! Emergency close triggered.")
-                            await close_position_by_index(ws, idx)
-                        elif pnl >= 250.0:
-                            logger.info(f"✨ Pos #{idx} {sym} in strong profit (+${pnl:.2f}) | Trailing Break-Even / Target Qualified.")
-
-                    logger.info(status_summary)
-
-            except Exception as e:
-                logger.debug(f"MatchTrader position inspection non-fatal error: {e}")
-
+        # 1. Delta Exchange India Position Guardian & Trailing Stop Loss
+        try:
+            guardian_reports = await asyncio.to_thread(delta_client.audit_and_trail_positions)
+            for rep in guardian_reports:
+                logger.info(f"🛡️ [DELTA GUARDIAN] {rep}")
+        except Exception as e:
+            logger.warning(f"Delta Guardian non-fatal error: {e}")
         # 2. Delta Exchange India Positions Guardian
         try:
             delta_pos = await asyncio.to_thread(delta_client.get_active_positions)

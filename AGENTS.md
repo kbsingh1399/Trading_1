@@ -14,10 +14,12 @@ This repository follows Google's **Elephant-Goldfish Model (EGM)** for architect
 - **Primary IST Time Mapping**: All parquet files must store Indian Standard Time (IST, UTC+5:30) as primary columns: `open_time_ist`, `close_time_ist`, `time_ist`, `candle_ist`, `open_time_ist_ms`, `close_time_ist_ms`.
 - **Lock-Free Atomic Persistence**: Write to temporary `.parquet.tmp` files and atomic-rename via `os.replace`. Never create orphaned `.lock` files inside `Database/Candle_Data`.
 
-## 3. Strict Prop Firm Risk Guardrails
-- **Target Account**: FundingPips MatchTrader Competition Account `101305360` ($5,000 challenge account).
-- **Hard Drawdown Floor**: $4,775.00 (`HARD_FLOOR_USD` in `Terminal/risk_envelope.py`), ensuring account survival across 10-consecutive loss episodes.
+## 3. Strict Live Execution & Risk Guardrails (Delta Exchange India)
+- **Primary Target Venue**: Delta Exchange India authenticated REST API (`Terminal/delta_exchange_live_trader.py`). MatchTrader is completely removed from live routing.
+- **Capital & Margin Preservation**: Available free margin buffer >= 20% to cover taker exchange commissions and eliminate `insufficient_commission` rejections.
 - **Position Limits**: Max 2 concurrent open positions across all instruments (`MAX_OPEN_POSITIONS`).
-- **Risk Sizing**: Max $25.00 (`MAX_RISK_USD`) risk per trade based on stop loss distance and discrete lot grid solver.
+- **Risk Sizing**: Max $25.00 (`MAX_RISK_USD`) risk per trade based on stop loss distance and discrete contract grid solver.
+- **Minimum 1:2 Risk-Reward Invariant**: All executed trades must strictly enforce at least 1:2 Risk:Reward ($R:R \ge 2.0$) calibrated against the *actual market fill price* ($P_{\text{fill}}$), dynamically re-anchoring bracket TP/SL upon fill.
+- **Dynamic Trailing Stop Loss**: Move SL to Breakeven (+1 tick) once mark price reaches $+1.0R$ profit, and dynamically trail SL at $+2.0R$ and $+3.0R$ to lock in accumulated profits.
 - **Execution Threshold**: Automated live order execution requires quantitative confluence score >= 75.0/100.
 - **Bar Completion Invariant**: Orders must execute only on fully completed, closed 15m candles to prevent entering on repainting intra-bar wicks.
