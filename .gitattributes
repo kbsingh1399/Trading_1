@@ -1,0 +1,4 @@
+# Audit evidence and unified-diff artifacts intentionally preserve source/test-output
+# whitespace (including CRCRLF preimages) so the documented patches remain exact.
+docs/audits/**/patches/*.patch whitespace=-trailing-space,-blank-at-eof,-cr-at-eol
+docs/audits/**/evidence/*.txt whitespace=-trailing-space,-blank-at-eof,-cr-at-eol

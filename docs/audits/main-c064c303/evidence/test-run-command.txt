@@ -1,0 +1,17 @@
+Patched compile:
+  ../venv/bin/python -m compileall -q .
+  exit 0
+
+Patched collectible offline suite:
+  ../venv/bin/python -m pytest -q --disable-socket --allow-unix-socket -p no:cacheprovider \
+    --ignore=Terminal/test_ingestion_recovery.py \
+    --ignore=Terminal/test_tv_liquidation_collector.py \
+    --ignore=Terminal/test_liquidation_map_pipeline.py
+  55 passed, 2 warnings, exit 0
+
+Patched full offline suite:
+  ../venv/bin/python -m pytest -q --disable-socket --allow-unix-socket -p no:cacheprovider
+  exit 2: three pre-existing collection failures for missing modules:
+  Terminal.coinalyze_rest_collector,
+  Terminal.liquidation_map_collector,
+  Terminal.coinglass_tv_liquidation_collector.

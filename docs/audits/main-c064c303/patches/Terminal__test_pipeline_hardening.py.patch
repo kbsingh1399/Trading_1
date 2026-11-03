@@ -1,0 +1,14 @@
+--- a/Terminal/test_pipeline_hardening.py
++++ b/Terminal/test_pipeline_hardening.py
+@@ -174,8 +174,10 @@
+     evaluator._persist_alert = Mock()
+     evaluator._broker_sizing = lambda *args: {'lots': .01, 'risk_usd': 5, 'cap_usd': 10}
+     from datetime import datetime, timezone
++    closed_open_ms = (int(time.time() * 1000) - 1_800_000) // 900_000 * 900_000
+     result = evaluator.evaluate_signal({'symbol': 'BTC', 'mt5_symbol': 'BTCUSD',
+         'sig_name': 'Liquidation Exhaustion', 'sig_code': 'LIQ_REV_SPIKE', 'side': side,
+-        'price': 100, 'datetime_utc': datetime.now(timezone.utc).isoformat()})
++        'price': 100, 'time_ms': closed_open_ms, 'close_time_ms': closed_open_ms + 900_000,
++        'datetime_utc': datetime.now(timezone.utc).isoformat()})
+     assert result['direction'] == expected
+     assert result['is_actionable'] is True

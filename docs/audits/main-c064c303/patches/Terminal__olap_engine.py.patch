@@ -1,0 +1,94 @@
+--- a/Terminal/olap_engine.py
++++ b/Terminal/olap_engine.py
+@@ -15,6 +15,7 @@
+ import logging
+ import re
+ from Terminal.runtime_io import completed_candles
++from Terminal.collector_lock import calculate_wall_decay_weight
+ from pathlib import Path
+ from typing import List, Dict, Optional, Any
+ from datetime import datetime, timezone
+@@ -77,16 +78,28 @@
+             if (frame.remaining_usd < 0).any():
+                 raise ValueError('Negative whale depth')
+             side = frame.side.str.lower()
++            # Apply the canonical 30-minute half-life decay to notional before
++            # aggregation. duration_seconds is order age at scrape time; add the
++            # age of the snapshot itself so stale books cannot dominate.
++            order_age = pd.to_numeric(
++                frame.get('duration_seconds', pd.Series(0.0, index=frame.index, dtype='float64')),
++                errors='coerce',
++            ).fillna(0.0).clip(lower=0.0)
++            frame['effective_age_seconds'] = order_age + max(0.0, age)
++            frame['effective_decay_weight'] = frame['effective_age_seconds'].map(calculate_wall_decay_weight)
++            frame['weighted_remaining_usd'] = frame['remaining_usd'] * frame['effective_decay_weight']
+             bids = frame[side.str.contains('bid')]
+             asks = frame[side.str.contains('ask')]
+-            bid = float(bids.loc[bids.from_price_pct.abs() <= 3, 'remaining_usd'].sum())
+-            ask = float(asks.loc[asks.from_price_pct.abs() <= 3, 'remaining_usd'].sum())
++            bid = float(bids.loc[bids.from_price_pct.abs() <= 3, 'weighted_remaining_usd'].sum())
++            ask = float(asks.loc[asks.from_price_pct.abs() <= 3, 'weighted_remaining_usd'].sum())
+             if bid + ask <= 0:
+                 raise ValueError('No usable whale depth')
+             return {'data_valid': True, 'tight_bid_walls_usd': bid, 'tight_ask_walls_usd': ask,
+                     'whale_imbalance_bid_ratio': bid / (bid + ask),
+-                    'total_bids_usd': float(bids.remaining_usd.sum()), 'total_asks_usd': float(asks.remaining_usd.sum()),
+-                    'age_seconds': age}
++                    'total_bids_usd': float(bids.weighted_remaining_usd.sum()), 'total_asks_usd': float(asks.weighted_remaining_usd.sum()),
++                    'raw_tight_bid_walls_usd': float(bids.loc[bids.from_price_pct.abs() <= 3, 'remaining_usd'].sum()),
++                    'raw_tight_ask_walls_usd': float(asks.loc[asks.from_price_pct.abs() <= 3, 'remaining_usd'].sum()),
++                    'age_seconds': age, 'decay_tau_seconds': 1800.0 / np.log(2)}
+         except Exception as exc:
+             return {'data_valid': False, 'error': str(exc), 'whale_imbalance_bid_ratio': 0.5}
+ 
+@@ -155,6 +168,8 @@
+             sb_path = STRENGTH_BANDS_DIR / f'{symbol}_strength_by_distance.parquet'
+             if sb_path.exists():
+                 sb_df = self._latest_snapshot(pd.read_parquet(sb_path))
++                if 'net_delta' not in sb_df.columns and {'shorts_strength', 'longs_strength'}.issubset(sb_df.columns):
++                    sb_df['net_delta'] = pd.to_numeric(sb_df['shorts_strength'], errors='coerce').fillna(0.0) - pd.to_numeric(sb_df['longs_strength'], errors='coerce').fillna(0.0)
+                 result['strength_by_distance'] = sb_df.to_dict(orient='records')
+ 
+             # 4. Leverage tiers
+@@ -180,9 +195,11 @@
+                     sym_snaps = snap_df[snap_df['symbol'] == symbol]
+                     if not sym_snaps.empty:
+                         last_snap = sym_snaps.iloc[-1]
++                        clld_delta = last_snap.get('clld_delta', last_snap.get('clld_net_usd', 0.0))
++                        clld_turn = last_snap.get('clld_sentiment_turn', last_snap.get('clld_sentiment', ''))
+                         result['clld'] = {
+-                            'delta': float(last_snap.get('clld_delta', 0.0) or 0.0),
+-                            'sentiment_turn': str(last_snap.get('clld_sentiment_turn', '') or ''),
++                            'delta': float(clld_delta or 0.0),
++                            'sentiment_turn': str(clld_turn or ''),
+                             'turn_time': str(last_snap.get('clld_turn_time', '') or '')
+                         }
+ 
+@@ -305,6 +322,19 @@
+             liq = self.query_liquidation_confluence(sym)
+             cvd = self.query_cvd_trend(sym)
+ 
++            if not all(feed.get('data_valid') is True for feed in (whale, liq, cvd)):
++                results.append({
++                    'symbol': sym, 'confluence_score': 50.0, 'bias': 'NEUTRAL',
++                    'data_valid': False,
++                    'reasons': ['Invalid or stale input feed; confluence suppressed'],
++                    'errors': {name: feed.get('error') for name, feed in (('whale', whale), ('liquidation', liq), ('cvd', cvd)) if feed.get('data_valid') is not True},
++                    'whale_imbalance': whale.get('whale_imbalance_bid_ratio', 0.5),
++                    'cvd_slope': cvd.get('cvd_slope', 'NEUTRAL'),
++                    'near_field_shorts_pct': liq.get('near_field_shorts_pct', 50.0),
++                    'poc_price': cvd.get('recent_poc')
++                })
++                continue
++
+             # Synthesize Confluence Score (0 to 100)
+             score = 50.0
+             reasons = []
+@@ -348,6 +378,7 @@
+                 "symbol": sym,
+                 "confluence_score": round(score, 1),
+                 "bias": bias,
++                "data_valid": True,
+                 "reasons": reasons,
+                 "whale_imbalance": imbalance,
+                 "cvd_slope": cvd_type,

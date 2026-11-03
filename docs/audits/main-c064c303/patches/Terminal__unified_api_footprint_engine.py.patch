@@ -1,0 +1,183 @@
+--- a/Terminal/unified_api_footprint_engine.py
++++ b/Terminal/unified_api_footprint_engine.py
+@@ -135,7 +135,8 @@
+ 
+         self._load_known_signals()
+         self._init_evaluator()
+-        self._init_mt5()
++        if not self.crypto_only:
++            self._init_mt5()
+ 
+     def _init_evaluator(self):
+         try:
+@@ -236,16 +237,22 @@
+         URL: https://fapi.binance.com/fapi/v1/klines?symbol=<SYM>USDT&interval=15m&limit=300
+         """
+         api_symbol = f"{symbol}USDT"
+-        url = f"https://fapi.binance.com/fapi/v1/klines?symbol={api_symbol}&interval=15m&limit={self.rolling_window}"
++        # Request one extra bar so the forming bar can be dropped while still
++        # retaining up to rolling_window completed candles.
++        url = f"https://fapi.binance.com/fapi/v1/klines?symbol={api_symbol}&interval=15m&limit={self.rolling_window + 1}"
+         try:
+             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+             with urllib.request.urlopen(req, timeout=5) as resp:
+                 raw_data = json.loads(resp.read().decode("utf-8"))
+ 
+             bars = []
++            now_ms = int(time.time() * 1000)
+             for k in raw_data:
+                 open_t_ms = int(k[0])
+-                close_t_ms = int(k[6])
++                exchange_close_ms = int(k[6])
++                close_t_ms = open_t_ms + 900000
++                if close_t_ms > now_ms:
++                    continue
+                 o = float(k[1])
+                 h = float(k[2])
+                 l = float(k[3])
+@@ -259,6 +266,7 @@
+                 bars.append({
+                     "open_time_ms": open_t_ms,
+                     "close_time_ms": close_t_ms,
++                    "exchange_close_time_ms": exchange_close_ms,
+                     "open": o,
+                     "high": h,
+                     "low": l,
+@@ -292,17 +300,20 @@
+             import MetaTrader5 as mt5
+             # Select symbol in Market Watch if not already active
+             mt5.symbol_select(mt5_sym, True)
+-            rates = mt5.copy_rates_from_pos(mt5_sym, mt5.TIMEFRAME_M15, 0, self.rolling_window)
++            rates = mt5.copy_rates_from_pos(mt5_sym, mt5.TIMEFRAME_M15, 0, self.rolling_window + 1)
+             if rates is None or len(rates) == 0:
+                 return None
+ 
+             bars = []
++            now_ms = int(time.time() * 1000)
+             for r in rates:
+                 # Convert MT5 server epoch to true UTC epoch ms
+                 server_epoch_s = int(r["time"])
+                 utc_epoch_s = server_epoch_s - self._mt5_server_offset_sec
+                 open_t_ms = utc_epoch_s * 1000
+                 close_t_ms = open_t_ms + 900000
++                if close_t_ms > now_ms:
++                    continue
+ 
+                 o = float(r["open"])
+                 h = float(r["high"])
+@@ -348,10 +359,10 @@
+         except Exception as e:
+             logger.error(f"Failed atomic parquet save for {symbol}: {e}")
+ 
+-    def append_signals(self, new_signals: List[Dict[str, Any]]):
+-        """Atomically appends new footprint signals to coinglass_aggregated_futures_signals.parquet."""
++    def append_signals(self, new_signals: List[Dict[str, Any]]) -> bool:
++        """Atomically appends new footprint signals; returns persistence success."""
+         if not new_signals:
+-            return
++            return True
+ 
+         with writer_lock(SIGNALS_PARQUET):
+             try:
+@@ -369,8 +380,11 @@
+ 
+                 atomic_parquet(combined_df, SIGNALS_PARQUET)
+                 logger.info(f"Appended {len(new_signals)} new footprint signals to {SIGNALS_PARQUET.name} (Total: {len(combined_df)})")
++                return True
+             except Exception as e:
+                 logger.error(f"Failed to append footprint signals: {e}")
++                return False
++        return False
+ 
+     # -------------------------------------------------------------------------
+     # Single Asset Processing Loop
+@@ -394,7 +408,7 @@
+             bars = self.fetch_mt5_bars(fetch_sym, asset_class)
+ 
+         if not bars or len(bars) < 10:
+-            return []
++            return None
+ 
+         # Run Universal Footprint Engine
+         rolling_df, recent_sigs = self.engine.analyze_bars(
+@@ -419,7 +433,6 @@
+                 continue
+             key = (str(s["symbol"]), str(s.get("sig_code", "")), int(s.get("time_ms", 0)))
+             if key not in self.known_signal_keys:
+-                self.known_signal_keys[key] = int(s.get("time_ms", now_ms))  # TTL keyed by candle time_ms
+                 fresh_signals.append(s)
+ 
+         return fresh_signals
+@@ -431,6 +444,7 @@
+         """
+         Executes a single, lightning-fast sweep across Crypto (or all asset classes).
+         """
++        acquire_singleton("unified_footprint_engine", DB_DIR / ".locks")
+         use_crypto_only = self.crypto_only if crypto_only is None else crypto_only
+         t0 = time.time()
+         all_new_signals: List[Dict[str, Any]] = []
+@@ -453,9 +467,10 @@
+                 sym = crypto_futures[fut]
+                 try:
+                     sigs = fut.result()
+-                    if sigs:
+-                        all_new_signals.extend(sigs)
+-                    processed_count += 1
++                    if sigs is not None:
++                        processed_count += 1
++                        if sigs:
++                            all_new_signals.extend(sigs)
+                 except Exception as e:
+                     logger.debug(f"Error processing crypto {sym}: {e}")
+ 
+@@ -474,9 +489,10 @@
+             for sym, asset_cls, aliases in METALS_COMMODITIES:
+                 try:
+                     sigs = self.process_asset(sym, asset_cls, sym, aliases)
+-                    if sigs:
+-                        all_new_signals.extend(sigs)
+-                    processed_count += 1
++                    if sigs is not None:
++                        processed_count += 1
++                        if sigs:
++                            all_new_signals.extend(sigs)
+                 except Exception as e:
+                     logger.debug(f"Error processing {sym}: {e}")
+ 
+@@ -484,9 +500,10 @@
+             for sym, asset_cls, aliases in INDICES:
+                 try:
+                     sigs = self.process_asset(sym, asset_cls, sym, aliases)
+-                    if sigs:
+-                        all_new_signals.extend(sigs)
+-                    processed_count += 1
++                    if sigs is not None:
++                        processed_count += 1
++                        if sigs:
++                            all_new_signals.extend(sigs)
+                 except Exception as e:
+                     logger.debug(f"Error processing index {sym}: {e}")
+ 
+@@ -496,12 +513,19 @@
+             f"New signals triggered: {len(all_new_signals)}"
+         )
+ 
+-        # Append new signals to global parquet
++        # Append new signals to global parquet. Only mark dedupe keys after the
++        # durable write succeeds; otherwise a failed write permanently loses them.
+         if all_new_signals:
+-            self.append_signals(all_new_signals)
++            persisted = self.append_signals(all_new_signals)
++            if not persisted:
++                logger.error("Signal persistence failed; dedupe keys not advanced.")
++            else:
++                for s in all_new_signals:
++                    key = (str(s["symbol"]), str(s.get("sig_code", "")), int(s.get("time_ms", 0)))
++                    self.known_signal_keys[key] = int(s.get("time_ms", 0))
+ 
+             # Evaluate through RealtimeSignalEvaluator for high-confluence execution
+-            if self.evaluator:
++            if persisted and self.evaluator:
+                 try:
+                     logger.info(f"Evaluating {len(all_new_signals)} fresh signals for MatchTrader / MT5 order execution...")
+                     self.evaluator.evaluate_new_signals(all_new_signals)
