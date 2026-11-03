@@ -1,0 +1,31 @@
+vector_dir= /home/user/Trading_2/.audit/followup/target/Database/Vector_Memory
+losing_trades_postmortem_exists= False
+counterfactual_setups: rows=21
+vector: fixed_size_list<item: float>[384]
+  child 0, item: float
+alert_id: string
+symbol: string
+direction: string
+rejection_reason: string
+setup_text: string
+entry_price: float
+stop_loss: float
+take_profit: float
+confluence_score: float
+counterfactual_outcome: string
+counterfactual_r: float
+timestamp: string
+trade_setups: rows=3
+vector: fixed_size_list<item: float>[384]
+  child 0, item: float
+ticket_id: string
+symbol: string
+strategy: string
+setup_text: string
+direction: string
+confluence_score: float
+whale_imbalance: float
+outcome: string
+pnl_usd: float
+risk_usd: float
+timestamp: string

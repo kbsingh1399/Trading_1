@@ -1,0 +1,8 @@
+...........                                                              [100%]
+=============================== warnings summary ===============================
+.audit/followup/target/Terminal/test_audit_regressions_c064c303.py::test_evaluator_imports_and_no_storage_side_effect_dispatch
+  /home/user/Trading_2/.audit/followup/venv/lib/python3.11/site-packages/pytest_socket/__init__.py:138: UserWarning: A test tried to use socket.socket.
+    raise SocketBlockedError()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+11 passed, 1 warning in 1.47s

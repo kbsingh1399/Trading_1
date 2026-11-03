@@ -1,0 +1,24 @@
+Target archive: main@7798a540465b64298193c67eecb9479b4a7da574
+Safety: external TCP sockets disabled; Unix test-harness sockets allowed.
+
+Compile:
+  ../venv/bin/python -m compileall Terminal 1_coinglass_footprint_scraper.py 4_coinglass_tv_scraper.py 5_wake_on_footprint_signal.py
+  exit 0
+
+Collect:
+  ../venv/bin/python -m pytest Terminal/ --collect-only -q --disable-socket --allow-unix-socket -p no:cacheprovider \
+    --ignore=Terminal/test_ingestion_recovery.py \
+    --ignore=Terminal/test_liquidation_map_pipeline.py \
+    --ignore=Terminal/test_tv_liquidation_collector.py
+  70 tests collected; exit 0
+
+Collectible test run:
+  ../venv/bin/python -m pytest Terminal/ -q --disable-socket --allow-unix-socket -p no:cacheprovider \
+    --ignore=Terminal/test_ingestion_recovery.py \
+    --ignore=Terminal/test_liquidation_map_pipeline.py \
+    --ignore=Terminal/test_tv_liquidation_collector.py
+  64 passed, 1 failed, 5 errors; exit 1
+
+Targeted prior-audit regression + SSOT:
+  ../venv/bin/python -m pytest -q Terminal/test_single_source_of_truth.py Terminal/test_audit_regressions_c064c303.py --disable-socket --allow-unix-socket -p no:cacheprovider
+  11 passed; exit 0

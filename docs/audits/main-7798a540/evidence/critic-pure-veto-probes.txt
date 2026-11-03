@@ -1,0 +1,3 @@
+knife {'veto': True, 'reason': 'VETO_FALLING_KNIFE: Price ($60000.0000) is below EMA233 ($65000.0000) with 4H BEARISH bias, negative CVD slope (-0.50), and zero footprint absorption. Catching falling knife blocked.', 'khi': 95.0, 'shi': None}
+squeeze {'veto': True, 'reason': 'VETO_PARABOLIC_SQUEEZE: Price ($3500.0000) is above EMA233 ($3000.0000) with 4H BULLISH bias, positive CVD slope (+0.50), and zero footprint absorption. Shorting parabolic squeeze blocked.', 'khi': None, 'shi': 95.0}
+clean {'veto': False, 'reason': 'CLEARED_MICROSTRUCTURE_DEFENSE', 'khi': 0.0, 'shi': None}

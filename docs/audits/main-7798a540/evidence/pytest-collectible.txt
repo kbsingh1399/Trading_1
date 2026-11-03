@@ -1,0 +1,433 @@
+.......................F...................................EEEEE......   [100%]
+==================================== ERRORS ====================================
+________________ ERROR at setup of test_knife_hazard_index_veto ________________
+
+    @pytest.fixture(scope="module")
+    def critic():
+>       return TradeCriticEngine()
+               ^^^^^^^^^^^^^^^^^^^
+
+Terminal/test_trade_critic_lifecycle.py:23: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+Terminal/trade_critic_engine.py:154: in __init__
+    self._init_embedder()
+Terminal/trade_critic_engine.py:161: in _init_embedder
+    TradeCriticEngine._embedder = TextEmbedding(model_name=MODEL_NAME)
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/fastembed/text/text_embedding.py:135: in __init__
+    self.model = EMBEDDING_MODEL_TYPE(
+../venv/lib/python3.11/site-packages/fastembed/text/onnx_embedding.py:274: in __init__
+    self._model_dir = self.download_model(
+../venv/lib/python3.11/site-packages/fastembed/common/model_management.py:703: in download_model
+    cls.download_files_from_huggingface(
+../venv/lib/python3.11/site-packages/fastembed/common/model_management.py:385: in download_files_from_huggingface
+    repo_revision = model_info(hf_source_repo, timeout=constants.HF_HUB_ETAG_TIMEOUT).sha
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/huggingface_hub/utils/_validators.py:89: in _inner_fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/huggingface_hub/hf_api.py:3322: in model_info
+    r = get_session().get(path, headers=headers, timeout=timeout, params=params)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpx/_client.py:1053: in get
+    return self.request(
+../venv/lib/python3.11/site-packages/httpx/_client.py:825: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpx/_client.py:914: in send
+    response = self._send_handling_auth(
+../venv/lib/python3.11/site-packages/httpx/_client.py:942: in _send_handling_auth
+    response = self._send_handling_redirects(
+../venv/lib/python3.11/site-packages/httpx/_client.py:979: in _send_handling_redirects
+    response = self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpx/_client.py:1014: in _send_single_request
+    response = transport.handle_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpx/_transports/default.py:250: in handle_request
+    resp = self._pool.handle_request(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpcore/_sync/connection_pool.py:256: in handle_request
+    raise exc from None
+../venv/lib/python3.11/site-packages/httpcore/_sync/connection_pool.py:236: in handle_request
+    response = connection.handle_request(
+../venv/lib/python3.11/site-packages/httpcore/_sync/connection.py:101: in handle_request
+    raise exc
+../venv/lib/python3.11/site-packages/httpcore/_sync/connection.py:78: in handle_request
+    stream = self._connect(request)
+             ^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpcore/_sync/connection.py:124: in _connect
+    stream = self._network_backend.connect_tcp(**kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpcore/_backends/sync.py:208: in connect_tcp
+    sock = socket.create_connection(
+/usr/lib/python3.11/socket.py:827: in create_connection
+    for res in getaddrinfo(host, port, 0, SOCK_STREAM):
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+_args = ('huggingface.co', 443, 0, <SocketKind.SOCK_STREAM: 1>), _kwargs = {}
+
+    def _guarded_getaddrinfo(*_args: Any, **_kwargs: Any) -> Any:
+>       raise SocketBlockedError("A test tried to use socket.getaddrinfo.")
+E       pytest_socket.SocketBlockedError: A test tried to use socket.getaddrinfo.
+
+../venv/lib/python3.11/site-packages/pytest_socket/__init__.py:115: SocketBlockedError
+---------------------------- Captured stdout setup -----------------------------
+2026-11-03 17:50:18 [INFO] [CriticEngine] Initializing FastEmbed model for Trade Critic: BAAI/bge-small-en-v1.5
+------------------------------ Captured log setup ------------------------------
+INFO     TradeCriticEngine:trade_critic_engine.py:160 Initializing FastEmbed model for Trade Critic: BAAI/bge-small-en-v1.5
+___________________ ERROR at setup of test_low_rr_chop_veto ____________________
+
+    @pytest.fixture(scope="module")
+    def critic():
+>       return TradeCriticEngine()
+               ^^^^^^^^^^^^^^^^^^^
+
+Terminal/test_trade_critic_lifecycle.py:23: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+Terminal/trade_critic_engine.py:154: in __init__
+    self._init_embedder()
+Terminal/trade_critic_engine.py:161: in _init_embedder
+    TradeCriticEngine._embedder = TextEmbedding(model_name=MODEL_NAME)
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/fastembed/text/text_embedding.py:135: in __init__
+    self.model = EMBEDDING_MODEL_TYPE(
+../venv/lib/python3.11/site-packages/fastembed/text/onnx_embedding.py:274: in __init__
+    self._model_dir = self.download_model(
+../venv/lib/python3.11/site-packages/fastembed/common/model_management.py:703: in download_model
+    cls.download_files_from_huggingface(
+../venv/lib/python3.11/site-packages/fastembed/common/model_management.py:385: in download_files_from_huggingface
+    repo_revision = model_info(hf_source_repo, timeout=constants.HF_HUB_ETAG_TIMEOUT).sha
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/huggingface_hub/utils/_validators.py:89: in _inner_fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/huggingface_hub/hf_api.py:3322: in model_info
+    r = get_session().get(path, headers=headers, timeout=timeout, params=params)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpx/_client.py:1053: in get
+    return self.request(
+../venv/lib/python3.11/site-packages/httpx/_client.py:825: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpx/_client.py:914: in send
+    response = self._send_handling_auth(
+../venv/lib/python3.11/site-packages/httpx/_client.py:942: in _send_handling_auth
+    response = self._send_handling_redirects(
+../venv/lib/python3.11/site-packages/httpx/_client.py:979: in _send_handling_redirects
+    response = self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpx/_client.py:1014: in _send_single_request
+    response = transport.handle_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpx/_transports/default.py:250: in handle_request
+    resp = self._pool.handle_request(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpcore/_sync/connection_pool.py:256: in handle_request
+    raise exc from None
+../venv/lib/python3.11/site-packages/httpcore/_sync/connection_pool.py:236: in handle_request
+    response = connection.handle_request(
+../venv/lib/python3.11/site-packages/httpcore/_sync/connection.py:101: in handle_request
+    raise exc
+../venv/lib/python3.11/site-packages/httpcore/_sync/connection.py:78: in handle_request
+    stream = self._connect(request)
+             ^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpcore/_sync/connection.py:124: in _connect
+    stream = self._network_backend.connect_tcp(**kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpcore/_backends/sync.py:208: in connect_tcp
+    sock = socket.create_connection(
+/usr/lib/python3.11/socket.py:827: in create_connection
+    for res in getaddrinfo(host, port, 0, SOCK_STREAM):
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+_args = ('huggingface.co', 443, 0, <SocketKind.SOCK_STREAM: 1>), _kwargs = {}
+
+    def _guarded_getaddrinfo(*_args: Any, **_kwargs: Any) -> Any:
+>       raise SocketBlockedError("A test tried to use socket.getaddrinfo.")
+E       pytest_socket.SocketBlockedError: A test tried to use socket.getaddrinfo.
+
+../venv/lib/python3.11/site-packages/pytest_socket/__init__.py:115: SocketBlockedError
+___________ ERROR at setup of test_clean_setup_clears_knife_defense ____________
+
+    @pytest.fixture(scope="module")
+    def critic():
+>       return TradeCriticEngine()
+               ^^^^^^^^^^^^^^^^^^^
+
+Terminal/test_trade_critic_lifecycle.py:23: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+Terminal/trade_critic_engine.py:154: in __init__
+    self._init_embedder()
+Terminal/trade_critic_engine.py:161: in _init_embedder
+    TradeCriticEngine._embedder = TextEmbedding(model_name=MODEL_NAME)
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/fastembed/text/text_embedding.py:135: in __init__
+    self.model = EMBEDDING_MODEL_TYPE(
+../venv/lib/python3.11/site-packages/fastembed/text/onnx_embedding.py:274: in __init__
+    self._model_dir = self.download_model(
+../venv/lib/python3.11/site-packages/fastembed/common/model_management.py:703: in download_model
+    cls.download_files_from_huggingface(
+../venv/lib/python3.11/site-packages/fastembed/common/model_management.py:385: in download_files_from_huggingface
+    repo_revision = model_info(hf_source_repo, timeout=constants.HF_HUB_ETAG_TIMEOUT).sha
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/huggingface_hub/utils/_validators.py:89: in _inner_fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/huggingface_hub/hf_api.py:3322: in model_info
+    r = get_session().get(path, headers=headers, timeout=timeout, params=params)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpx/_client.py:1053: in get
+    return self.request(
+../venv/lib/python3.11/site-packages/httpx/_client.py:825: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpx/_client.py:914: in send
+    response = self._send_handling_auth(
+../venv/lib/python3.11/site-packages/httpx/_client.py:942: in _send_handling_auth
+    response = self._send_handling_redirects(
+../venv/lib/python3.11/site-packages/httpx/_client.py:979: in _send_handling_redirects
+    response = self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpx/_client.py:1014: in _send_single_request
+    response = transport.handle_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpx/_transports/default.py:250: in handle_request
+    resp = self._pool.handle_request(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpcore/_sync/connection_pool.py:256: in handle_request
+    raise exc from None
+../venv/lib/python3.11/site-packages/httpcore/_sync/connection_pool.py:236: in handle_request
+    response = connection.handle_request(
+../venv/lib/python3.11/site-packages/httpcore/_sync/connection.py:101: in handle_request
+    raise exc
+../venv/lib/python3.11/site-packages/httpcore/_sync/connection.py:78: in handle_request
+    stream = self._connect(request)
+             ^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpcore/_sync/connection.py:124: in _connect
+    stream = self._network_backend.connect_tcp(**kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpcore/_backends/sync.py:208: in connect_tcp
+    sock = socket.create_connection(
+/usr/lib/python3.11/socket.py:827: in create_connection
+    for res in getaddrinfo(host, port, 0, SOCK_STREAM):
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+_args = ('huggingface.co', 443, 0, <SocketKind.SOCK_STREAM: 1>), _kwargs = {}
+
+    def _guarded_getaddrinfo(*_args: Any, **_kwargs: Any) -> Any:
+>       raise SocketBlockedError("A test tried to use socket.getaddrinfo.")
+E       pytest_socket.SocketBlockedError: A test tried to use socket.getaddrinfo.
+
+../venv/lib/python3.11/site-packages/pytest_socket/__init__.py:115: SocketBlockedError
+__________ ERROR at setup of test_post_mortem_learning_and_retention ___________
+
+    @pytest.fixture(scope="module")
+    def critic():
+>       return TradeCriticEngine()
+               ^^^^^^^^^^^^^^^^^^^
+
+Terminal/test_trade_critic_lifecycle.py:23: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+Terminal/trade_critic_engine.py:154: in __init__
+    self._init_embedder()
+Terminal/trade_critic_engine.py:161: in _init_embedder
+    TradeCriticEngine._embedder = TextEmbedding(model_name=MODEL_NAME)
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/fastembed/text/text_embedding.py:135: in __init__
+    self.model = EMBEDDING_MODEL_TYPE(
+../venv/lib/python3.11/site-packages/fastembed/text/onnx_embedding.py:274: in __init__
+    self._model_dir = self.download_model(
+../venv/lib/python3.11/site-packages/fastembed/common/model_management.py:703: in download_model
+    cls.download_files_from_huggingface(
+../venv/lib/python3.11/site-packages/fastembed/common/model_management.py:385: in download_files_from_huggingface
+    repo_revision = model_info(hf_source_repo, timeout=constants.HF_HUB_ETAG_TIMEOUT).sha
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/huggingface_hub/utils/_validators.py:89: in _inner_fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/huggingface_hub/hf_api.py:3322: in model_info
+    r = get_session().get(path, headers=headers, timeout=timeout, params=params)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpx/_client.py:1053: in get
+    return self.request(
+../venv/lib/python3.11/site-packages/httpx/_client.py:825: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpx/_client.py:914: in send
+    response = self._send_handling_auth(
+../venv/lib/python3.11/site-packages/httpx/_client.py:942: in _send_handling_auth
+    response = self._send_handling_redirects(
+../venv/lib/python3.11/site-packages/httpx/_client.py:979: in _send_handling_redirects
+    response = self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpx/_client.py:1014: in _send_single_request
+    response = transport.handle_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpx/_transports/default.py:250: in handle_request
+    resp = self._pool.handle_request(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpcore/_sync/connection_pool.py:256: in handle_request
+    raise exc from None
+../venv/lib/python3.11/site-packages/httpcore/_sync/connection_pool.py:236: in handle_request
+    response = connection.handle_request(
+../venv/lib/python3.11/site-packages/httpcore/_sync/connection.py:101: in handle_request
+    raise exc
+../venv/lib/python3.11/site-packages/httpcore/_sync/connection.py:78: in handle_request
+    stream = self._connect(request)
+             ^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpcore/_sync/connection.py:124: in _connect
+    stream = self._network_backend.connect_tcp(**kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpcore/_backends/sync.py:208: in connect_tcp
+    sock = socket.create_connection(
+/usr/lib/python3.11/socket.py:827: in create_connection
+    for res in getaddrinfo(host, port, 0, SOCK_STREAM):
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+_args = ('huggingface.co', 443, 0, <SocketKind.SOCK_STREAM: 1>), _kwargs = {}
+
+    def _guarded_getaddrinfo(*_args: Any, **_kwargs: Any) -> Any:
+>       raise SocketBlockedError("A test tried to use socket.getaddrinfo.")
+E       pytest_socket.SocketBlockedError: A test tried to use socket.getaddrinfo.
+
+../venv/lib/python3.11/site-packages/pytest_socket/__init__.py:115: SocketBlockedError
+________________ ERROR at setup of test_critic_learning_summary ________________
+
+    @pytest.fixture(scope="module")
+    def critic():
+>       return TradeCriticEngine()
+               ^^^^^^^^^^^^^^^^^^^
+
+Terminal/test_trade_critic_lifecycle.py:23: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+Terminal/trade_critic_engine.py:154: in __init__
+    self._init_embedder()
+Terminal/trade_critic_engine.py:161: in _init_embedder
+    TradeCriticEngine._embedder = TextEmbedding(model_name=MODEL_NAME)
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/fastembed/text/text_embedding.py:135: in __init__
+    self.model = EMBEDDING_MODEL_TYPE(
+../venv/lib/python3.11/site-packages/fastembed/text/onnx_embedding.py:274: in __init__
+    self._model_dir = self.download_model(
+../venv/lib/python3.11/site-packages/fastembed/common/model_management.py:703: in download_model
+    cls.download_files_from_huggingface(
+../venv/lib/python3.11/site-packages/fastembed/common/model_management.py:385: in download_files_from_huggingface
+    repo_revision = model_info(hf_source_repo, timeout=constants.HF_HUB_ETAG_TIMEOUT).sha
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/huggingface_hub/utils/_validators.py:89: in _inner_fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/huggingface_hub/hf_api.py:3322: in model_info
+    r = get_session().get(path, headers=headers, timeout=timeout, params=params)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpx/_client.py:1053: in get
+    return self.request(
+../venv/lib/python3.11/site-packages/httpx/_client.py:825: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpx/_client.py:914: in send
+    response = self._send_handling_auth(
+../venv/lib/python3.11/site-packages/httpx/_client.py:942: in _send_handling_auth
+    response = self._send_handling_redirects(
+../venv/lib/python3.11/site-packages/httpx/_client.py:979: in _send_handling_redirects
+    response = self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpx/_client.py:1014: in _send_single_request
+    response = transport.handle_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpx/_transports/default.py:250: in handle_request
+    resp = self._pool.handle_request(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpcore/_sync/connection_pool.py:256: in handle_request
+    raise exc from None
+../venv/lib/python3.11/site-packages/httpcore/_sync/connection_pool.py:236: in handle_request
+    response = connection.handle_request(
+../venv/lib/python3.11/site-packages/httpcore/_sync/connection.py:101: in handle_request
+    raise exc
+../venv/lib/python3.11/site-packages/httpcore/_sync/connection.py:78: in handle_request
+    stream = self._connect(request)
+             ^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpcore/_sync/connection.py:124: in _connect
+    stream = self._network_backend.connect_tcp(**kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../venv/lib/python3.11/site-packages/httpcore/_backends/sync.py:208: in connect_tcp
+    sock = socket.create_connection(
+/usr/lib/python3.11/socket.py:827: in create_connection
+    for res in getaddrinfo(host, port, 0, SOCK_STREAM):
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+_args = ('huggingface.co', 443, 0, <SocketKind.SOCK_STREAM: 1>), _kwargs = {}
+
+    def _guarded_getaddrinfo(*_args: Any, **_kwargs: Any) -> Any:
+>       raise SocketBlockedError("A test tried to use socket.getaddrinfo.")
+E       pytest_socket.SocketBlockedError: A test tried to use socket.getaddrinfo.
+
+../venv/lib/python3.11/site-packages/pytest_socket/__init__.py:115: SocketBlockedError
+=================================== FAILURES ===================================
+_________ TestEmpiricalSignalLearner.test_learner_simulation_execution _________
+
+self = <Terminal.test_empirical_signal_learner.TestEmpiricalSignalLearner testMethod=test_learner_simulation_execution>
+
+    def test_learner_simulation_execution(self):
+        """Verify that simulation runs across BTC rolling window without exceptions."""
+>       results = self.learner.simulate_symbol_signals("BTC")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Terminal/test_empirical_signal_learner.py:21: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+Terminal/empirical_signal_learner.py:77: in simulate_symbol_signals
+    candles = completed_candles(candles_raw).sort_values("open_time_ms").reset_index(drop=True)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+frame =       open_time_ms  ...                     dumped_at_utc
+0    1793436300000  ...  2026-11-03T11:32:36.849548+00:00
+1 .....  2026-11-03T11:32:36.849548+00:00
+299  1793705400000  ...  2026-11-03T11:32:36.849548+00:00
+
+[300 rows x 33 columns]
+now_ms = 1793728218291.9363
+
+    def completed_candles(frame, now_ms=None):
+        import pandas as pd
+        import numpy as np
+        now_ms = time.time() * 1000 if now_ms is None else now_ms
+        if 'open_time_ms' not in frame or 'close_time_ms' not in frame:
+            raise ValueError('Candle timestamps unavailable')
+        frame = frame.copy()
+        for col in ['open_time_ms', 'close_time_ms']:
+            frame[col] = pd.to_numeric(frame[col], errors='raise')
+        frame = frame[(frame.close_time_ms <= now_ms) & (frame.close_time_ms > frame.open_time_ms)]
+        frame = frame.sort_values('open_time_ms').drop_duplicates('open_time_ms', keep='last')
+        if frame.empty or now_ms - frame.close_time_ms.iloc[-1] > 1800000:
+>           raise ValueError('Completed candle history stale or empty')
+E           ValueError: Completed candle history stale or empty
+
+Terminal/runtime_io.py:169: ValueError
+=============================== warnings summary ===============================
+.audit/followup/target/Terminal/test_collector_coordination.py::test_warp_rotation_cooldown_and_skips
+.audit/followup/target/Terminal/test_dual_models.py::TestDualModelsAndFibPrime::test_1_fib_prime_emas_complete_sequence
+.audit/followup/target/Terminal/test_dual_models.py::TestDualModelsAndFibPrime::test_2_fib_prime_pullback_proximity
+.audit/followup/target/Terminal/test_dual_models.py::TestDualModelsAndFibPrime::test_3_model_1_mean_reversion_target_extension
+.audit/followup/target/Terminal/test_dual_models.py::TestDualModelsAndFibPrime::test_4_model_2_trend_pullback_routing
+.audit/followup/target/Terminal/test_dual_models.py::TestDualModelsAndFibPrime::test_5_sol_divergence_non_mt5_informational_evaluation
+.audit/followup/target/Terminal/test_empirical_signal_learner.py::TestEmpiricalSignalLearner::test_evaluator_includes_empirical_edge
+.audit/followup/target/Terminal/test_trade_critic_lifecycle.py::test_knife_hazard_index_veto
+  /home/user/Trading_2/.audit/followup/venv/lib/python3.11/site-packages/pytest_socket/__init__.py:115: UserWarning: A test tried to use socket.getaddrinfo.
+    raise SocketBlockedError("A test tried to use socket.getaddrinfo.")
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED Terminal/test_empirical_signal_learner.py::TestEmpiricalSignalLearner::test_learner_simulation_execution
+ERROR Terminal/test_trade_critic_lifecycle.py::test_knife_hazard_index_veto
+ERROR Terminal/test_trade_critic_lifecycle.py::test_low_rr_chop_veto - pytest...
+ERROR Terminal/test_trade_critic_lifecycle.py::test_clean_setup_clears_knife_defense
+ERROR Terminal/test_trade_critic_lifecycle.py::test_post_mortem_learning_and_retention
+ERROR Terminal/test_trade_critic_lifecycle.py::test_critic_learning_summary
+1 failed, 64 passed, 8 warnings, 5 errors in 3.99s
