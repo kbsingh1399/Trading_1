@@ -290,11 +290,17 @@ def process_and_persist(base_sym: str, tv_sym: str, raw_rows: List[List], last_p
 
     # Primary IST Columns
     df["time_ms"] = (df["timestamp"] * 1000).astype("int64")
+    df["open_time_ms"] = df["time_ms"]
+    df["close_time_ms"] = df["time_ms"] + 900000
     df["open_time_ist"] = df["time_ms"].apply(utc_ms_to_ist_str)
-    df["close_time_ist"] = (df["time_ms"] + 900000).apply(utc_ms_to_ist_str)
+    df["close_time_ist"] = df["close_time_ms"].apply(utc_ms_to_ist_str)
     df["time_ist"] = df["open_time_ist"]
+    df["candle_ist"] = df["open_time_ist"]
     df["datetime_ist"] = df["open_time_ist"]
+    df["open_time_ist_ms"] = df["time_ms"] + 19800000
+    df["close_time_ist_ms"] = df["close_time_ms"] + 19800000
     df["datetime_utc"] = pd.to_datetime(df["timestamp"], unit="s", utc=True).dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    df["bar_closed"] = df["close_time_ms"] <= int(time.time() * 1000)
 
     df["symbol"] = base_sym
     df["coinglass_symbol"] = tv_sym
@@ -313,8 +319,11 @@ def process_and_persist(base_sym: str, tv_sym: str, raw_rows: List[List], last_p
 
     atomic_parquet(df, out_file)
 
-    latest = df.iloc[-1]
-    prev = df.iloc[-2] if len(df) > 1 else latest
+    closed_df = df[df["bar_closed"]]
+    if closed_df.empty:
+        return None
+    latest = closed_df.iloc[-1]
+    prev = closed_df.iloc[-2] if len(closed_df) > 1 else latest
     recent_spike = bool(latest["is_spike"] or prev["is_spike"])
     reversal_bias = latest["reversal_bias"] if latest["reversal_bias"] != "NEUTRAL" else prev["reversal_bias"]
 
@@ -340,7 +349,18 @@ def process_and_persist(base_sym: str, tv_sym: str, raw_rows: List[List], last_p
         "exhaustion_score": exhaustion_score,
         "spike_bar_time_utc": str(spike_bar["datetime_utc"]),
         "updated_at_utc": datetime.now(timezone.utc).isoformat(),
-        "updated_at_ist": utc_ms_to_ist_str(int(time.time() * 1000))
+        "updated_at_ist": utc_ms_to_ist_str(int(time.time() * 1000)),
+        "total_candles": int(len(df)),
+        "closed_candles": int(len(closed_df)),
+        "bar_closed": True,
+        "candle_open_ms": int(latest["time_ms"]),
+        "candle_close_ms": int(latest["close_time_ms"]),
+        "candle_ist": str(latest["candle_ist"]),
+        # Evaluator-facing aliases (previously read as missing/neutral).
+        "recent_spike": recent_spike,
+        "latest_total_liq_usd": float(latest["total_liq_usd"]),
+        "latest_long_liq_usd": float(latest["long_liq_usd"]),
+        "latest_short_liq_usd": float(latest["short_liq_usd"])
     }
 
 
@@ -348,7 +368,7 @@ async def run_sweep(symbols: Optional[Dict[str, str]] = None) -> bool:
     target_map = symbols or load_tv_symbols()
     acquire_singleton("coinglass_tv_scraper", DB_DIR / ".locks")
 
-    with BrowserLock("TVLiquidationScraper", timeout_secs=10.0) as lock:
+    with BrowserLock("TVLiquidationScraper", timeout_secs=15.0) as lock:
         if not lock.acquired:
             logger.info("Browser lock contention for TV sweep. Skipping.")
             return False
@@ -394,7 +414,7 @@ async def run_sweep(symbols: Optional[Dict[str, str]] = None) -> bool:
                     logger.info(f"🚨 Recorded {len(reversal_signals)} active liquidation reversal spikes!")
                 return True
         except Exception as e:
-            logger.error(f"WebSocket execution error: {e}")
+            logger.error(f"WebSocket execution error: {type(e).__name__}: {e}")
             return False
         finally:
             close_tab(tab_id)

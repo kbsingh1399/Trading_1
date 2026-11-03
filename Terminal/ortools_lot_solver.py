@@ -110,6 +110,8 @@ def solve_optimal_lot_ortools(
     
     k_var = solver.IntVar(0, k_max_bound, "lot_steps")
     enter_var = solver.BoolVar("enter_trade")
+    # Sizing query requires finding admissible execution lot if feasible (enter_trade == 1)
+    solver.Add(enter_var == 1)
 
     # Constraint A: If enter_trade == 1, k >= k_min_bound; else k == 0
     solver.Add(k_var >= k_min_bound * enter_var)

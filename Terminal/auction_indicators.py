@@ -433,24 +433,30 @@ def compute_auction_profile(symbol: str) -> Dict[str, Any]:
         today_df["dev_sq"] = ((today_df["tp"] - day_vwap) ** 2) * today_df["total_volume"]
         day_vwap_sd = float(np.sqrt(today_df["dev_sq"].sum() / total_vol))
 
-        # 2. 70% Value Area & Point of Control (POC)
+        # 2. 70% Value Area & Point of Control (POC) - Contiguous Expansion from POC
         bin_size = get_tick_bin_size(symbol, latest_close)
         today_df["price_bin"] = np.round(today_df["tp"] / bin_size) * bin_size
         vp = today_df.groupby("price_bin")["total_volume"].sum().sort_index()
         day_poc = float(vp.idxmax())
 
+        # Contiguous 70% value-area expansion from POC (standard CBOT/CME Market Profile)
         target_vol = total_vol * 0.70
-        sorted_vp = vp.sort_values(ascending=False)
-        cum_vol = 0.0
-        va_bins = []
-        for p_bin, vol in sorted_vp.items():
-            cum_vol += vol
-            va_bins.append(float(p_bin))
-            if cum_vol >= target_vol:
-                break
-
-        day_vah = float(max(va_bins))
-        day_val = float(min(va_bins))
+        prices = vp.index.to_list()
+        vols = vp.to_list()
+        poc_idx = int(np.argmax(vols))
+        lo_idx = hi_idx = poc_idx
+        cum_vol = float(vols[poc_idx])
+        while cum_vol < target_vol and (lo_idx > 0 or hi_idx < len(prices) - 1):
+            down_vol = float(vols[lo_idx - 1]) if lo_idx > 0 else -1.0
+            up_vol = float(vols[hi_idx + 1]) if hi_idx < len(prices) - 1 else -1.0
+            if up_vol >= down_vol:
+                hi_idx += 1
+                cum_vol += float(vols[hi_idx])
+            else:
+                lo_idx -= 1
+                cum_vol += float(vols[lo_idx])
+        day_vah = float(prices[hi_idx])
+        day_val = float(prices[lo_idx])
 
         if latest_close > day_vah:
             value_status = "ABOVE_VAH" # Premium

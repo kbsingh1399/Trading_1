@@ -109,6 +109,9 @@ def budget_per_trade(
     Returns:
         (allowed_budget_usd, is_admissible, reason)
     """
+    if not all(isinstance(x, (int, float)) and math.isfinite(x)
+               for x in (balance, equity, committed_stress_usd)) or committed_stress_usd < 0:
+        return 0.0, False, "INVALID_CAPITAL_STATE"
     base = min(balance, equity)
     buffer = base - HARD_FLOOR_USD
 
@@ -184,6 +187,8 @@ def admissible_volume(
         return None, "INVALID_VOLUME_INPUT", 0.0
     if min_lot <= 0 or max_lot < min_lot or floor_usd < 0 or cap_usd <= 0:
         return None, "INVALID_VOLUME_INPUT", 0.0
+    if cap_usd > MAX_RISK_USD:
+        return None, f"CAP_ABOVE_MANDATE: cap USD {cap_usd:.2f} > USD {MAX_RISK_USD:.2f}", 0.0
     loss, grid, minimum, maximum, floor, cap = map(lambda v: Decimal(str(v)), values)
     ceil = lambda v: int(v.to_integral_value(rounding=ROUND_CEILING))
     down = lambda v: int(v.to_integral_value(rounding=ROUND_FLOOR))

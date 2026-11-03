@@ -83,16 +83,28 @@ class OlapEngine:
             if (frame.remaining_usd < 0).any():
                 raise ValueError('Negative whale depth')
             side = frame.side.str.lower()
+            # Apply institutional 30-minute half-life decay to notional before aggregation
+            order_age = pd.to_numeric(
+                frame.get('duration_seconds', pd.Series(0.0, index=frame.index, dtype='float64')),
+                errors='coerce',
+            ).fillna(0.0).clip(lower=0.0)
+            frame['effective_age_seconds'] = order_age + max(0.0, age)
+            tau = 1800.0 / np.log(2)  # ~2596.84s (exact 30m half-life)
+            frame['effective_decay_weight'] = np.exp(-frame['effective_age_seconds'] / tau)
+            frame['weighted_remaining_usd'] = frame['remaining_usd'] * frame['effective_decay_weight']
+
             bids = frame[side.str.contains('bid')]
             asks = frame[side.str.contains('ask')]
-            bid = float(bids.loc[bids.from_price_pct.abs() <= 3, 'remaining_usd'].sum())
-            ask = float(asks.loc[asks.from_price_pct.abs() <= 3, 'remaining_usd'].sum())
+            bid = float(bids.loc[bids.from_price_pct.abs() <= 3, 'weighted_remaining_usd'].sum())
+            ask = float(asks.loc[asks.from_price_pct.abs() <= 3, 'weighted_remaining_usd'].sum())
             if bid + ask <= 0:
                 raise ValueError('No usable whale depth')
             return {'data_valid': True, 'tight_bid_walls_usd': bid, 'tight_ask_walls_usd': ask,
                     'whale_imbalance_bid_ratio': bid / (bid + ask),
-                    'total_bids_usd': float(bids.remaining_usd.sum()), 'total_asks_usd': float(asks.remaining_usd.sum()),
-                    'age_seconds': age}
+                    'total_bids_usd': float(bids.weighted_remaining_usd.sum()), 'total_asks_usd': float(asks.weighted_remaining_usd.sum()),
+                    'raw_tight_bid_walls_usd': float(bids.loc[bids.from_price_pct.abs() <= 3, 'remaining_usd'].sum()),
+                    'raw_tight_ask_walls_usd': float(asks.loc[asks.from_price_pct.abs() <= 3, 'remaining_usd'].sum()),
+                    'age_seconds': age, 'decay_tau_seconds': tau}
         except Exception as exc:
             return {'data_valid': False, 'error': str(exc), 'whale_imbalance_bid_ratio': 0.5}
 

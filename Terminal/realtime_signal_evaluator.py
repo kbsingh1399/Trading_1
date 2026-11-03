@@ -177,6 +177,12 @@ class RealtimeSignalEvaluator:
         except Exception as exc:
             logger.warning('EmpiricalSignalLearner unavailable: %s', exc)
             self.empirical_learner = None
+        try:
+            from Terminal.trade_critic_engine import TradeCriticEngine
+            self.critic_engine = TradeCriticEngine()
+        except Exception as exc:
+            logger.warning('TradeCriticEngine unavailable: %s', exc)
+            self.critic_engine = None
 
 
 
@@ -260,11 +266,13 @@ class RealtimeSignalEvaluator:
 
         auction = self.olap.query_auction_profile(sym)
 
-        emp_edge = self.empirical_learner.get_signal_expectancy(sym, sig_name) if self.empirical_learner else {}
+        emp_edge = self.empirical_learner.get_signal_expectancy(sym, sig_name) if getattr(self, 'empirical_learner', None) else {}
 
 
 
         whales = whales if isinstance(whales, dict) else {}
+        whale_history = whale_history if isinstance(whale_history, dict) else {}
+        key_barriers = key_barriers if isinstance(key_barriers, dict) else {}
 
         liq = liq if isinstance(liq, dict) else {}
 
@@ -603,7 +611,7 @@ class RealtimeSignalEvaluator:
 
         # 3.7 Whale History Aggressive Sweep Confluence
         sweep_bias = str(whale_history.get("sweep_bias", "NEUTRAL"))
-        net_whale_flow = float(whale_history.get("net_whale_flow_usd", 0.0))
+        net_whale_flow = self._finite(whale_history.get("net_whale_flow_usd"), 0.0)
         if direction == "BUY" and sweep_bias == "BULLISH_SWEEP":
             confluence_score += 5
             reasons.append(f"Whale Sweep Aggressive Buying (+${net_whale_flow/1e6:.1f}M net filled)")
@@ -612,12 +620,16 @@ class RealtimeSignalEvaluator:
             reasons.append(f"Whale Sweep Aggressive Selling (-${abs(net_whale_flow)/1e6:.1f}M net filled)")
 
         # 3.8 Key Liquidation Cluster Barriers
-        if direction == "BUY" and key_barriers.get("nearest_overhead"):
-            confluence_score += 5
-            reasons.append(f"Key Short Liq Strike Barrier: ${float(key_barriers['nearest_overhead']['price']):,.2f}")
-        elif direction == "SELL" and key_barriers.get("nearest_underlying"):
-            confluence_score += 5
-            reasons.append(f"Key Long Liq Strike Barrier: ${float(key_barriers['nearest_underlying']['price']):,.2f}")
+        if direction == "BUY" and isinstance(key_barriers.get("nearest_overhead"), dict):
+            p = self._finite(key_barriers["nearest_overhead"].get("price"), 0.0)
+            if p > 0:
+                confluence_score += 5
+                reasons.append(f"Key Short Liq Strike Barrier: ${p:,.2f}")
+        elif direction == "SELL" and isinstance(key_barriers.get("nearest_underlying"), dict):
+            p = self._finite(key_barriers["nearest_underlying"].get("price"), 0.0)
+            if p > 0:
+                confluence_score += 5
+                reasons.append(f"Key Long Liq Strike Barrier: ${p:,.2f}")
 
         # Forecast aligned completed-bar flow ratios through the implemented API.
 
@@ -846,6 +858,63 @@ class RealtimeSignalEvaluator:
                     vol_status = 'INFORMATIONAL_EVALUATION'
                 else:
                     validation_errors.append(str(exc))
+
+        # Trade Critic & Anti-Falling Knife Defense Check
+        critic_audit = {"status": "SKIPPED"}
+        if getattr(self, 'critic_engine', None) is not None and direction in ('BUY', 'SELL') and entry > 0:
+            ema233_val = float(auction.get("ema233", 0.0) or auction.get("day_vwap", 0.0) or 0.0)
+            cvd_slope_val = float(cvd.get("slope", 0.0) or 0.0)
+            has_absorption_sig = bool("absorption" in sig_name.lower() or "delta_divergence" in sig_name.lower())
+
+            knife_vetoed, knife_reason, _ = self.critic_engine.check_microstructure_knife_veto(
+                symbol=sym,
+                direction=direction,
+                price=entry,
+                ema233=ema233_val,
+                htf_bias=h4_trend,
+                cvd_slope=cvd_slope_val,
+                has_liq_spike=has_tv_liq_spike,
+                liq_bias=tv_liq_bias,
+                has_footprint_absorption=has_absorption_sig,
+                rr_ratio=rr
+            )
+
+            if knife_vetoed:
+                validation_errors.append(knife_reason)
+                logger.warning(f"[{sym}] {knife_reason}")
+
+            # Vector Semantic Audit against Historical Loss Memories
+            whale_imb_val = float(whale_imbalance) if whale_imbalance is not None else 0.0
+            sem_audit = self.critic_engine.audit_candidate_setup(
+                symbol=sym,
+                direction=direction,
+                price=entry,
+                confluence_score=confluence_score,
+                htf_bias=h4_trend,
+                cvd_slope=cvd_slope_val,
+                whale_imbalance=whale_imb_val,
+                liq_regime=tv_liq_bias if has_tv_liq_spike else "NORMAL",
+                value_area_relation=val_status,
+                rr_ratio=rr
+            )
+
+            if sem_audit.get("critic_verdict") == "HARD_VETO":
+                validation_errors.append(sem_audit.get("reason", "CRITIC_VECTOR_VETO"))
+                logger.warning(f"[{sym}] {sem_audit.get('reason')}")
+            elif sem_audit.get("penalty", 0.0) > 0:
+                pen = sem_audit["penalty"]
+                confluence_score -= pen
+                reasons.append(f"Critic Memory Penalty (-{pen:.0f} pts): {sem_audit.get('reason')}")
+
+            critic_audit = {
+                "knife_vetoed": knife_vetoed,
+                "knife_reason": knife_reason,
+                "vector_verdict": sem_audit.get("critic_verdict"),
+                "similarity": sem_audit.get("max_similarity"),
+                "penalty": sem_audit.get("penalty"),
+                "matched_mode": sem_audit.get("matched_failure_mode"),
+                "mitigation": sem_audit.get("matched_lesson")
+            }
 
         reasons.extend('Validation Veto: ' + error for error in validation_errors)
 
@@ -1200,7 +1269,9 @@ class RealtimeSignalEvaluator:
 
             },
 
-            "confluence_reasons": reasons
+            "confluence_reasons": reasons,
+
+            "critic_audit": critic_audit
 
         }
 
@@ -1341,52 +1412,6 @@ class RealtimeSignalEvaluator:
         except Exception as e:
 
             logger.warning(f"Failed to append to {ALERTS_JSONL}: {e}")
-
-
-
-        # Auto-dispatch to MetaTrader 5 if authorized
-
-        if alert.get("mt5_execution_authorized") or (alert.get("is_actionable") and alert.get("mt5_symbol")):
-
-            try:
-
-                from Terminal.mt5_live_trader import execute_mt5_signal
-
-                logger.info(f"🚨 [MT5 AUTO-EXECUTE] Actionable setup on {alert['symbol']}! Dispatching to MetaTrader 5...")
-
-                execute_mt5_signal(alert)
-
-            except Exception as ex:
-
-                logger.error(f"Error in MT5 auto-dispatch: {ex}")
-
-
-
-        # Auto-dispatch to MatchTrader if authorized
-
-        if alert.get("matchtrader_execution_authorized"):
-
-            try:
-
-                from Terminal.matchtrader_live_trader import execute_signal
-
-                import asyncio
-
-                logger.info(f"ðŸš¨ [MATCHTRADER AUTO-EXECUTE] Actionable setup on {alert['symbol']}! Dispatching to MatchTrader Bridge...")
-
-                try:
-
-                    loop = asyncio.get_running_loop()
-
-                    loop.create_task(execute_signal(alert))
-
-                except RuntimeError:
-
-                    asyncio.run(execute_signal(alert))
-
-            except Exception as ex:
-
-                logger.error(f"Error in MatchTrader auto-dispatch: {ex}")
 
 
 

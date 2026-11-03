@@ -1,0 +1,155 @@
+--- a/Terminal/matchtrader_live_trader.py
++++ b/Terminal/matchtrader_live_trader.py
+@@ -4,13 +4,10 @@
+ Automates live order execution on FundingPips MatchTrader Web Platform
+ via Chrome DevTools Protocol (CDP) for Account 101305360.
+ 
+-Strict Prop Firm Risk Guardrails:
+-1. Account ID Lock: Executes ONLY on verified Account 101305360.
+-2. Max Total Drawdown Floor: $90,000 ($10,000 max overall loss from $100K).
+-3. Max Daily Drawdown Floor: $95,000 ($5,000 max daily loss from starting equity).
+-4. Max Concurrent Positions: Strictly capped at 2 open positions simultaneously.
+-5. Dynamic Position Sizing: 0.5% risk ($500) per trade based on Stop Loss distance.
+-6. Execution Logging: All fills logged atomically to Database/matchtrader_executed_trades.jsonl.
++Safety status: DOM dispatch is DISABLED until broker contract specifications,
++equity, daily baseline, SL/TP placement and fill confirmation are verified.
++Canonical competition envelope: account 101305360, $5,000 initial balance,
++$4,775 hard floor, <=2 open positions, <=$25 nominal risk per trade.
+ """
+ 
+ import sys
+@@ -36,9 +33,12 @@
+ if str(ROOT_DIR) not in sys.path:
+     sys.path.insert(0, str(ROOT_DIR))
+ 
+-from Terminal.runtime_io import acquire_singleton, atomic_json
++from Terminal.runtime_io import acquire_singleton, atomic_json, FileMutex
+ from Terminal.collector_lock import BrowserLock
+ from Terminal.venue_admission import matchtrader_symbol
++from Terminal.risk_envelope import (
++    HARD_FLOOR_USD, HALT_CUSHION_USD, MAX_RISK_USD, MAX_OPEN_POSITIONS,
++)
+ 
+ DB_DIR = ROOT_DIR / "Database"
+ EXECUTED_TRADES_FILE = DB_DIR / "matchtrader_executed_trades.jsonl"
+@@ -52,13 +52,16 @@
+ 
+ # Strict Risk Constants
+ TARGET_ACCOUNT_NUMBER = "101305360"
+-INITIAL_BALANCE = 100000.0
+-MAX_TOTAL_DRAWDOWN_LIMIT = 10000.0
+-EQUITY_FLOOR_TOTAL = 90000.0
+-MAX_DAILY_DRAWDOWN_LIMIT = 5000.0
+-EQUITY_FLOOR_DAILY = 95000.0
+-MAX_CONCURRENT_POSITIONS = int(os.environ.get("MATCHTRADER_MAX_CONCURRENT", 2))
+-DEFAULT_RISK_PER_TRADE_USD = 500.0  # 0.50%
++INITIAL_BALANCE = 5000.0
++EQUITY_FLOOR_TOTAL = HARD_FLOOR_USD
++MAX_TOTAL_DRAWDOWN_LIMIT = INITIAL_BALANCE - HARD_FLOOR_USD
++# Daily baseline must come from the broker reset boundary, not an assumed DOM
++# default. Until verified, dispatch remains disabled.
++MAX_DAILY_DRAWDOWN_LIMIT = 250.0
++EQUITY_FLOOR_DAILY = HARD_FLOOR_USD
++MAX_CONCURRENT_POSITIONS = MAX_OPEN_POSITIONS
++DEFAULT_RISK_PER_TRADE_USD = MAX_RISK_USD
++LIVE_DISPATCH_ENABLED = False
+ 
+ # Symbol Map to MatchTrader Instrument Names
+ SYMBOL_TO_MATCHTRADER = {
+@@ -183,8 +186,11 @@
+     total_floor_breached = (current_total_loss >= max_total_loss_limit) or (current_equity < EQUITY_FLOOR_TOTAL)
+     open_count = int(raw_val.get("openPositionsCount", 0))
+ 
++    equity_verified = bool(acc_text) and raw_val.get("profitText") not in (None, "")
++    hard_floor_ok = current_equity > HARD_FLOOR_USD + HALT_CUSHION_USD
+     can_trade = bool(
+-        is_target_account and
++        LIVE_DISPATCH_ENABLED and
++        is_target_account and equity_verified and hard_floor_ok and
+         (not daily_floor_breached) and
+         (not total_floor_breached) and
+         (open_count < MAX_CONCURRENT_POSITIONS) and
+@@ -192,7 +198,9 @@
+     )
+ 
+     state = {
+-        "data_valid": True,
++        "data_valid": bool(equity_verified),
++        "equity_verified": equity_verified,
++        "hard_floor_usd": HARD_FLOOR_USD,
+         "account_number": TARGET_ACCOUNT_NUMBER,
+         "is_target_account": is_target_account,
+         "current_equity": current_equity,
+@@ -257,6 +265,7 @@
+     if not all(isinstance(x, (int, float)) and math.isfinite(x) and x > 0
+                for x in (entry_price, stop_loss, risk_usd)) or entry_price == stop_loss:
+         return 0.0
++    risk_usd = min(float(risk_usd), MAX_RISK_USD)
+     units = {
+         'BTC': 1, 'BTCUSD': 1,
+         'ETH': 1, 'ETHUSD': 1,
+@@ -281,16 +290,19 @@
+ 
+ 
+ async def execute_market_order(ws, side: str, lot_size: float = 0.01, symbol: str = "", stop_loss: float = 0.0, take_profit: float = 0.0) -> Dict[str, Any]:
++    """Fail-closed public entry point. Holds a persistent inode mutex while dispatching."""
++    if not LIVE_DISPATCH_ENABLED:
++        return {"status": "REJECTED", "ok": False, "reason": "MATCHTRADER_DOM_DISPATCH_DISABLED_UNVERIFIED"}
+     if not ws:
+-        return {"status": "REJECTED", "ok": False, "reason": "BROKER_VOLUME_BRACKETS_AND_DAILY_BASELINE_UNVERIFIED"}
+-    """Safety-gated market order execution with live account verification and in-flight lock."""
+-    inflight_lock = DB_DIR / ".locks" / "order_execution_inflight.lock"
+-    inflight_lock.parent.mkdir(parents=True, exist_ok=True)
+-    try:
+-        inflight_lock.touch()
+-    except Exception:
+-        pass
++        return {"status": "REJECTED", "ok": False, "reason": "NO_WEBSOCKET"}
++    guard_path = DB_DIR / ".locks" / "order_execution_inflight.lock"
++    with FileMutex(str(guard_path), timeout=0.0) as guard:
++        if not guard.acquired:
++            return {"status": "REJECTED", "ok": False, "reason": "ORDER_EXECUTION_ALREADY_IN_FLIGHT"}
++        return await _execute_market_order_unlocked(ws, side, lot_size, symbol, stop_loss, take_profit)
+ 
++
++async def _execute_market_order_unlocked(ws, side: str, lot_size: float, symbol: str, stop_loss: float, take_profit: float) -> Dict[str, Any]:
+     try:
+         state = await inspect_account_and_positions(ws)
+         if not state.get("can_trade"):
+@@ -495,15 +507,15 @@
+             "details": val
+         }
+     finally:
+-        if inflight_lock.exists():
+-            try:
+-                inflight_lock.unlink()
+-            except Exception:
+-                pass
++        pass
+ 
+ 
+ async def execute_signal(signal: Dict[str, Any]) -> Dict[str, Any]:
+     """Validates full trade geometry, account health, and dispatches via MatchTrader."""
++    if not LIVE_DISPATCH_ENABLED:
++        return {"status": "REJECTED", "ok": False, "reason": "MATCHTRADER_DOM_DISPATCH_DISABLED_UNVERIFIED"}
++    if signal.get("matchtrader_execution_authorized") is not True:
++        return {"status": "REJECTED", "ok": False, "reason": "MATCHTRADER_NOT_AUTHORIZED"}
+     tab = get_matchtrader_tab()
+     if not tab:
+         return {"status": "REJECTED", "ok": False, "reason": "MATCHTRADER_TAB_NOT_FOUND"}
+@@ -528,9 +540,12 @@
+             return {"status": "REJECTED", "ok": False, "reason": f"INVALID_DIRECTION: {side}"}
+ 
+         trade_lvl = signal.get("trade_levels", {})
+-        lots = trade_lvl.get("admissible_lots", 0.01) or 0.01
+-        sl = trade_lvl.get("stop_loss", 0.0) or 0.0
+-        tp = trade_lvl.get("take_profit_1", 0.0) or 0.0
++        lots = float(trade_lvl.get("admissible_lots") or 0.0)
++        sl = float(trade_lvl.get("stop_loss") or 0.0)
++        tp = float(trade_lvl.get("take_profit_1") or 0.0)
++        risk = float(trade_lvl.get("realized_risk_usd") or 0.0)
++        if not (lots > 0 and sl > 0 and tp > 0 and 0 < risk <= MAX_RISK_USD):
++            return {"status": "REJECTED", "ok": False, "reason": "INVALID_TRADE_LEVELS_OR_RISK"}
+         res = await execute_market_order(ws, side, lots, symbol=mtr_sym, stop_loss=sl, take_profit=tp)
+         return res
+ 

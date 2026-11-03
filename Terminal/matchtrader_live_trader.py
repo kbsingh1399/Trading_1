@@ -39,6 +39,7 @@ if str(ROOT_DIR) not in sys.path:
 from Terminal.runtime_io import acquire_singleton, atomic_json
 from Terminal.collector_lock import BrowserLock
 from Terminal.venue_admission import matchtrader_symbol
+from Terminal.risk_envelope import HARD_FLOOR_USD, MAX_RISK_USD, MAX_OPEN_POSITIONS
 
 DB_DIR = ROOT_DIR / "Database"
 EXECUTED_TRADES_FILE = DB_DIR / "matchtrader_executed_trades.jsonl"
@@ -53,14 +54,13 @@ logger.handlers = [handler]
 # Strict FundingPips MatchTrader Risk Constants ($5,000 Challenge Account 101305360)
 TARGET_ACCOUNT_NUMBER = "101305360"
 INITIAL_BALANCE = 5000.0
-HARD_FLOOR_USD = 4775.00
 EQUITY_FLOOR_TOTAL = HARD_FLOOR_USD
 MAX_TOTAL_DRAWDOWN_LIMIT = INITIAL_BALANCE - HARD_FLOOR_USD  # $225.00 survival buffer
 MAX_DAILY_DRAWDOWN_LIMIT = 150.0
 EQUITY_FLOOR_DAILY = 4850.0
 MAX_CONCURRENT_POSITIONS = int(os.environ.get("MATCHTRADER_MAX_CONCURRENT", 2))
-MAX_RISK_USD = 25.00
 DEFAULT_RISK_PER_TRADE_USD = MAX_RISK_USD  # $25.00 strictly capped per trade
+LIVE_DISPATCH_ENABLED = False
 
 # Symbol Map to MatchTrader Instrument Names
 SYMBOL_TO_MATCHTRADER = {
@@ -283,6 +283,8 @@ def calculate_lot_size(symbol: str, entry_price: float, stop_loss: float, risk_u
 
 
 async def execute_market_order(ws, side: str, lot_size: float = 0.01, symbol: str = "", stop_loss: float = 0.0, take_profit: float = 0.0) -> Dict[str, Any]:
+    if not LIVE_DISPATCH_ENABLED:
+        return {"status": "REJECTED", "ok": False, "reason": "MATCHTRADER_DOM_DISPATCH_DISABLED_UNVERIFIED"}
     if not ws:
         return {"status": "REJECTED", "ok": False, "reason": "BROKER_VOLUME_BRACKETS_AND_DAILY_BASELINE_UNVERIFIED"}
     """Safety-gated market order execution with live account verification and in-flight lock."""

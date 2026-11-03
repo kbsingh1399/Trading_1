@@ -79,6 +79,7 @@ from Terminal.matchtrader_live_trader import (
     MAX_CONCURRENT_POSITIONS
 )
 from Terminal.delta_exchange_live_trader import delta_client
+from Terminal.trade_critic_engine import TradeCriticEngine
 
 # Directories and Persistence Paths
 DB_DIR = ROOT_DIR / "Database"
@@ -219,6 +220,12 @@ class FootprintSignalSentinel:
     def __init__(self, from_current_end: bool = False):
         self.state = load_state(reset_to_end=from_current_end)
         self.evaluator = RealtimeSignalEvaluator()
+        try:
+            self.critic_engine = TradeCriticEngine()
+        except Exception as e:
+            logger.warning(f"TradeCriticEngine initialization error: {e}")
+            self.critic_engine = None
+        self.active_positions_tracker: Dict[str, Dict[str, Any]] = {}
         self.last_pos_check_ts = 0.0
         self.wake_event = asyncio.Event()
         self.pending_signals = {}  # Holds intra-bar signals until 15m candle completion
@@ -339,62 +346,177 @@ class FootprintSignalSentinel:
 
         return evaluations
 
+    def _gather_market_snapshot(self, symbol: str) -> Dict[str, Any]:
+        """Captures microstructure order flow context for post-mortem analysis."""
+        try:
+            clean_sym = symbol.replace("USD", "").replace(".PI", "").replace("USDT", "")
+            olap = getattr(self.evaluator, "olap", None)
+            if not olap:
+                return {}
+            auction = olap.query_auction_profile(clean_sym) if hasattr(olap, "query_auction_profile") else {}
+            cvd = olap.query_cvd_trend(clean_sym, lookback_bars=16) if hasattr(olap, "query_cvd_trend") else {}
+            whales = olap.query_whale_walls(clean_sym) if hasattr(olap, "query_whale_walls") else {}
+            tv_liq = self.evaluator.query_live_tv_liquidations(clean_sym)
+            return {
+                "ema233": float(auction.get("ema233") or auction.get("day_vwap", 0.0) or 0.0),
+                "cvd_slope": float(cvd.get("slope") or (1.0 if "BULLISH" in str(cvd.get("cvd_slope", "")) else -1.0 if "BEARISH" in str(cvd.get("cvd_slope", "")) else 0.0)),
+                "htf_bias": str(auction.get("h4_trend") or auction.get("mtf_bias", "NEUTRAL")),
+                "whale_imbalance": float(whales.get("whale_imbalance_bid_ratio", 0.5) - 0.5),
+                "has_liq_spike": bool(tv_liq.get("has_spike")),
+                "liq_bias": str(tv_liq.get("bias", "NEUTRAL")),
+                "value_area_relation": str(auction.get("value_status", "INSIDE_VA"))
+            }
+        except Exception as e:
+            logger.debug(f"Error gathering market snapshot for {symbol}: {e}")
+            return {}
+
     async def inspect_and_manage_running_trades(self):
-        """Monitors MatchTrader open positions, verifies drawdown floor, and manages running trades."""
+        """Monitors MatchTrader & Delta Exchange positions, verifies risk, and conducts post-mortems on losses."""
         now = time.time()
         if now - self.last_pos_check_ts < 15.0:
             return
         self.last_pos_check_ts = now
 
+        current_active_keys = set()
+
+        # 1. MatchTrader Positions Guardian
         tab = get_matchtrader_tab()
-        if not tab:
-            return
+        if tab:
+            import websockets
+            try:
+                async with websockets.connect(tab["webSocketDebuggerUrl"], ping_interval=None) as ws:
+                    account_state = await inspect_account_and_positions(ws)
+                    positions = await get_open_positions_detailed(ws)
 
-        import websockets
+                    equity = account_state.get("current_equity", 100000.0)
+                    daily_loss = account_state.get("current_daily_loss", 0.0)
+                    total_loss = account_state.get("current_total_loss", 0.0)
+                    pos_count = len(positions)
+
+                    status_summary = f"[MATCHTRADER GUARDIAN] Equity=${equity:,.2f} | Open={pos_count} pos | Daily Loss=${daily_loss:,.2f} | Total Loss=${total_loss:,.2f}"
+
+                    # Check drawdown circuit breaker
+                    if account_state.get("daily_floor_breached") or account_state.get("total_floor_breached"):
+                        logger.critical(f"🛑 [CIRCUIT BREAKER] DRAWDOWN FLOOR BREACHED! DailyFloor={account_state.get('daily_floor_breached')}, TotalFloor={account_state.get('total_floor_breached')}")
+                        if winsound is not None:
+                            try:
+                                winsound.Beep(1800, 1000)
+                            except Exception:
+                                pass
+
+                    # Inspect each MatchTrader position
+                    for pos in positions:
+                        sym = pos.get("symbol", "")
+                        pnl = float(pos.get("profit_usd") or 0.0)
+                        pct = float(pos.get("profit_pct") or 0.0)
+                        side = pos.get("side", "")
+                        vol = pos.get("volume", "")
+                        idx = pos.get("index", 0)
+                        key = f"MTR_{sym}_{side}"
+                        current_active_keys.add(key)
+
+                        if key not in self.active_positions_tracker:
+                            self.active_positions_tracker[key] = {
+                                "venue": "MATCHTRADER",
+                                "symbol": sym,
+                                "direction": side,
+                                "open_price": float(pos.get("open_price") or 0.0),
+                                "last_price": float(pos.get("current_price") or 0.0),
+                                "last_profit_usd": pnl,
+                                "volume": vol,
+                                "first_seen": now,
+                                "last_seen": now
+                            }
+                        else:
+                            self.active_positions_tracker[key].update({
+                                "last_price": float(pos.get("current_price") or 0.0),
+                                "last_profit_usd": pnl,
+                                "last_seen": now
+                            })
+
+                        # Individual hard loss limit ($25.00 max risk with 1.25 buffer = -$31.25)
+                        max_loss_thresh = MAX_RISK_USD * 1.25
+                        if pnl <= -max_loss_thresh:
+                            logger.warning(f"🛑 Pos #{idx} {sym} loss exceeded hard risk envelope -${max_loss_thresh:.2f} (${pnl:.2f})! Emergency close triggered.")
+                            await close_position_by_index(ws, idx)
+                        elif pnl >= 250.0:
+                            logger.info(f"✨ Pos #{idx} {sym} in strong profit (+${pnl:.2f}) | Trailing Break-Even / Target Qualified.")
+
+                    logger.info(status_summary)
+
+            except Exception as e:
+                logger.debug(f"MatchTrader position inspection non-fatal error: {e}")
+
+        # 2. Delta Exchange India Positions Guardian
         try:
-            async with websockets.connect(tab["webSocketDebuggerUrl"], ping_interval=None) as ws:
-                account_state = await inspect_account_and_positions(ws)
-                positions = await get_open_positions_detailed(ws)
+            delta_pos = await asyncio.to_thread(delta_client.get_active_positions)
+            if delta_pos:
+                for dp in delta_pos:
+                    d_sym = dp.get("product_symbol", "")
+                    d_size = dp.get("size", "0")
+                    d_entry = float(dp.get("entry_price") or 0.0)
+                    d_mark = float(dp.get("mark_price") or 0.0)
+                    d_upnl = float(dp.get("unrealized_pnl") or 0.0)
+                    d_upnl_pct = float(dp.get("unrealized_pnl_pct") or 0.0)
+                    d_side = "BUY" if int(d_size) > 0 else "SELL"
+                    key = f"DELTA_{d_sym}"
+                    current_active_keys.add(key)
 
-                equity = account_state.get("current_equity", 100000.0)
-                daily_loss = account_state.get("current_daily_loss", 0.0)
-                total_loss = account_state.get("current_total_loss", 0.0)
-                pos_count = len(positions)
+                    if key not in self.active_positions_tracker:
+                        self.active_positions_tracker[key] = {
+                            "venue": "DELTA_INDIA",
+                            "symbol": d_sym,
+                            "direction": d_side,
+                            "open_price": d_entry,
+                            "last_price": d_mark,
+                            "last_profit_usd": d_upnl,
+                            "volume": d_size,
+                            "first_seen": now,
+                            "last_seen": now
+                        }
+                    else:
+                        self.active_positions_tracker[key].update({
+                            "last_price": d_mark,
+                            "last_profit_usd": d_upnl,
+                            "last_seen": now
+                        })
 
-                status_summary = f"[MATCHTRADER GUARDIAN] Equity=${equity:,.2f} | Open={pos_count} pos | Daily Loss=${daily_loss:,.2f} | Total Loss=${total_loss:,.2f}"
-                
-                # Check drawdown circuit breaker
-                if account_state.get("daily_floor_breached") or account_state.get("total_floor_breached"):
-                    logger.critical(f"🛑 [CIRCUIT BREAKER] DRAWDOWN FLOOR BREACHED! DailyFloor={account_state.get('daily_floor_breached')}, TotalFloor={account_state.get('total_floor_breached')}")
-                    if winsound is not None:
-                        try:
-                            winsound.Beep(1800, 1000)
-                        except Exception:
-                            pass
-
-                # Inspect each position
-                for pos in positions:
-                    sym = pos.get("symbol")
-                    pnl = pos.get("profit_usd", 0.0)
-                    pct = pos.get("profit_pct", 0.0)
-                    side = pos.get("side")
-                    vol = pos.get("volume")
-                    idx = pos.get("index")
-
-                    pos_log = f"   -> Pos #{idx}: {sym} {side} {vol} | PnL: ${pnl:+.2f} ({pct:+.2f}%)"
-                    
-                    # Individual hard loss limit ($25.00 max risk with 1.25 buffer = -$31.25)
-                    max_loss_thresh = MAX_RISK_USD * 1.25
-                    if pnl <= -max_loss_thresh:
-                        logger.warning(f"🛑 Pos #{idx} {sym} loss exceeded hard risk envelope -${max_loss_thresh:.2f} (${pnl:.2f})! Emergency close triggered.")
-                        await close_position_by_index(ws, idx)
-                    elif pnl >= 250.0:
-                        logger.info(f"✨ Pos #{idx} {sym} in strong profit (+${pnl:.2f}) | Trailing Break-Even / Target Qualified.")
-
-                logger.info(status_summary)
-
+                    logger.info(f"[DELTA GUARDIAN] {d_sym} {d_size} contracts | Entry: ${d_entry:,.4f} | Mark: ${d_mark:,.4f} | UPnL: ${d_upnl:+.4f} ({d_upnl_pct:+.2f}%)")
         except Exception as e:
-            logger.debug(f"Position inspection non-fatal error: {e}")
+            logger.debug(f"Delta position check error: {e}")
+
+        # 3. Dynamic Post-Mortem & Critic Memory Indexing on Closed Positions
+        for key, tracked in list(self.active_positions_tracker.items()):
+            if key not in current_active_keys and (now - tracked.get("last_seen", now)) > 5.0:
+                pnl = tracked.get("last_profit_usd", 0.0)
+                sym = tracked.get("symbol", "")
+                direction = tracked.get("direction", "")
+                venue = tracked.get("venue", "")
+
+                if pnl < 0:
+                    logger.warning(
+                        f"🚨 [POST-MORTEM TRIGGERED] {venue} position {sym} ({direction}) closed in LOSS: "
+                        f"${pnl:.2f}. Launching adversarial forensic analysis..."
+                    )
+                    snapshot = self._gather_market_snapshot(sym)
+                    if self.critic_engine:
+                        diagnosis = self.critic_engine.conduct_post_mortem_and_store(
+                            ticket_id=key,
+                            symbol=sym,
+                            direction=direction,
+                            entry_price=tracked.get("open_price", 0.0),
+                            exit_price=tracked.get("last_price", 0.0),
+                            realized_pnl_usd=pnl,
+                            market_snapshot=snapshot
+                        )
+                        logger.info(
+                            f"🧠 [CRITIC MEMORY COMMITTED] Failure Mode: {diagnosis.get('failure_mode')} | "
+                            f"Mitigation Rule: {diagnosis.get('mitigation_guard')}"
+                        )
+                else:
+                    logger.info(f"✨ [TRADE CLOSED PROFIT] {venue} position {sym} ({direction}) closed in PROFIT: +${pnl:.2f}.")
+
+                del self.active_positions_tracker[key]
 
     async def run_once(self):
         """Processes any unread footprint signals and audits running trades once."""

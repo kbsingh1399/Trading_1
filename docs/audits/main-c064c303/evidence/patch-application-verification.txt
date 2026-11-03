@@ -1,0 +1,6 @@
+Audit target: main@c064c30336c3cfe44e6dfc8d0e1c2f1a303772c4
+Command outcome:
+1. git archive <target> extracted into a fresh directory.
+2. git apply --check --whitespace=error docs/audits/main-c064c303/patches/ALL_CHANGES.patch: PASS.
+3. git apply --whitespace=error ...: PASS.
+4. Byte-for-byte comparison of all 13 patched paths with the independently patched working copy: PASS (0 mismatches).

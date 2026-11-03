@@ -165,10 +165,72 @@ class DeltaExchangeTrader:
         res = self.request("GET", "/v2/wallet/balances")
         return res.get("result", [])
 
+    def _get_cdp_positions(self) -> List[Dict[str, Any]]:
+        """Fallback position reader directly querying open Delta Exchange Edge tab via CDP."""
+        try:
+            import urllib.request, websocket, re
+            req = urllib.request.Request("http://127.0.0.1:9222/json", headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=2) as resp:
+                tabs = json.loads(resp.read().decode())
+            delta_tab = next((t for t in tabs if "delta.exchange" in t.get("url", "")), None)
+            if not delta_tab:
+                return []
+            ws = websocket.create_connection(delta_tab["webSocketDebuggerUrl"], timeout=3)
+            js = "Array.from(document.querySelectorAll('table')[3].querySelectorAll('tr')).map(r => Array.from(r.querySelectorAll('td, th')).map(c => c.innerText.trim().replace(/\\n+/g, ' ')))"
+            ws.send(json.dumps({"id": 1, "method": "Runtime.evaluate", "params": {"expression": js, "returnByValue": True}}))
+            res = json.loads(ws.recv())
+            ws.close()
+            rows = res.get("result", {}).get("result", {}).get("value", [])
+            parsed = []
+            for cols in rows[1:]:
+                if len(cols) >= 8:
+                    sym = cols[1].replace("Current ", "").strip()
+                    size_str = cols[2]
+                    entry_str = cols[4]
+                    tpsl_str = cols[5]
+                    mark_str = cols[7]
+                    upnl_str = cols[11] if len(cols) > 11 else "0.0"
+                    size_match = re.search(r'([-+]?\d+)', size_str)
+                    size_val = int(size_match.group(1)) if size_match else 0
+                    
+                    upnl_val = 0.0
+                    upnl_pct = 0.0
+                    if upnl_str:
+                        usd_match = re.search(r'([-+]?\d*\.?\d+)\s*USD', upnl_str)
+                        if usd_match:
+                            try:
+                                upnl_val = float(usd_match.group(1))
+                            except ValueError:
+                                pass
+                        pct_match = re.search(r'([-+]?\d*\.?\d+)\s*%', upnl_str)
+                        if pct_match:
+                            try:
+                                upnl_pct = float(pct_match.group(1))
+                            except ValueError:
+                                pass
+
+                    parsed.append({
+                        "product_symbol": sym,
+                        "size": str(size_val),
+                        "entry_price": entry_str,
+                        "mark_price": mark_str,
+                        "tpsl_info": tpsl_str,
+                        "unrealized_pnl": upnl_val,
+                        "unrealized_pnl_str": upnl_str,
+                        "unrealized_pnl_pct": upnl_pct,
+                        "venue": "DELTA_CDP_ACTIVE"
+                    })
+            return parsed
+        except Exception as e:
+            logger.debug(f"CDP positions fallback error: {e}")
+            return []
+
     def get_open_positions(self) -> List[Dict[str, Any]]:
-        """Returns all open margined positions."""
+        """Returns all open margined positions (REST primary, CDP fallback)."""
         res = self.request("GET", "/v2/positions/margined")
-        return res.get("result", [])
+        if res.get("result") is not None:
+            return res.get("result", [])
+        return self._get_cdp_positions()
 
     def get_active_positions(self) -> List[Dict[str, Any]]:
         """Returns non-zero open positions."""

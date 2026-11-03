@@ -91,14 +91,17 @@ def _publish(path, write):
                 os.fsync(stream.fileno())
         except Exception:
             pass
-        for attempt in range(6):
+        deadline = time.monotonic() + 2.0
+        delay = 0.01
+        while True:
             try:
                 os.replace(temporary, path)
-                return
+                break
             except PermissionError:
-                if attempt == 5:
+                if time.monotonic() >= deadline:
                     raise
-                time.sleep(0.01 * 2 ** attempt)
+                time.sleep(delay)
+                delay = min(delay * 2, 0.25)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -164,10 +167,8 @@ def completed_candles(frame, now_ms=None):
     frame = frame.sort_values('open_time_ms').drop_duplicates('open_time_ms', keep='last')
     if frame.empty or now_ms - frame.close_time_ms.iloc[-1] > 1800000:
         raise ValueError('Completed candle history stale or empty')
-    tail = frame.tail(64)
-    if len(tail) > 1:
-        diffs = np.diff(tail.open_time_ms)
-        is_contiguous = np.all((diffs > 0) & (diffs % 900000 == 0) & (diffs <= 259200000))
-        if not is_contiguous:
+    if len(frame) > 1:
+        diffs = np.diff(frame.open_time_ms.to_numpy(dtype=np.int64))
+        if not np.all(diffs == 900000):
             raise ValueError('Non-contiguous M15 candle history')
     return frame

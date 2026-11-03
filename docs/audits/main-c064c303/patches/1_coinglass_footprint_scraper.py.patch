@@ -1,0 +1,80 @@
+--- a/1_coinglass_footprint_scraper.py
++++ b/1_coinglass_footprint_scraper.py
+@@ -71,7 +71,7 @@
+ logger.handlers = [handler]
+ 
+ # Pre-load known signals to avoid duplicate emission
+-KNOWN_SIGNAL_KEYS: Set[Tuple[str, str, int, float]] = set()
++KNOWN_SIGNAL_KEYS: Set[Tuple[str, str, int]] = set()
+ 
+ # Core Tier 1 Assets + Major Liquidity Cryptos
+ DEFAULT_SYMBOLS = [
+@@ -104,10 +104,15 @@
+     if SIGNALS_PARQUET.exists():
+         try:
+             df = pd.read_parquet(SIGNALS_PARQUET)
++            now_ms = time.time() * 1000
++            KNOWN_SIGNAL_KEYS = set()
+             for _, r in df.iterrows():
+-                key = (r['symbol'], str(r.get('sig_code', '')), int(r.get('time_ms', 0)), float(r.get('price', 0.0)))
+-                KNOWN_SIGNAL_KEYS.add(key)
+-            logger.info(f"Pre-loaded {len(KNOWN_SIGNAL_KEYS)} known signal keys into memory.")
++                t_ms = int(r.get('time_ms', 0) or 0)
++                close_ms = float(r.get('close_time_ms', 0) or 0) or (t_ms + 900_000)
++                if t_ms <= 0 or close_ms > now_ms or now_ms - close_ms > 7_200_000:
++                    continue
++                KNOWN_SIGNAL_KEYS.add((r['symbol'], str(r.get('sig_code', '')), t_ms))
++            logger.info(f"Pre-loaded {len(KNOWN_SIGNAL_KEYS)} recent closed signal keys into memory.")
+         except Exception as e:
+             logger.warning(f"Could not pre-load known signals: {e}")
+ 
+@@ -379,38 +384,29 @@
+     df = pd.DataFrame(enriched)
+     upsert_parquet(df, SIGNALS_PARQUET, ["symbol", "sig_code", "time_ms"], sort_by="time_ms", limit=100000)
+ 
+-    # Detect newly discovered signals from the current 1-hour window
++    # Emit only closed, enriched signals to the reactive watcher. Never consume
++    # a dedupe key on a forming bar: doing so permanently suppresses the same
++    # signal after the candle closes.
+     newly_discovered = []
+     now_ms = time.time() * 1000
+-    for s in signals:
++    for s in enriched:
+         t_ms = int(s.get("time_ms") or 0)
+-        if now_ms - t_ms > 3600 * 1000:
++        close_ms = t_ms + 900_000
++        if t_ms <= 0 or close_ms > now_ms or now_ms - close_ms > 3600 * 1000:
+             continue
+-
+-        # Bar Completion Invariant (AGENTS.md & Goldfish Finding 2)
+-        # 15m candle opened at t_ms is completed at t_ms + 900,000 ms
+-        is_closed = (t_ms + 900_000) <= now_ms
+-        s["bar_closed"] = is_closed
+-        s["candle_close_ms"] = t_ms + 900_000
+-        s["candle_close_ist"] = utc_ms_to_ist_str(t_ms + 900_000)
+-
+-        # Pre-enrich signal dictionary with primary IST fields (Goldfish Finding 9)
+-        s["time_ist"] = utc_ms_to_ist_str(t_ms)
+-        s["candle_ist"] = s["time_ist"]
+-        s["datetime_ist"] = s["time_ist"]
+-        s["time_ist_ms"] = t_ms + 19800000
+-
+-        key = (s["symbol"], str(s.get("sig_code", "")), t_ms, float(s.get("price", 0.0)))
++        s["bar_closed"] = True
++        s["candle_close_ms"] = close_ms
++        s["candle_close_ist"] = utc_ms_to_ist_str(close_ms)
++        key = (s["symbol"], str(s.get("sig_code", "")), t_ms)
+         if key not in KNOWN_SIGNAL_KEYS:
+             KNOWN_SIGNAL_KEYS.add(key)
+             newly_discovered.append(s)
+ 
+-    # Append to footprint_signals.jsonl for reactive watcher
+     if newly_discovered:
+         with open(SIGNALS_JSONL, "a", encoding="utf-8") as f:
+             for s in newly_discovered:
+                 f.write(json.dumps(s) + "\n")
+-        logger.info(f"🚨 Discovered {len(newly_discovered)} brand NEW footprint signal(s)! Appended to {SIGNALS_JSONL.name}")
++        logger.info(f"Discovered {len(newly_discovered)} closed footprint signal(s); appended to {SIGNALS_JSONL.name}")
+ 
+     return newly_discovered
+ 

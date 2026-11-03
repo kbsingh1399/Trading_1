@@ -116,19 +116,11 @@ def rotate_warp_ip(context: str = "Collector", reason: str = "SCHEDULED", force:
     now = time.time()
     last_rot = _get_last_rotation_time()
 
-    # In-Flight Order Lock Guardrail with 20s TTL Auto-Expiry
-    inflight_lock = LOCK_DIR / "order_execution_inflight.lock"
-    if inflight_lock.exists():
-        try:
-            lock_age = now - inflight_lock.stat().st_mtime
-            if lock_age > 20.0:
-                logger.warning(f"[{context}] [Cloudflare WARP] Stale order_execution_inflight.lock detected ({lock_age:.1f}s old). Auto-expiring.")
-                inflight_lock.unlink(missing_ok=True)
-            else:
-                logger.warning(f"[{context}] [Cloudflare WARP] MatchTrader live order execution is currently IN-FLIGHT ({lock_age:.1f}s). Rotation blocked to protect trade.")
-                return get_current_ip()
-        except Exception:
-            pass
+    # Hold persistent order-dispatch mutex to guarantee zero order-rotation interleaving
+    with FileMutex(str(LOCK_DIR / "order_execution_inflight.lock"), timeout=0.0) as order_guard:
+        if not order_guard.acquired:
+            logger.warning(f"[{context}] [Cloudflare WARP] MatchTrader/Delta order execution is currently IN-FLIGHT. Rotation blocked to protect trade.")
+            return get_current_ip()
 
     valid_reasons = ["CHALLENGE", "HTTP_403", "HTTP_429", "FAILED_TO_LOAD", "CONSECUTIVE_EMPTY_SCRAPES", "MANUAL_OVERRIDE"]
     if not force and reason not in valid_reasons:

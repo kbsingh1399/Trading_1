@@ -165,6 +165,7 @@ def test_liquidation_direction_and_real_evaluator_api(side, expected):
     evaluator.olap.query_whale_walls.return_value = {'data_valid': True, 'whale_imbalance_bid_ratio': .7 if side=='buy' else .3}
     evaluator.olap.query_liquidation_confluence.return_value = {'data_valid': True, 'near_field_shorts_pct': 60 if side=='buy' else 40}
     evaluator.olap.query_cvd_trend.return_value = {'data_valid': True, 'cvd_slope': 'BULLISH_FLOW' if side=='buy' else 'BEARISH_FLOW'}
+    evaluator.olap.query_auction_profile.return_value = {'data_valid': True}
     evaluator.olap.get_forecast_frame.return_value = pd.DataFrame()
     evaluator.regime_det = Mock()
     evaluator.regime_det.analyze_symbol.return_value = {'regime': 'MEAN_REVERTING_RANGE', 'atr_pct': 1}
