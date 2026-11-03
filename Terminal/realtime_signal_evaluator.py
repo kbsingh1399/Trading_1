@@ -1127,6 +1127,8 @@ class RealtimeSignalEvaluator:
 
             "confluence_score": round(confluence_score, 1),
 
+            "ev_300bar": float(emp_edge.get("ev_r", 0.0)),
+
             "signal_details": {
 
                 "sig_name": sig_name,
@@ -1158,6 +1160,8 @@ class RealtimeSignalEvaluator:
                 "take_profit_2": tp2,
 
                 "rr_ratio": rr,
+
+                "ev_300bar": float(emp_edge.get("ev_r", 0.0)),
 
                 "sl_pct": round(sl_pct * 100, 2),
 

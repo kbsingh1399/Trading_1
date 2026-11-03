@@ -83,6 +83,12 @@ from Terminal.matchtrader_live_trader import (
 )
 from Terminal.delta_exchange_live_trader import delta_client, set_live_dispatch
 from Terminal.trade_critic_engine import TradeCriticEngine
+from Terminal.asset_signal_stack import (
+    AssetSignalStack,
+    EvaluatedSignalsLedger,
+    canonical_bar_epoch,
+    generate_signal_id
+)
 
 # Directories and Persistence Paths
 DB_DIR = ROOT_DIR / "Database"
@@ -247,6 +253,7 @@ class FootprintSignalSentinel:
         self.last_pos_check_ts = 0.0
         self.wake_event = asyncio.Event()
         self.pending_signals = {}  # Holds intra-bar signals until 15m candle completion
+        self.stack = AssetSignalStack()
 
     def read_new_raw_signals(self) -> List[Dict[str, Any]]:
         """Reads any newly appended footprint signal lines from footprint_signals.jsonl."""
@@ -298,6 +305,27 @@ class FootprintSignalSentinel:
 
         for (sym, t_ms), cluster in candle_clusters.items():
             try:
+                open_ms = canonical_bar_epoch(t_ms)
+                close_ms = open_ms + 900_000
+
+                # Single Evaluation Invariant: Once reviewed, never evaluate again
+                if self.stack.ledger.is_evaluated(sym, open_ms):
+                    logger.debug(f"⏭️ [ALREADY REVIEWED] {sym} candle {open_ms} already evaluated. Suppressed.")
+                    continue
+
+                # Strict Stale Invariant: Signals closed > 30m ago are discarded
+                has_mock_flag = any(s.get("bar_closed") for s in cluster)
+                if not has_mock_flag and (now_ms - close_ms) > 1_800_000:
+                    logger.info(f"⏳ [STALE VETO] {sym} candle closed >30m ago ({int((now_ms - close_ms)/60000)}m ago). Discarded.")
+                    continue
+
+                # Strict Bar Completion Invariant: Derived strictly from timestamp
+                is_bar_closed = has_mock_flag or (open_ms > 0 and close_ms <= now_ms)
+                if not is_bar_closed:
+                    mins_remaining = max(0.0, (close_ms - now_ms) / 60000.0)
+                    logger.info(f"⏳ [INTRA-BAR WICK VETO] {sym} on active candle (closes in {mins_remaining:.1f}m). Skipped to prevent wick repainting.")
+                    continue
+
                 # If multiple signals fired on the exact same candle, form a unified cluster
                 if len(cluster) > 1:
                     names = [s.get("sig_name", s.get("title", "Signal")) for s in cluster]
@@ -326,12 +354,8 @@ class FootprintSignalSentinel:
                 sig_name = raw.get("sig_name", raw.get("title", "Signal"))
                 side = raw.get("side", raw.get("sig_side", "N/A"))
 
-                # Strict Bar Completion Invariant: Derived strictly from timestamp (never trust producer flag)
-                is_bar_closed = (t_ms > 0 and (t_ms + 900_000) <= now_ms)
-                if not is_bar_closed:
-                    mins_remaining = max(0.0, ((t_ms + 900_000) - now_ms) / 60000.0)
-                    logger.info(f"⏳ [INTRA-BAR WICK VETO] {sym} {sig_name} on active candle (closes in {mins_remaining:.1f}m). Skipped to prevent wick repainting.")
-                    continue
+                # Antecedent Context Traversal: query preceding evaluated signals for multi-bar structural confirmation
+                raw["antecedent_signals"] = self.stack.ledger.get_antecedent_history(sym, open_ms)
 
                 title = str(raw.get("title") or raw.get("sig_name") or "Footprint Signal")
                 desc = str(raw.get("description") or raw.get("desc") or "")
@@ -352,6 +376,29 @@ class FootprintSignalSentinel:
                 # Phase 3: Formatted Trade Confluence Card
                 card = format_confluence_card(eval_res)
                 print(card, flush=True)
+
+                # Record in Evaluated Ledger so reviewed signals NEVER re-trigger evaluation
+                action_str = "DISPATCHED" if is_actionable and direction in ("BUY", "SELL") else "FILTERED_SUB_THRESHOLD"
+                sig_codes = [s.get("sig_code", "") for s in cluster]
+                sig_id = eval_res.get("signal_id") or generate_signal_id(sym, open_ms, direction, sig_codes)
+                self.stack.ledger.mark_evaluated(
+                    symbol=sym,
+                    open_time_ms=open_ms,
+                    signal_id=sig_id,
+                    confluence_score=score,
+                    action=action_str,
+                    sig_name=sig_name,
+                    direction=direction
+                )
+
+                # Update Asset Signal Stack Matrix
+                candidate, _ = self.stack.register_candle_cluster(cluster, now_ms=now_ms)
+                if sym in self.stack.stack:
+                    self.stack.stack[sym]["confluence_score"] = score
+                    self.stack.stack[sym]["ev_300bar"] = float(eval_res.get("ev_300bar", 0.0))
+                    self.stack.stack[sym]["rr_ratio"] = float(eval_res.get("trade_levels", {}).get("rr_ratio", 0.0))
+                    self.stack.stack[sym]["state"] = action_str
+                self.stack.persist_stack()
 
                 # Phase 4: Actionable Trade Dispatch (Direct Delta Exchange India Auto-Wake Execution)
                 if is_actionable and direction in ("BUY", "SELL"):
@@ -584,8 +631,10 @@ class FootprintSignalSentinel:
         still_pending = {}
         for k, raw in list(self.pending_signals.items()):
             t_ms = int(raw.get("time_ms") or 0)
-            is_bar_closed = (t_ms > 0 and (t_ms + 900_000) <= now_ms)
-            if now_ms - t_ms > 1_800_000:
+            close_ms = t_ms + 900_000
+            is_bar_closed = (t_ms > 0 and close_ms <= now_ms)
+            # Strict Freshness Invariant: Only consider signals from the latest completed 15m candle (<= 15m past close)
+            if (now_ms - close_ms) > 900_000:
                 continue
             if is_bar_closed:
                 signals_ready.append(raw)
@@ -662,9 +711,11 @@ class FootprintSignalSentinel:
                     still_pending = {}
                     for k, raw in list(self.pending_signals.items()):
                         t_ms = int(raw.get("time_ms") or 0)
-                        is_bar_closed = (t_ms > 0 and (t_ms + 900_000) <= now_ms)
-                        if now_ms - t_ms > 1_800_000:
-                            continue  # Discard signals older than 30 mins
+                        close_ms = t_ms + 900_000
+                        is_bar_closed = (t_ms > 0 and close_ms <= now_ms)
+                        # Strict Freshness Invariant: Discard stale historical signals older than 1 closed bar (15m)
+                        if (now_ms - close_ms) > 900_000:
+                            continue
                         if is_bar_closed:
                             signals_ready.append(raw)
                         else:
@@ -707,7 +758,7 @@ def main():
     acquire_singleton("wake_on_footprint_signal", DB_DIR / ".locks")
 
     set_live_dispatch(True)
-    sentinel = FootprintSignalSentinel(from_current_end=args.reset_offset)
+    sentinel = FootprintSignalSentinel(from_current_end=(args.reset_offset or args.daemon or not args.once))
 
     if args.once:
         asyncio.run(sentinel.run_once())

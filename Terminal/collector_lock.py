@@ -195,11 +195,23 @@ def rotate_warp_ip(context: str = "Collector", reason: str = "SCHEDULED", force:
 # Global lock contention tracking (DeepSeek AUD-07)
 LOCK_CONTENTION_SKIPS = 0
 
+# Domain-Isolated Browser Lock Map:
+# Eliminates starvation deadlocks between long sweeps (Footprint), fast sweeps (TV), and live order dispatch.
+COLLECTOR_LOCK_MAP = {
+    "TVLiquidationScraper": LOCK_DIR / "cdp_tv_scraper.lock",
+    "FootprintScraper": LOCK_DIR / "cdp_footprint.lock",
+    "WhaleScraper": LOCK_DIR / "cdp_whales.lock",
+    "LiquidationScraper": LOCK_DIR / "cdp_liquidation.lock",
+    "MatchTraderLiveExecution": LOCK_DIR / "matchtrader_execution.lock",
+    "MatchTraderExecution": LOCK_DIR / "matchtrader_execution.lock",
+}
+
 
 class BrowserLock(FileMutex):
     """OS-backed browser mutex with a monotonic, bounded acquisition deadline."""
     def __init__(self, collector_name, timeout_secs=2.0, lock_file=None):
-        super().__init__(lock_file or BROWSER_LOCK_FILE, timeout_secs)
+        target_lock = lock_file or COLLECTOR_LOCK_MAP.get(collector_name, BROWSER_LOCK_FILE)
+        super().__init__(target_lock, timeout_secs)
         self.collector_name = collector_name
         self.lock_file = self.path
         self.timeout_secs = timeout_secs
@@ -237,10 +249,11 @@ def calculate_wall_decay_weight(age_seconds: float, tau: float = TAU_30MIN_HALFL
 
 # Master TDMA Hourly Windows
 WHALE_MINUTES = [0, 15, 35, 50]
-# Liquidation sweeps 13 assets x 24 tabs (~117s), reserving 2.5m blocks:
 LIQUIDATION_MINUTES = [10, 25, 55]
-LIQUIDATION_RESERVED_MINUTES = [10, 11, 12, 25, 26, 27, 55, 56, 57]
-WHALE_RESERVED_MINUTES = [0, 1, 15, 16, 35, 36, 50, 51]
+
+# 2-minute lead-in reservation prevents long 120s-160s Footprint sweeps from overrunning into Whale or Liquidation windows:
+WHALE_RESERVED_MINUTES = [58, 59, 0, 1, 13, 14, 15, 16, 33, 34, 35, 36, 48, 49, 50, 51]
+LIQUIDATION_RESERVED_MINUTES = [8, 9, 10, 11, 12, 23, 24, 25, 26, 27, 53, 54, 55, 56, 57]
 
 
 def is_scheduled_for_other_collector(current_minute: int, collector_type: str) -> bool:

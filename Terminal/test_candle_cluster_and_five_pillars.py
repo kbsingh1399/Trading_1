@@ -197,6 +197,8 @@ class TestCandleClusterAndFivePillars(unittest.TestCase):
     def test_sentinel_groups_multi_signals_on_same_candle(self):
         """Sentinel evaluate_and_dispatch groups multiple signals on same (symbol, time_ms) into 1 cluster."""
         sentinel = FootprintSignalSentinel(from_current_end=True)
+        if hasattr(sentinel, 'stack') and hasattr(sentinel.stack, 'ledger'):
+            sentinel.stack.ledger._evaluated = {}
         # Mock evaluate_signal
         sentinel.evaluator.evaluate_signal = MagicMock(return_value={
             "symbol": "NEARUSD",
