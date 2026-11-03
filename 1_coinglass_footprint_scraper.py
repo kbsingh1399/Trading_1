@@ -52,7 +52,9 @@ if str(ROOT_DIR) not in sys.path:
 from Terminal.runtime_io import acquire_singleton, atomic_parquet, upsert_parquet, cdp_result
 from Terminal.collector_lock import rotate_warp_ip, BrowserLock, is_scheduled_for_other_collector
 from Terminal.auction_indicators import update_all_auction_profiles
-from Terminal.universal_footprint_engine import enrich_candle_df_with_ist, utc_ms_to_ist_str
+from Terminal.universal_footprint_engine import enrich_candle_df_with_ist, utc_ms_to_ist_str, UniversalFootprintEngine
+
+_footprint_engine = UniversalFootprintEngine()
 
 DB_DIR = ROOT_DIR / "Database"
 CANDLE_DIR = DB_DIR / "Candle_Data"
@@ -416,7 +418,7 @@ def dump_signals(signals: List[dict], candles: Optional[List[dict]] = None) -> L
 
 
 def dump_candles(sym: str, candles: List[dict]):
-    """Persists 15m candles with strict 300-bar rolling window and primary IST columns."""
+    """Persists 15m candles with strict 300-bar rolling window, footprint metrics, and primary IST columns."""
     if not candles:
         return
     frame = pd.DataFrame(candles)
@@ -425,7 +427,45 @@ def dump_candles(sym: str, candles: List[dict]):
         return
     frame = enrich_candle_df_with_ist(frame)
     frame["dumped_at_utc"] = datetime.now(timezone.utc).isoformat()
-    upsert_parquet(frame, CANDLE_DIR / f"{sym}.parquet", ["open_time_ms"], sort_by="open_time_ms", limit=300)
+    
+    candle_file = CANDLE_DIR / f"{sym}.parquet"
+    if candle_file.exists():
+        try:
+            existing = pd.read_parquet(candle_file)
+            frame = pd.concat([existing, frame]).drop_duplicates("open_time_ms").sort_values("open_time_ms").tail(300)
+        except Exception:
+            pass
+
+    try:
+        analyzed_df, _ = _footprint_engine.analyze_bars(frame, symbol=sym, asset_class="crypto", rolling_window=300)
+        if not analyzed_df.empty:
+            frame = analyzed_df
+    except Exception:
+        pass
+
+    for col in ["signal_type", "signal_side", "signal_desc"]:
+        if col in frame.columns:
+            frame[col] = frame[col].fillna("")
+        else:
+            frame[col] = ""
+    if "has_signal" in frame.columns:
+        frame["has_signal"] = frame["has_signal"].fillna(False)
+    if "vol_sma20" in frame.columns:
+        frame["vol_sma20"] = frame["vol_sma20"].fillna(frame["total_volume"])
+    if "delta_pct" in frame.columns:
+        frame["delta_pct"] = frame["delta_pct"].fillna(0.0)
+    if "cvd" in frame.columns:
+        frame["cvd"] = frame["cvd"].fillna(0.0)
+    if "buy_volume" in frame.columns:
+        frame["buy_volume"] = frame["buy_volume"].fillna(frame["total_volume"] / 2.0)
+    if "sell_volume" in frame.columns:
+        frame["sell_volume"] = frame["sell_volume"].fillna(frame["total_volume"] / 2.0)
+    if "total_trades" in frame.columns:
+        frame["total_trades"] = frame["total_trades"].fillna(0)
+    if "asset_class" in frame.columns:
+        frame["asset_class"] = frame["asset_class"].fillna("crypto")
+
+    atomic_parquet(frame.tail(300), candle_file)
 
 
 async def execute_footprint_sweep(ws) -> Tuple[int, int]:
