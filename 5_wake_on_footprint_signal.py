@@ -71,11 +71,14 @@ from Terminal.matchtrader_live_trader import (
     get_open_positions_detailed,
     close_position_by_index,
     execute_signal,
+    matchtrader_symbol,
+    SYMBOL_TO_MATCHTRADER,
     TARGET_ACCOUNT_NUMBER,
     EQUITY_FLOOR_DAILY,
     EQUITY_FLOOR_TOTAL,
     MAX_CONCURRENT_POSITIONS
 )
+from Terminal.delta_exchange_live_trader import delta_client
 
 # Directories and Persistence Paths
 DB_DIR = ROOT_DIR / "Database"
@@ -296,18 +299,35 @@ class FootprintSignalSentinel:
                 card = format_confluence_card(eval_res)
                 print(card, flush=True)
 
-                # 3. Actionable Trade Dispatch
+                                # 3. Actionable Trade Dispatch (Dual-Venue Smart Dispatch)
                 if is_actionable and direction in ("BUY", "SELL"):
                     if winsound is not None:
                         try:
                             winsound.Beep(1200, 450)
                         except Exception:
                             pass
-                    print("\a", end="", flush=True)
+                    print("", end="", flush=True)
 
-                    logger.info(f"🚨 CONFLUENCE THRESHOLD ACHIEVED: {score:.1f}/100 >= 75.0! Initiating Live Order Execution...")
-                    dispatch_res = await execute_signal(eval_res)
-                    logger.info(f"MatchTrader Dispatch Result: {dispatch_res}")
+                    logger.info(f"⚡ CONFLUENCE THRESHOLD ACHIEVED: {score:.1f}/100 >= 75.0! Initiating Live Order Execution...")
+
+                    mtr_sym = matchtrader_symbol(sym) or SYMBOL_TO_MATCHTRADER.get(sym)
+                    dispatched = False
+                    if mtr_sym:
+                        logger.info(f"Routing {sym} to MatchTrader Prop Account ({mtr_sym})...")
+                        dispatch_res = await execute_signal(eval_res)
+                        logger.info(f"MatchTrader Dispatch Result: {dispatch_res}")
+                        dispatched = dispatch_res.get("ok", False)
+
+                        # If MatchTrader is full or rejected, and asset is crypto, failover to Delta Exchange India
+                        if not dispatched and delta_client.resolve_product(sym):
+                            logger.info(f"MatchTrader rejected ({dispatch_res.get('reason')}). Attempting failover to Delta Exchange India...")
+                            delta_res = await asyncio.to_thread(delta_client.execute_delta_signal, eval_res)
+                            logger.info(f"Delta Exchange India Failover Result: {delta_res}")
+                    else:
+                        logger.info(f"Routing {sym} to Delta Exchange India Live Venue...")
+                        dispatch_res = await asyncio.to_thread(delta_client.execute_delta_signal, eval_res)
+                        logger.info(f"Delta Exchange India Dispatch Result: {dispatch_res}")
+
                     self.state["dispatched_trades_count"] += 1
                     save_state(self.state)
                 else:
@@ -385,6 +405,21 @@ class FootprintSignalSentinel:
             logger.info("No unread footprint signals in stream.")
 
         await self.inspect_and_manage_running_trades()
+
+        # Delta Exchange India Position Guardian
+        try:
+            delta_pos = await asyncio.to_thread(delta_client.get_active_positions)
+            if delta_pos:
+                for dp in delta_pos:
+                    d_sym = dp.get("product_symbol")
+                    d_size = dp.get("size")
+                    d_entry = dp.get("entry_price")
+                    d_mark = dp.get("mark_price")
+                    d_upnl = float(dp.get("unrealized_pnl") or 0.0)
+                    logger.info(f"[DELTA GUARDIAN] {d_sym} {d_size} contracts | Entry: ${float(d_entry or 0):,.4f} | Mark: ${float(d_mark or 0):,.4f} | UPnL: ${d_upnl:+.4f}")
+        except Exception as e:
+            logger.debug(f"Delta position check: {e}")
+
 
     async def run_daemon(self):
         """Continuous reactive daemon watching footprint_signals.jsonl with zero CPU lag."""
