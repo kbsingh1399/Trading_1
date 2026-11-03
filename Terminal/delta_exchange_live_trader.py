@@ -18,7 +18,7 @@ logger.setLevel(logging.INFO)
 
 CONFIG_ENV_PATH = Path.home() / ".delta-exchange-mcp" / "config.env"
 BASE_URL = "https://api.india.delta.exchange"
-MAX_DELTA_CONCURRENT_POSITIONS = 5
+MAX_DELTA_CONCURRENT_POSITIONS = 2
 
 
 def load_credentials() -> Dict[str, str]:
@@ -46,11 +46,8 @@ def load_credentials() -> Dict[str, str]:
         except Exception as e:
             logger.warning(f"Error reading {CONFIG_ENV_PATH}: {e}")
 
-    # Fallback to current session provided keys if still empty
-    if not key:
-        key = "RrPSJVABou8UAT4BIl5ExCctYWV6dp"
-    if not secret:
-        secret = "1a0HWlsQfoeyv7J0rPx5mXWP0rEoL85RCWxUQmsI06aMS65cuQOhcUwjAiks"
+    if not key or not secret:
+        raise RuntimeError("Missing Delta Exchange credentials. Ensure DELTA_API_KEY and DELTA_API_SECRET are set.")
 
     return {"api_key": key, "api_secret": secret, "env": env}
 
@@ -62,6 +59,7 @@ class DeltaExchangeTrader:
         self.api_secret = creds["api_secret"]
         self.server_time_offset = 0.0
         self.products_cache: Dict[str, Dict[str, Any]] = {}
+        self._inflight_orders: Set[str] = set()
         self._sync_server_time()
         self._load_products()
 
@@ -300,6 +298,34 @@ class DeltaExchangeTrader:
         res = self.request("POST", "/v2/orders", body=body)
         return res
 
+    def close_position(self, symbol: str) -> Dict[str, Any]:
+        """
+        Market closes any active open position for the given symbol (reduce-only).
+        """
+        clean = symbol.upper().replace(".PI", "").replace("USDT", "").replace("USD", "")
+        for p in self.get_active_positions():
+            p_sym = p.get("product_symbol", "")
+            if clean in p_sym:
+                prod = self.resolve_product(p_sym)
+                if not prod:
+                    continue
+                size = abs(int(p.get("size", 0)))
+                if size <= 0:
+                    continue
+                # Opposing side to close
+                cur_size = int(p.get("size", 0))
+                close_side = "sell" if cur_size > 0 else "buy"
+                body = {
+                    "product_id": prod["id"],
+                    "size": size,
+                    "side": close_side,
+                    "order_type": "market_order",
+                    "reduce_only": True
+                }
+                logger.info(f"🚨 [EMERGENCY CLOSE] Closing Delta position for {p_sym}: {close_side} {size} contracts")
+                return self.request("POST", "/v2/orders", body=body)
+        return {"ok": False, "status": "NOT_FOUND", "reason": f"No open position found for {symbol}"}
+
     def execute_delta_signal(self, signal: Dict[str, Any]) -> Dict[str, Any]:
         """
         Validates signal parameters, checks Delta position limits, and punches live order
@@ -314,6 +340,10 @@ class DeltaExchangeTrader:
         if not prod:
             return {"ok": False, "status": "REJECTED", "reason": f"SYMBOL_NOT_ON_DELTA_INDIA: {sym}"}
 
+        # Check in-flight orders to prevent concurrent duplicate dispatch
+        if prod["symbol"] in self._inflight_orders:
+            return {"ok": False, "status": "REJECTED", "reason": f"ORDER_ALREADY_IN_FLIGHT: {prod['symbol']}"}
+
         # Check existing active position on this symbol
         if self.has_open_position(sym):
             return {"ok": False, "status": "REJECTED", "reason": f"POSITION_ALREADY_OPEN_ON_DELTA: {sym}"}
@@ -327,33 +357,57 @@ class DeltaExchangeTrader:
                 "reason": f"DELTA_MAX_POSITIONS_REACHED: {len(active_pos)}/{MAX_DELTA_CONCURRENT_POSITIONS}"
             }
 
-        trade_lvl = signal.get("trade_levels", {})
-        sl = trade_lvl.get("stop_loss")
-        tp = trade_lvl.get("take_profit_1")
+        trade_params = signal.get("trade_parameters") or signal.get("trade_levels") or {}
+        entry = float(trade_params.get("entry_price") or signal.get("price") or 0.0)
+        sl = trade_params.get("stop_loss")
+        tp = trade_params.get("take_profit_1")
+
+        # Fail-closed bracket invariant: SL and TP must be present and finite
+        if not sl or not tp or not math.isfinite(sl) or not math.isfinite(tp):
+            return {"ok": False, "status": "REJECTED", "reason": "MISSING_MANDATORY_BRACKET_SL_TP"}
+
+        if direction in ("BUY", "BULLISH", "LONG") and (sl >= entry or tp <= entry):
+            return {"ok": False, "status": "REJECTED", "reason": f"INVERTED_BRACKET_GEOMETRY: Entry={entry}, SL={sl}, TP={tp}"}
+        elif direction in ("SELL", "BEARISH", "SHORT") and (sl <= entry or tp >= entry):
+            return {"ok": False, "status": "REJECTED", "reason": f"INVERTED_BRACKET_GEOMETRY: Entry={entry}, SL={sl}, TP={tp}"}
 
         side = "buy" if direction in ("BUY", "BULLISH", "LONG") else "sell"
-        size = 1  # Standard 1 contract for altcoin testing / micro balance
 
-        logger.info(f"Executing Delta Live Order: {prod['symbol']} {side} {size} contracts | SL: {sl} | TP: {tp}")
-        res = self.place_order(
-            symbol=prod["symbol"],
-            side=side,
-            size=size,
-            order_type="market_order",
-            stop_loss_price=sl,
-            take_profit_price=tp,
-            leverage=25
-        )
+        # Rigorous Discrete Contract Sizing via MAX_RISK_USD ($25.00)
+        from Terminal.risk_envelope import MAX_RISK_USD
+        contract_val = float(prod.get("contract_value", 1.0) or 1.0)
+        risk_dist = abs(entry - sl)
+        if risk_dist > 0 and contract_val > 0:
+            calc_contracts = int(MAX_RISK_USD / (risk_dist * contract_val))
+            size = max(1, min(calc_contracts, 100))
+        else:
+            size = 1
 
-        ok = res.get("success", False) or ("result" in res and "id" in res.get("result", {}))
-        return {
-            "ok": ok,
-            "status": "EXECUTED" if ok else "FAILED",
-            "venue": "DeltaExchangeIndia",
-            "symbol": prod["symbol"],
-            "order": res.get("result", {}),
-            "raw_response": res
-        }
+        self._inflight_orders.add(prod["symbol"])
+        try:
+            logger.info(f"Executing Delta Live Order: {prod['symbol']} {side} {size} contracts | Entry: {entry} | SL: {sl} | TP: {tp} | Leverage: 10x")
+            res = self.place_order(
+                symbol=prod["symbol"],
+                side=side,
+                size=size,
+                order_type="market_order",
+                stop_loss_price=sl,
+                take_profit_price=tp,
+                leverage=10
+            )
+
+            ok = res.get("success", False) or ("result" in res and "id" in res.get("result", {}))
+            return {
+                "ok": ok,
+                "status": "EXECUTED" if ok else "FAILED",
+                "venue": "DeltaExchangeIndia",
+                "symbol": prod["symbol"],
+                "size": size,
+                "order": res.get("result", {}),
+                "raw_response": res
+            }
+        finally:
+            self._inflight_orders.discard(prod["symbol"])
 
 
 # Global singleton instance

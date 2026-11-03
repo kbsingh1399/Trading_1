@@ -499,7 +499,11 @@ async def run_daemon():
         logger.info(f"Sleeping {wait_s:.1f}s until next whale sweep window...")
         await asyncio.sleep(wait_s)
         try:
-            await run_sweep()
+            success = await run_sweep()
+            if success is False:
+                logger.info("Whale sweep yielded on lock contention; retrying in 15s...")
+                await asyncio.sleep(15.0)
+                await run_sweep()
         except Exception as e:
             logger.error(f"Scheduled sweep error: {e}")
 

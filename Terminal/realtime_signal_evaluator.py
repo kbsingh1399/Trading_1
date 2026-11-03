@@ -266,7 +266,8 @@ class RealtimeSignalEvaluator:
 
         auction = self.olap.query_auction_profile(sym)
 
-        emp_edge = self.empirical_learner.get_signal_expectancy(sym, sig_name) if getattr(self, 'empirical_learner', None) else {}
+        lookup_sig_name = sig_name.split(" + ")[0].strip() if " + " in sig_name else sig_name
+        emp_edge = self.empirical_learner.get_signal_expectancy(sym, lookup_sig_name) if getattr(self, 'empirical_learner', None) else {}
 
 
 
@@ -674,9 +675,28 @@ class RealtimeSignalEvaluator:
 
             reasons.append('TimesFM adverse-flow veto')
 
-        cvd_dir = 'VETO' if forecast_veto else 'UNAVAILABLE' if not tfm_cvd.get('available') else 'AVAILABLE'
+        if not tfm_cvd.get('available'):
+            cvd_dir = 'UNAVAILABLE'
+            cvd_conf = 0.0
+        elif forecast_veto:
+            cvd_dir = 'VETO'
+            cvd_conf = 0.95
+        else:
+            proj_sum = float(tfm_cvd.get('projected_delta_ratio_sum', 0.0) or 0.0)
+            cvd_dir = 'BULLISH' if proj_sum > 0 else ('BEARISH' if proj_sum < 0 else 'NEUTRAL')
+            cvd_conf = min(0.99, max(0.50, 0.50 + abs(proj_sum) * 0.15))
 
-        cvd_conf, cvd_unc_mult, price_dir, price_conf = 0.0, 1.0, 'UNAVAILABLE', 0.0
+        # Price Direction from completed sequence and Auction profile
+        if not frame.empty and len(frame) >= 16:
+            p_close = frame.close.to_numpy(dtype=float)
+            price_change = p_close[-1] - p_close[0]
+            price_dir = "BULLISH" if price_change > 0 else ("BEARISH" if price_change < 0 else "NEUTRAL")
+            price_conf = min(0.95, max(0.50, 0.50 + (abs(price_change) / (p_close[-1] + 1e-9)) * 10.0))
+        else:
+            price_dir = "UNAVAILABLE"
+            price_conf = 0.0
+
+        cvd_unc_mult = 1.0
 
         effective_max_risk = MAX_RISK_USD
 
@@ -817,11 +837,9 @@ class RealtimeSignalEvaluator:
         # Strict Bar Completion Invariant (AGENTS.md & Goldfish Finding 2)
 
         sig_time_ms = int(sig.get("time_ms") or 0)
-
         now_ms = time.time() * 1000
-
-        if sig_time_ms > 0 and (sig_time_ms + 900_000) > now_ms:
-
+        is_bar_closed = (sig_time_ms > 0 and (sig_time_ms + 900_000) <= now_ms) or sig.get("bar_closed") is True
+        if not is_bar_closed:
             validation_errors.append('BAR_NOT_CLOSED_INTRA_BAR_WICK')
 
         is_macro = sym in ('EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'XAUUSD', 'XAGUSD', 'SPX500', 'NDX100', 'DJI30', 'US500', 'US100', 'US30') or sig.get('asset_class') in ('Forex', 'Metals', 'Indices', 'Metals_Commodities')

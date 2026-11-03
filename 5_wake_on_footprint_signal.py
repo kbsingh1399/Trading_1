@@ -63,7 +63,7 @@ ROOT_DIR = Path(__file__).resolve().parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from Terminal.runtime_io import atomic_json, acquire_singleton, writer_lock
+from Terminal.runtime_io import atomic_json, acquire_singleton, writer_lock, FileMutex
 from Terminal.realtime_signal_evaluator import RealtimeSignalEvaluator
 from Terminal.matchtrader_live_trader import (
     get_matchtrader_tab,
@@ -168,6 +168,9 @@ def format_confluence_card(alert: Dict[str, Any]) -> str:
     fib_pocket = alert.get("fib_prime_pocket", {})
     fib_pocket_str = f"EMA55=${fib_pocket.get('ema55', 0.0):,.2f} | EMA59=${fib_pocket.get('ema59', 0.0):,.2f} | EMA233=${fib_pocket.get('ema233', 0.0):,.2f} (Pocket: {fib_pocket.get('dist_55_59_pct', 0.0):.2f}%)" if fib_pocket.get('ema55') else "N/A"
 
+    delta_prod_res = delta_client.resolve_product(sym)
+    delta_prod_sym = delta_prod_res.get("symbol", "N/A") if isinstance(delta_prod_res, dict) else (delta_prod_res or "N/A")
+
     lines = [
         "",
         "╔" + "═" * 82 + "╗",
@@ -183,7 +186,7 @@ def format_confluence_card(alert: Dict[str, Any]) -> str:
         f"║  Trade Geometry:   Entry=${trade.get('entry_price', 0.0):,.4f} | SL=${trade.get('stop_loss', 0.0):,.4f} (-{trade.get('sl_pct', 0.0)}%)".ljust(83) + "║",
         f"║                    TP1=${trade.get('take_profit_1', 0.0):,.4f} | TP2=${trade.get('take_profit_2', 0.0):,.4f} | R:R={trade.get('rr_ratio', 0.0)}:1".ljust(83) + "║",
         f"║  Risk Allocation:  Lots={lots} | Risk=${risk_usd:.2f} (Cap: ${trade.get('hard_max_risk_usd', MAX_RISK_USD):.2f})".ljust(83) + "║",
-        f"║  Delta Exchange:   Authorized={'✅ YES (AUTO-DISPATCH READY)' if is_actionable and delta_client.resolve_product(sym) else ('❌ NO (SUB-THRESHOLD)' if not is_actionable else '⚠️ NO PRODUCT')} | Product={delta_client.resolve_product(sym) or 'N/A'} (10x Leverage)".ljust(83) + "║",
+        f"║  Delta Exchange:   Authorized={'✅ YES (AUTO-DISPATCH READY)' if is_actionable and delta_prod_res else ('❌ NO (SUB-THRESHOLD)' if not is_actionable else '⚠️ NO PRODUCT')} | Product={delta_prod_sym} (10x Leverage)".ljust(83) + "║",
         f"║  MatchTrader:      Authorized={'✅ YES' if mtr_auth else '❌ NO'} | Symbol={alert.get('matchtrader_symbol', 'N/A')}".ljust(83) + "║",
         "╟" + "─" * 82 + "╢",
         f"║  Auction Profile:  Day VWAP: {vwap_str}".ljust(83) + "║",
@@ -362,7 +365,9 @@ class FootprintSignalSentinel:
                     delta_product = delta_client.resolve_product(sym)
                     if delta_product:
                         logger.info(f"🚀 [DELTA AUTO-WAKE] Routing {sym} ({direction}) to Delta Exchange India ({delta_product})...")
-                        dispatch_res = await asyncio.to_thread(delta_client.execute_delta_signal, eval_res)
+                        order_lock_file = str(DB_DIR / ".locks" / "order_execution_inflight.lock")
+                        with FileMutex(order_lock_file, timeout=15.0):
+                            dispatch_res = await asyncio.to_thread(delta_client.execute_delta_signal, eval_res)
                         logger.info(f"✨ Delta Exchange India Dispatch Result: {dispatch_res}")
                     else:
                         logger.warning(f"No Delta Exchange product resolved for {sym}; cannot execute.")
@@ -596,8 +601,8 @@ class FootprintSignalSentinel:
     async def run_daemon(self):
         """Continuous reactive daemon watching footprint_signals.jsonl with zero CPU lag."""
         logger.info(f"Starting continuous Reactive Sentinel on {FOOTPRINT_SIGNALS_JSONL.name}...")
-        logger.info(f"Target Account: FundingPips MatchTrader {TARGET_ACCOUNT_NUMBER}")
-        logger.info(f"Prop-Firm Guardrails: Daily Floor ${EQUITY_FLOOR_DAILY:,.2f} | Total Floor ${EQUITY_FLOOR_TOTAL:,.2f} | Max Open {MAX_CONCURRENT_POSITIONS}")
+        logger.info(f"Execution Venue: Delta Exchange India (Active Direct REST/WebSocket API)")
+        logger.info(f"Exchange Risk Guardrails: Hard Equity Floor ${HARD_FLOOR_USD:,.2f} | Max Risk/Trade ${MAX_RISK_USD:.2f} | Max Concurrent Positions {MAX_OPEN_POSITIONS}")
 
         loop = asyncio.get_running_loop()
         observer = None

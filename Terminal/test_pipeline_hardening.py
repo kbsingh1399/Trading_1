@@ -177,6 +177,7 @@ def test_liquidation_direction_and_real_evaluator_api(side, expected):
     from datetime import datetime, timezone
     result = evaluator.evaluate_signal({'symbol': 'BTC', 'mt5_symbol': 'BTCUSD',
         'sig_name': 'Liquidation Exhaustion', 'sig_code': 'LIQ_REV_SPIKE', 'side': side,
-        'price': 100, 'datetime_utc': datetime.now(timezone.utc).isoformat()})
+        'price': 100, 'datetime_utc': datetime.now(timezone.utc).isoformat(),
+        'bar_closed': True})
     assert result['direction'] == expected
     assert result['is_actionable'] is True
