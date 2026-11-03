@@ -1,0 +1,50 @@
+{
+  "HBARUSD": {
+    "symbol": "HBARUSD",
+    "product_id": 18288,
+    "direction": "BUY",
+    "entry_price": 0.06941,
+    "initial_sl": 0.0688,
+    "initial_tp": 0.07063,
+    "initial_risk_dist": 0.0006099999999999994,
+    "current_tier": 0,
+    "size": 100,
+    "last_ratchet_price": 0.0688
+  },
+  "TRXUSD": {
+    "symbol": "TRXUSD",
+    "product_id": 20193,
+    "direction": "BUY",
+    "entry_price": 0.32274,
+    "initial_sl": 0.3201,
+    "initial_tp": 0.32802,
+    "initial_risk_dist": 0.002640000000000031,
+    "current_tier": 0,
+    "size": 1,
+    "last_ratchet_price": 0.3201
+  },
+  "ARUSD": {
+    "symbol": "ARUSD",
+    "product_id": 21523,
+    "direction": "SELL",
+    "entry_price": 3.133,
+    "initial_sl": 3.1914,
+    "initial_tp": 3.016,
+    "initial_risk_dist": 0.058399999999999785,
+    "current_tier": 0,
+    "size": 1,
+    "last_ratchet_price": 3.1914
+  },
+  "SUSHIUSD": {
+    "symbol": "SUSHIUSD",
+    "product_id": 21525,
+    "direction": "SELL",
+    "entry_price": 0.1921,
+    "initial_sl": 0.1934,
+    "initial_tp": 0.1891,
+    "initial_risk_dist": 0.0012999999999999956,
+    "current_tier": 0,
+    "size": 1,
+    "last_ratchet_price": 0.1934
+  }
+}

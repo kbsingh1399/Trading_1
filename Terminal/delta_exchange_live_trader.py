@@ -21,6 +21,12 @@ from Terminal.risk_envelope import (
     MIN_RR_RATIO,
     validate_trade_geometry
 )
+from Terminal.position_anchors import (
+    register_position_anchor,
+    get_or_recover_anchor,
+    update_anchor_tier,
+    prune_closed_positions
+)
 
 logger = logging.getLogger("DeltaExchangeTrader")
 logger.setLevel(logging.INFO)
@@ -490,6 +496,17 @@ class DeltaExchangeTrader:
         current_reward = abs(current_tp - fill_price)
         current_rr = current_reward / max(actual_risk, 1e-8)
 
+        register_position_anchor(
+            symbol=symbol,
+            product_id=prod_id,
+            direction=pos_direction,
+            entry_price=fill_price,
+            initial_sl=calibrated_sl,
+            initial_tp=calibrated_tp,
+            size=size,
+            initial_risk_dist=actual_risk
+        )
+
         if current_rr < min_rr or abs(calibrated_tp - current_tp) > float(prod.get("tick_size", 0.01)):
             edit_res = self.edit_order(
                 order_id=tp_order["id"],
@@ -531,6 +548,7 @@ class DeltaExchangeTrader:
             logger.warning(f"Could not load live tickers for trailing SL: {e}")
 
         open_orders = self.get_open_orders()
+        prune_closed_positions([p.get("product_symbol", "") for p in active_positions])
 
         for pos in active_positions:
             p_sym = pos.get("product_symbol", "")
@@ -567,21 +585,36 @@ class DeltaExchangeTrader:
                 continue
 
             cur_sl_price = float(sl_order.get("stop_price", 0.0) or 0.0)
-            risk_dist = abs(entry_price - cur_sl_price)
-            if risk_dist <= 0:
+            cur_tp_price = float(tp_order.get("stop_price", 0.0) or 0.0) if tp_order else None
+
+            # Retrieve immutable initial risk anchor (R0)
+            anchor = get_or_recover_anchor(
+                symbol=p_sym,
+                product_id=prod_id,
+                direction=direction,
+                entry_price=entry_price,
+                cur_sl_price=cur_sl_price,
+                cur_tp_price=cur_tp_price,
+                size=abs(size),
+                contract_val=float(prod.get("contract_value", 1.0) or 1.0),
+                max_risk_usd=MAX_RISK_USD
+            )
+            r0 = float(anchor.get("initial_risk_dist", 0.0))
+            cur_tier = int(anchor.get("current_tier", 0))
+
+            if r0 <= 0:
                 continue
 
-            # Calculate current profit in R-multiples
+            # Calculate current profit in R0-multiples
             unrealized_dist = dir_mult * (mark_price - entry_price)
-            r_gain = unrealized_dist / risk_dist
+            r_gain = unrealized_dist / r0
 
-            # Check R:R compliance on TP
-            if tp_order:
-                cur_tp_price = float(tp_order.get("stop_price", 0.0) or 0.0)
+            # Check R:R compliance on TP relative to R0
+            if tp_order and cur_tp_price:
                 reward_dist = abs(cur_tp_price - entry_price)
-                rr = reward_dist / risk_dist
+                rr = reward_dist / r0
                 if rr < 1.95:  # Margin for rounding
-                    target_tp = entry_price + (dir_mult * 2.0 * risk_dist)
+                    target_tp = entry_price + (dir_mult * 2.0 * r0)
                     self.edit_order(
                         order_id=tp_order["id"],
                         product_id=prod_id,
@@ -596,40 +629,43 @@ class DeltaExchangeTrader:
                         "rr": 2.0
                     })
 
-            # Multi-Tier Trailing SL State Machine
+            # Monotonic Multi-Tier Trailing SL State Machine
             target_sl = None
+            target_tier = cur_tier
             tier_tag = None
 
-            if r_gain >= 3.0:
-                # Tier 3 (+2R Profit Lock)
-                target_sl = entry_price + (dir_mult * 2.0 * risk_dist)
+            if r_gain >= 3.0 and cur_tier < 3:
+                # Tier 3 (+2R0 Profit Lock)
+                target_sl = entry_price + (dir_mult * 2.0 * r0)
+                target_tier = 3
                 tier_tag = "TIER_3_PLUS_2R_LOCK"
-            elif r_gain >= 2.0:
-                # Tier 2 (+1R Profit Lock and widen TP)
-                target_sl = entry_price + (dir_mult * 1.0 * risk_dist)
+            elif r_gain >= 2.0 and cur_tier < 2:
+                # Tier 2 (+1R0 Profit Lock and widen TP)
+                target_sl = entry_price + (dir_mult * 1.0 * r0)
+                target_tier = 2
                 tier_tag = "TIER_2_PLUS_1R_LOCK"
-                if tp_order:
-                    # Widen TP to +3R so position can achieve Tier 3
-                    widen_tp = entry_price + (dir_mult * 3.0 * risk_dist)
-                    cur_tp_val = float(tp_order.get("stop_price", 0.0) or 0.0)
-                    if (direction == "BUY" and widen_tp > cur_tp_val) or (direction == "SELL" and widen_tp < cur_tp_val):
+                if tp_order and cur_tp_price:
+                    # Widen TP to +3R0 so position can achieve Tier 3
+                    widen_tp = entry_price + (dir_mult * 3.0 * r0)
+                    if (direction == "BUY" and widen_tp > cur_tp_price) or (direction == "SELL" and widen_tp < cur_tp_price):
                         self.edit_order(
                             order_id=tp_order["id"],
                             product_id=prod_id,
                             size=abs(size),
                             stop_price=widen_tp
                         )
-            elif r_gain >= 1.0:
+            elif r_gain >= 1.0 and cur_tier < 1:
                 # Tier 1 (Breakeven + 1 tick buffer)
                 target_sl = entry_price + (dir_mult * 1.0 * tick_size)
+                target_tier = 1
                 tier_tag = "TIER_1_BREAKEVEN"
 
             # Monotonicity & Validity Checks
-            if target_sl is not None and tier_tag is not None:
+            if target_sl is not None and target_tier > cur_tier:
                 # Check monotonic improvement (never move SL backwards)
                 is_better = (target_sl > cur_sl_price + tick_size * 0.5) if direction == "BUY" else (target_sl < cur_sl_price - tick_size * 0.5)
-                # Check stop trigger validity (must not trigger immediately)
-                is_valid_trigger = (target_sl < mark_price) if direction == "BUY" else (target_sl > mark_price)
+                # Check stop trigger validity (must preserve buffer against mark_price)
+                is_valid_trigger = (target_sl < mark_price - tick_size) if direction == "BUY" else (target_sl > mark_price + tick_size)
 
                 if is_better and is_valid_trigger:
                     try:
@@ -640,7 +676,8 @@ class DeltaExchangeTrader:
                             stop_price=target_sl
                         )
                         if edit_res.get("success"):
-                            logger.info(f"🛡️ [{p_sym}] Ratcheted Stop Loss to {target_sl} ({tier_tag}, gain: +{r_gain:.2f}R, mark: {mark_price})")
+                            update_anchor_tier(p_sym, target_tier, target_sl)
+                            logger.info(f"🛡️ [{p_sym}] Ratcheted Stop Loss to {target_sl} ({tier_tag}, gain: +{r_gain:.2f}R0, mark: {mark_price})")
                             reports.append({
                                 "symbol": p_sym,
                                 "action": "RATCHET_SL",

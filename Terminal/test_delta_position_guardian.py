@@ -191,3 +191,56 @@ def test_monotonic_ratchet_rejects_adverse_move(trader):
                     sl_ratchets = [r for r in reports if r.get("action") == "RATCHET_SL"]
                     assert len(sl_ratchets) == 0
                     mock_edit.assert_not_called()
+
+
+def test_r0_stability_after_breakeven(trader, tmp_path):
+    """
+    Verifies that once SL is moved to Breakeven (+1 tick), R0 remains anchored
+    to the initial 0.00061 risk distance, preventing denominator collapse.
+    """
+    from Terminal.position_anchors import register_position_anchor
+    register_position_anchor(
+        symbol='HBARUSD',
+        product_id=18288,
+        direction='BUY',
+        entry_price=0.06941,
+        initial_sl=0.06880,
+        initial_tp=0.07063,
+        size=100,
+        initial_risk_dist=0.00061
+    )
+
+    # Position is currently at 0.07005 (+1.05R0), and SL is ALREADY at Breakeven (0.06942)
+    pos = {'product_symbol': 'HBARUSD', 'size': 100, 'entry_price': '0.06941', 'mark_price': '0.07005'}
+    sl_order = {'id': 501, 'product_id': 18288, 'stop_order_type': 'stop_loss_order', 'side': 'sell', 'size': 100, 'stop_price': '0.06942'}
+    tp_order = {'id': 502, 'product_id': 18288, 'stop_order_type': 'take_profit_order', 'side': 'sell', 'size': 100, 'stop_price': '0.07063'}
+
+    with patch.object(trader, 'get_active_positions', return_value=[pos]):
+        with patch.object(trader, 'get_open_orders', return_value=[sl_order, tp_order]):
+            with patch.object(trader, 'request', return_value={'result': [{'symbol': 'HBARUSD', 'mark_price': '0.07005'}]}):
+                with patch.object(trader, 'edit_order') as mock_edit:
+                    reports = trader.audit_and_trail_positions()
+                    # Since Tier 1 is already achieved and price is < +2.0R0, no edits should be fired!
+                    mock_edit.assert_not_called()
+
+
+def test_cold_start_recovery_from_tp(trader):
+    """
+    Verifies that on a cold start without prior anchor records,
+    R0 is recovered via TP inverse calculation (|TP - Entry| / 2.0).
+    """
+    from Terminal.position_anchors import get_or_recover_anchor, ANCHORS_FILE
+    if ANCHORS_FILE.exists():
+        ANCHORS_FILE.unlink()
+
+    anchor = get_or_recover_anchor(
+        symbol='HBARUSD',
+        product_id=18288,
+        direction='BUY',
+        entry_price=0.06941,
+        cur_sl_price=0.06942,  # Already at Breakeven
+        cur_tp_price=0.07063,  # 2.0:1 TP
+        size=100
+    )
+    # Recovered R0 should be (0.07063 - 0.06941) / 2 = 0.00061
+    assert round(anchor['initial_risk_dist'], 5) == 0.00061
