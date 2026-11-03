@@ -183,7 +183,8 @@ def format_confluence_card(alert: Dict[str, Any]) -> str:
         f"║  Trade Geometry:   Entry=${trade.get('entry_price', 0.0):,.4f} | SL=${trade.get('stop_loss', 0.0):,.4f} (-{trade.get('sl_pct', 0.0)}%)".ljust(83) + "║",
         f"║                    TP1=${trade.get('take_profit_1', 0.0):,.4f} | TP2=${trade.get('take_profit_2', 0.0):,.4f} | R:R={trade.get('rr_ratio', 0.0)}:1".ljust(83) + "║",
         f"║  Risk Allocation:  Lots={lots} | Risk=${risk_usd:.2f} (Cap: ${trade.get('hard_max_risk_usd', MAX_RISK_USD):.2f})".ljust(83) + "║",
-        f"║  MatchTrader:      Authorized={'✅ YES (LIVE DISPATCH)' if mtr_auth else '❌ NO'} | Symbol={alert.get('matchtrader_symbol', 'N/A')}".ljust(83) + "║",
+        f"║  Delta Exchange:   Authorized={'✅ YES (AUTO-DISPATCH READY)' if is_actionable and delta_client.resolve_product(sym) else ('❌ NO (SUB-THRESHOLD)' if not is_actionable else '⚠️ NO PRODUCT')} | Product={delta_client.resolve_product(sym) or 'N/A'} (10x Leverage)".ljust(83) + "║",
+        f"║  MatchTrader:      Authorized={'✅ YES' if mtr_auth else '❌ NO'} | Symbol={alert.get('matchtrader_symbol', 'N/A')}".ljust(83) + "║",
         "╟" + "─" * 82 + "╢",
         f"║  Auction Profile:  Day VWAP: {vwap_str}".ljust(83) + "║",
         f"║  Value Area:       {poc_vah_val}".ljust(83) + "║",
@@ -200,6 +201,17 @@ def format_confluence_card(alert: Dict[str, Any]) -> str:
     ]
     for r in reasons:
         lines.append(f"║    • {r}".ljust(83) + "║")
+    
+    five_p = alert.get("five_pillar_justification", {})
+    if five_p:
+        lines.append("╟" + "─" * 82 + "╢")
+        lines.append("║  🏛️ 5-PILLAR FORMULATION JUSTIFICATION:".ljust(83) + "║")
+        lines.append(f"║   1. Footprint & Cluster: {five_p.get('pillar_1_footprint_signals', 'N/A')[:60]}".ljust(83) + "║")
+        lines.append(f"║   2. Auction & Value:     {five_p.get('pillar_2_auction_value', 'N/A')[:60]}".ljust(83) + "║")
+        lines.append(f"║   3. Live TV Liquidations: {five_p.get('pillar_3_live_liquidations', 'N/A')[:59]}".ljust(83) + "║")
+        lines.append(f"║   4. Liquidation Heatmap: {five_p.get('pillar_4_liquidation_heatmap', 'N/A')[:60]}".ljust(83) + "║")
+        lines.append(f"║   5. Whales & Sweeps:     {five_p.get('pillar_5_whales_and_sweeps', 'N/A')[:60]}".ljust(83) + "║")
+    
     lines.append("╚" + "═" * 82 + "╝")
     lines.append("")
     return "\n".join(lines)
@@ -268,19 +280,49 @@ class FootprintSignalSentinel:
         return new_signals
 
     async def evaluate_and_dispatch(self, raw_signals: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Evaluates each newly harvested raw footprint signal and executes live trades if qualified."""
+        """Groups raw signals into candle clusters, evaluates each candle once, and auto-dispatches to Delta Exchange."""
+        from collections import defaultdict
         evaluations = []
         now_ms = time.time() * 1000
 
-        for raw in raw_signals:
+        # 1. Group signals on the exact same (symbol, time_ms) candle
+        candle_clusters = defaultdict(list)
+        for s in raw_signals:
+            s_sym = s.get("symbol", "N/A")
+            s_t = int(s.get("time_ms") or 0)
+            candle_clusters[(s_sym, s_t)].append(s)
+
+        for (sym, t_ms), cluster in candle_clusters.items():
             try:
-                sym = raw.get("symbol", "N/A")
+                # If multiple signals fired on the exact same candle, form a unified cluster
+                if len(cluster) > 1:
+                    names = [s.get("sig_name", s.get("title", "Signal")) for s in cluster]
+                    sides = [str(s.get("side", s.get("sig_side", ""))).lower() for s in cluster]
+                    all_bull = all(s in ("buy", "bullish") for s in sides)
+                    all_bear = all(s in ("sell", "bearish") for s in sides)
+                    primary_raw = dict(cluster[0])
+                    primary_raw["is_cluster"] = True
+                    primary_raw["cluster_signals"] = cluster
+                    primary_raw["cluster_signal_names"] = names
+                    if all_bull:
+                        primary_raw["cluster_agreement"] = "UNANIMOUS_BULLISH"
+                        primary_raw["side"] = "bullish"
+                    elif all_bear:
+                        primary_raw["cluster_agreement"] = "UNANIMOUS_BEARISH"
+                        primary_raw["side"] = "bearish"
+                    else:
+                        primary_raw["cluster_agreement"] = "DISCORDANT_CONFLICT"
+                    primary_raw["sig_name"] = " + ".join(names)
+                    primary_raw["title"] = f"Multi-Signal Cluster ({len(names)}): " + " & ".join(names)
+                    raw = primary_raw
+                else:
+                    raw = cluster[0]
+                    raw["is_cluster"] = False
+
                 sig_name = raw.get("sig_name", raw.get("title", "Signal"))
                 side = raw.get("side", raw.get("sig_side", "N/A"))
-                t_ms = int(raw.get("time_ms") or 0)
 
                 # Strict Bar Completion Invariant (AGENTS.md & Goldfish Finding 2)
-                # 15m candle must be fully closed before order execution
                 is_bar_closed = (t_ms > 0 and (t_ms + 900_000) <= now_ms) or raw.get("bar_closed") is True
                 if not is_bar_closed:
                     mins_remaining = max(0.0, ((t_ms + 900_000) - now_ms) / 60000.0)
@@ -293,7 +335,7 @@ class FootprintSignalSentinel:
                 c_ist = str(raw.get("candle_ist") or "")
 
                 # Phase 1: Immediate Ingest Log
-                logger.info(f"⚡ [WAKE EVENT] {sym} {sig_name} ({side}) @ ${price_val:,.4f} | Candle: {c_ist} | Title: '{title}' | Detail: '{desc}'")
+                logger.info(f"⚡ [WAKE EVENT] {sym} {sig_name} ({side}) @ ${price_val:,.4f} | Candle: {c_ist} | Detail: '{desc}'")
 
                 # Phase 2: Multi-factor quantitative evaluation offloaded to thread
                 eval_res = await asyncio.to_thread(self.evaluator.evaluate_signal, raw)
@@ -303,38 +345,27 @@ class FootprintSignalSentinel:
                 is_actionable = eval_res.get("is_actionable", False)
                 direction = eval_res.get("direction", "NEUTRAL")
 
-                # 2. Print formatted Trade Confluence Card
+                # Phase 3: Formatted Trade Confluence Card
                 card = format_confluence_card(eval_res)
                 print(card, flush=True)
 
-                                # 3. Actionable Trade Dispatch (Dual-Venue Smart Dispatch)
+                # Phase 4: Actionable Trade Dispatch (Direct Delta Exchange India Auto-Wake Execution)
                 if is_actionable and direction in ("BUY", "SELL"):
                     if winsound is not None:
                         try:
                             winsound.Beep(1200, 450)
                         except Exception:
                             pass
-                    print("", end="", flush=True)
+                    print(" ", end="", flush=True)
 
-                    logger.info(f"⚡ CONFLUENCE THRESHOLD ACHIEVED: {score:.1f}/100 >= 75.0! Initiating Live Order Execution...")
-
-                    mtr_sym = matchtrader_symbol(sym) or SYMBOL_TO_MATCHTRADER.get(sym)
-                    dispatched = False
-                    if mtr_sym:
-                        logger.info(f"Routing {sym} to MatchTrader Prop Account ({mtr_sym})...")
-                        dispatch_res = await execute_signal(eval_res)
-                        logger.info(f"MatchTrader Dispatch Result: {dispatch_res}")
-                        dispatched = dispatch_res.get("ok", False)
-
-                        # If MatchTrader is full or rejected, and asset is crypto, failover to Delta Exchange India
-                        if not dispatched and delta_client.resolve_product(sym):
-                            logger.info(f"MatchTrader rejected ({dispatch_res.get('reason')}). Attempting failover to Delta Exchange India...")
-                            delta_res = await asyncio.to_thread(delta_client.execute_delta_signal, eval_res)
-                            logger.info(f"Delta Exchange India Failover Result: {delta_res}")
-                    else:
-                        logger.info(f"Routing {sym} to Delta Exchange India Live Venue...")
+                    logger.info(f"⚡ CONFLUENCE THRESHOLD ACHIEVED: {score:.1f}/100 >= 75.0! Initiating Live Delta Exchange Execution...")
+                    delta_product = delta_client.resolve_product(sym)
+                    if delta_product:
+                        logger.info(f"🚀 [DELTA AUTO-WAKE] Routing {sym} ({direction}) to Delta Exchange India ({delta_product})...")
                         dispatch_res = await asyncio.to_thread(delta_client.execute_delta_signal, eval_res)
-                        logger.info(f"Delta Exchange India Dispatch Result: {dispatch_res}")
+                        logger.info(f"✨ Delta Exchange India Dispatch Result: {dispatch_res}")
+                    else:
+                        logger.warning(f"No Delta Exchange product resolved for {sym}; cannot execute.")
 
                     self.state["dispatched_trades_count"] += 1
                     save_state(self.state)
@@ -342,7 +373,7 @@ class FootprintSignalSentinel:
                     logger.info(f"[EVALUATOR] {sym} {direction} Confluence Score: {score:.1f}/100 -> Filtered (Required >= 75.0)")
 
             except Exception as e:
-                logger.error(f"Error processing signal for {raw.get('symbol')}: {e}", exc_info=True)
+                logger.error(f"Error processing signal cluster for {sym}: {e}", exc_info=True)
 
         return evaluations
 

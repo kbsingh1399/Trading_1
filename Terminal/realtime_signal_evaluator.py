@@ -325,6 +325,7 @@ class RealtimeSignalEvaluator:
         confluence_score = 40.0
 
         reasons = [f"Signal: {sig_name} ({sig_side})"]
+        validation_errors = []
         direction = "NEUTRAL"
 
         is_auction_valid = bool(auction.get("data_valid", False))
@@ -603,6 +604,20 @@ class RealtimeSignalEvaluator:
 
 
 
+        # 3.55 Multi-Signal Candle Cluster Confluence Boost (Intra-Bar Stacking)
+        cluster = sig.get("cluster_signals") or []
+        cluster_agreement = sig.get("cluster_agreement", "")
+        if cluster and len(cluster) >= 2:
+            sig_names_str = " + ".join(s.get("sig_name", s.get("title", "Sig")) for s in cluster)
+            if cluster_agreement in ("UNANIMOUS_BULLISH", "UNANIMOUS_BEARISH"):
+                cluster_boost = 20.0 if len(cluster) >= 3 else 15.0
+                confluence_score += cluster_boost
+                reasons.append(f"Multi-Signal Candle Cluster ({len(cluster)} signals): {sig_names_str} aligned {direction} (+{cluster_boost:.0f}pts)")
+            elif cluster_agreement == "DISCORDANT_CONFLICT":
+                confluence_score -= 20.0
+                reasons.append(f"Intra-Bar Signal Conflict: Opposing signals on same candle ({sig_names_str}) (-20pts)")
+                validation_errors.append("INTRA_BAR_SIGNAL_CONFLICT")
+
         # 3.6 Empirical 300-Bar Statistical Edge
         emp_adj = float(emp_edge.get("confluence_adj", 0.0))
         if emp_adj != 0:
@@ -777,7 +792,7 @@ class RealtimeSignalEvaluator:
 
 
 
-        validation_errors = []
+        # validation_errors already initialized at start
 
         if sig_price <= 0 or atr_pct <= 0:
 
@@ -863,7 +878,19 @@ class RealtimeSignalEvaluator:
         critic_audit = {"status": "SKIPPED"}
         if getattr(self, 'critic_engine', None) is not None and direction in ('BUY', 'SELL') and entry > 0:
             ema233_val = float(auction.get("ema233", 0.0) or auction.get("day_vwap", 0.0) or 0.0)
-            cvd_slope_val = float(cvd.get("slope", 0.0) or 0.0)
+            raw_slope = cvd.get("slope") if cvd.get("slope") is not None else cvd.get("cvd_slope")
+            if isinstance(raw_slope, (int, float)):
+                cvd_slope_val = float(raw_slope)
+            elif isinstance(raw_slope, str):
+                s_upper = raw_slope.upper()
+                if "BEARISH" in s_upper or "SHORT" in s_upper:
+                    cvd_slope_val = -1.0
+                elif "BULLISH" in s_upper or "LONG" in s_upper:
+                    cvd_slope_val = 1.0
+                else:
+                    cvd_slope_val = 0.0
+            else:
+                cvd_slope_val = 0.0
             has_absorption_sig = bool("absorption" in sig_name.lower() or "delta_divergence" in sig_name.lower())
 
             knife_vetoed, knife_reason, _ = self.critic_engine.check_microstructure_knife_veto(
@@ -1271,7 +1298,15 @@ class RealtimeSignalEvaluator:
 
             "confluence_reasons": reasons,
 
-            "critic_audit": critic_audit
+            "critic_audit": critic_audit,
+
+            "five_pillar_justification": {
+                "pillar_1_footprint_signals": f"{sig_name} ({sig_side}) @ ${entry:,.4f} | Delta: {sig.get('delta', 'N/A')} | CVD: {cvd_slope}" + (f" | Multi-Signal Cluster: {sig.get('cluster_signal_names')}" if sig.get('is_cluster') else ""),
+                "pillar_2_auction_value": f"Day VWAP: ${day_vwap:,.4f} ({p_vs_vwap}) | Value Area: VAH=${day_vah:,.4f}, VAL=${day_val:,.4f} ({val_status}) | Fib Pocket: {fib_align} (EMA55=${ema55:,.4f}, EMA233=${ema233:,.4f})",
+                "pillar_3_live_liquidations": f"TV Liq Spike: {has_tv_liq_spike} (Bias: {tv_liq_bias}, Exhaustion: {tv_liq_exhaustion:.0f}/100, LongLiq: ${tv_liq_long_usd:,.0f}, ShortLiq: ${tv_liq_short_usd:,.0f})" if has_tv_liq_spike else "No active live TV liquidation blow-off spike on 15m window (normal flow)",
+                "pillar_4_liquidation_heatmap": f"Near-Field Shorts: {near_field_shorts:.1f}% vs Longs: {100-near_field_shorts:.1f}% | Nearest Magnet: {short_magnets[0].get('zone_price') if direction=='BUY' and short_magnets else (long_magnets[0].get('zone_price') if direction=='SELL' and long_magnets else 'N/A')}",
+                "pillar_5_whales_and_sweeps": f"Whale Book Imbalance: {whale_imbalance*100:.1f}% Bids vs {(1-whale_imbalance)*100:.1f}% Asks | Sweeps: {sweep_bias} (Net: ${net_whale_flow/1e6:+.2f}M filled)"
+            }
 
         }
 

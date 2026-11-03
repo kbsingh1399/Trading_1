@@ -427,8 +427,50 @@ class TradeCriticEngine:
                 max_sim = max(0.0, min(1.0, 1.0 - (dist * dist) / 2.0))
                 matched_row = first
 
+            # Causal Grounding Verification:
+            # Prevents template semantic false-positives where surface phrasing is similar
+            # but the actual physical/order-flow pathology of the failure mode is NOT present.
+            is_causally_grounded = True
+            unmet_reason = ""
+            matched_mode = matched_row["failure_mode"] if matched_row is not None else ""
+
+            if matched_mode == FAILURE_WHALE_WALL_TRAP:
+                if dir_clean in ("BUY", "LONG") and whale_imbalance > -0.30:
+                    is_causally_grounded = False
+                    unmet_reason = f"Whale imbalance ({whale_imbalance:+.2f}) does not indicate adverse ask wall resistance"
+                elif dir_clean in ("SELL", "SHORT") and whale_imbalance < 0.30:
+                    is_causally_grounded = False
+                    unmet_reason = f"Whale imbalance ({whale_imbalance:+.2f}) does not indicate adverse bid wall support"
+
+            elif matched_mode == FAILURE_FALLING_KNIFE_LONG:
+                if dir_clean in ("BUY", "LONG") and cvd_slope >= 0.0:
+                    is_causally_grounded = False
+                    unmet_reason = f"CVD slope ({cvd_slope:+.2f}) is positive/bullish, not dumping"
+
+            elif matched_mode == FAILURE_PARABOLIC_SQUEEZE_SHORT:
+                if dir_clean in ("SELL", "SHORT") and cvd_slope <= 0.0:
+                    is_causally_grounded = False
+                    unmet_reason = f"CVD slope ({cvd_slope:+.2f}) is negative/bearish, not pumping"
+
+            elif matched_mode == FAILURE_LOW_RR_CHOP:
+                if rr_ratio >= 2.0:
+                    is_causally_grounded = False
+                    unmet_reason = f"Planned R:R ({rr_ratio:.2f}:1) satisfies strict 2:1 mandate"
+
+            elif matched_mode == FAILURE_UNEXHAUSTED_CASCADE:
+                if liq_regime not in ("BEARISH_REVERSAL", "LONG_LIQ_DOMINANT") and cvd_slope >= 0.0:
+                    is_causally_grounded = False
+                    unmet_reason = "No active long liquidation cascade or dumping CVD flow"
+
             # Decision Gates
-            if max_sim >= 0.88:
+            if not is_causally_grounded:
+                verdict = "CLEAR"
+                penalty = 0.0
+                reason = (
+                    f"Candidate shares semantic phrasing with [{matched_mode}] ({max_sim*100:.1f}%), "
+                    f"but actual causal risk is absent: {unmet_reason}. Cleared for execution."
+                )
+            elif max_sim >= 0.88:
                 verdict = "HARD_VETO"
                 penalty = 100.0
                 reason = (
