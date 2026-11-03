@@ -171,8 +171,8 @@ def extract_prior_day_levels(df: pd.DataFrame, today_date) -> Dict[str, Any]:
                     "pd_val": round(pd_val, 4)
                 }
     return {
-        "pd_date": None, "pdh": None, "pdl": None, "pdc": None,
-        "pd_half_back": None, "pd_vwap": None, "pd_poc": None, "pd_vah": None, "pd_val": None
+        "pd_date": "", "pdh": 0.0, "pdl": 0.0, "pdc": 0.0,
+        "pd_half_back": 0.0, "pd_vwap": 0.0, "pd_poc": 0.0, "pd_vah": 0.0, "pd_val": 0.0
     }
 
 
@@ -252,9 +252,10 @@ def compute_htf_alignment(df: pd.DataFrame) -> Dict[str, Any]:
 
 def extract_microstructure_levels(symbol: str, current_price: float) -> Dict[str, Any]:
     """Queries live Whale Order Walls & Liquidation Magnet Zones."""
+    empty_level = {"price": 0.0, "amount_usd": 0.0, "score": 0.0}
     result = {
-        "nearest_whale_bid": None, "nearest_whale_ask": None,
-        "nearest_long_liq_magnet": None, "nearest_short_liq_magnet": None
+        "nearest_whale_bid": dict(empty_level), "nearest_whale_ask": dict(empty_level),
+        "nearest_long_liq_magnet": dict(empty_level), "nearest_short_liq_magnet": dict(empty_level)
     }
     
     # 1. Whale Walls
@@ -437,13 +438,13 @@ def compute_auction_profile(symbol: str) -> Dict[str, Any]:
         active_session = "ASIA" if cur_hour < 8 else ("LONDON" if cur_hour < 13 else ("NEW_YORK" if cur_hour < 21 else "ASIA"))
 
         asia_df = today_df[today_df["dt"].dt.hour < 8]
-        asia_vwap = float(asia_df["pv"].sum() / asia_df["total_volume"].sum()) if not asia_df.empty and asia_df["total_volume"].sum() > 0 else None
+        asia_vwap = float(asia_df["pv"].sum() / asia_df["total_volume"].sum()) if not asia_df.empty and asia_df["total_volume"].sum() > 0 else day_vwap
 
         london_df = today_df[(today_df["dt"].dt.hour >= 8) & ((today_df["dt"].dt.hour < 16) | ((today_df["dt"].dt.hour == 16) & (today_df["dt"].dt.minute <= 30)))]
-        london_vwap = float(london_df["pv"].sum() / london_df["total_volume"].sum()) if not london_df.empty and london_df["total_volume"].sum() > 0 else None
+        london_vwap = float(london_df["pv"].sum() / london_df["total_volume"].sum()) if not london_df.empty and london_df["total_volume"].sum() > 0 else day_vwap
 
         ny_df = today_df[((today_df["dt"].dt.hour == 13) & (today_df["dt"].dt.minute >= 30)) | ((today_df["dt"].dt.hour > 13) & (today_df["dt"].dt.hour < 21))]
-        ny_vwap = float(ny_df["pv"].sum() / ny_df["total_volume"].sum()) if not ny_df.empty and ny_df["total_volume"].sum() > 0 else None
+        ny_vwap = float(ny_df["pv"].sum() / ny_df["total_volume"].sum()) if not ny_df.empty and ny_df["total_volume"].sum() > 0 else day_vwap
 
         # 7. Fibonacci Prime EMAs (15m)
         fib_emas = compute_fib_prime_emas(df["close"])
@@ -511,9 +512,9 @@ def compute_auction_profile(symbol: str) -> Dict[str, Any]:
             
             # Session VWAPs
             "active_session": active_session,
-            "asia_vwap": round(asia_vwap, 4) if asia_vwap else None,
-            "london_vwap": round(london_vwap, 4) if london_vwap else None,
-            "ny_vwap": round(ny_vwap, 4) if ny_vwap else None,
+            "asia_vwap": round(asia_vwap, 4) if asia_vwap else round(day_vwap, 4),
+            "london_vwap": round(london_vwap, 4) if london_vwap else round(day_vwap, 4),
+            "ny_vwap": round(ny_vwap, 4) if ny_vwap else round(day_vwap, 4),
             
             # Fibonacci-Prime EMAs (15m)
             "ema5": round(fib_emas.get("ema5", 0.0), 4),
@@ -564,6 +565,8 @@ def save_symbol_auction_level(symbol: str, profile: Dict[str, Any]):
         for k, v in profile.items():
             if isinstance(v, (dict, list)):
                 flat_record[k] = json.dumps(v)
+            elif v is None:
+                flat_record[k] = 0.0 if any(term in k for term in ["vwap", "price", "ema", "pd", "level", "sd"]) else ""
             else:
                 flat_record[k] = v
         df = pd.DataFrame([flat_record])
@@ -593,6 +596,8 @@ def update_all_auction_profiles() -> Dict[str, Any]:
             for k, v in prof.items():
                 if isinstance(v, (dict, list)):
                     flat_rec[k] = json.dumps(v)
+                elif v is None:
+                    flat_rec[k] = 0.0 if any(term in k for term in ["vwap", "price", "ema", "pd", "level", "sd"]) else ""
                 else:
                     flat_rec[k] = v
             records.append(flat_rec)

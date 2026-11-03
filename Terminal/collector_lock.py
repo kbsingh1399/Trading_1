@@ -236,13 +236,17 @@ def is_scheduled_for_other_collector(current_minute: int, collector_type: str) -
     """
     Two-Tier TDMA Deconfliction Engine:
     Guarantees mathematically ZERO overlapping browser executions across all scrapers.
+    - Whale sweeps: minutes [0, 1, 15, 16, 35, 36, 50, 51]
+    - Liquidation sweeps: minutes [10, 11, 12, 25, 26, 27, 55, 56, 57]
+    - Footprint scraper: strictly EVEN minutes outside Whale/Liq blocks (e.g. 2, 4, 6, 8, 14, 18...)
+    - TV scraper: strictly ODD minutes outside Whale/Liq blocks (e.g. 3, 5, 7, 9, 13, 17...)
     """
     if collector_type == "footprint":
-        # Footprint yields during all Whale and Liquidation macro blocks
-        return (current_minute in WHALE_RESERVED_MINUTES) or (current_minute in LIQUIDATION_RESERVED_MINUTES)
+        # Footprint strictly runs on even unreserved minutes
+        return (current_minute % 2 != 0) or (current_minute in WHALE_RESERVED_MINUTES) or (current_minute in LIQUIDATION_RESERVED_MINUTES)
     elif collector_type == "tv":
-        # TV Scraper yields during all Whale and Liquidation macro blocks
-        return (current_minute in WHALE_RESERVED_MINUTES) or (current_minute in LIQUIDATION_RESERVED_MINUTES)
+        # TV scraper strictly runs on odd unreserved minutes
+        return (current_minute % 2 == 0) or (current_minute in WHALE_RESERVED_MINUTES) or (current_minute in LIQUIDATION_RESERVED_MINUTES)
     elif collector_type == "whale":
         return current_minute in LIQUIDATION_RESERVED_MINUTES
     elif collector_type == "liquidation":

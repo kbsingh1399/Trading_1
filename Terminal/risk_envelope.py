@@ -257,3 +257,49 @@ def validate_trade_geometry(
         return False, f"POOR_REWARD_TO_RISK: R:R {rr:.2f} < Min required {MIN_RR_RATIO:.2f}"
 
     return True, "OK"
+
+
+def solve_volume_ortools(
+    loss_per_lot_step: float,
+    volume_step: float = 0.01,
+    min_lot: float = 0.01,
+    max_lot: float = 100.0,
+    current_equity: float = 5000.0,
+    current_balance: float = 5000.0,
+    committed_risk_usd: float = 0.0,
+    active_open_positions: int = 0,
+    confluence_score: float = 80.0,
+    reward_risk_ratio: float = 2.0,
+    max_risk_cap_usd: float = MAX_RISK_USD,
+    min_risk_floor_usd: float = MIN_RISK_USD
+) -> Tuple[Optional[float], str, float]:
+    """
+    Google OR-Tools Mixed-Integer Programming solver for optimal discrete lot sizing.
+    Combines exact MILP optimization with FundingPips survival constraints.
+    """
+    try:
+        from Terminal.ortools_lot_solver import solve_optimal_lot_ortools
+        vol, status, risk, _ = solve_optimal_lot_ortools(
+            loss_per_lot_step=loss_per_lot_step,
+            volume_step=volume_step,
+            min_lot=min_lot,
+            max_lot=max_lot,
+            current_equity=current_equity,
+            current_balance=current_balance,
+            committed_risk_usd=committed_risk_usd,
+            active_open_positions=active_open_positions,
+            confluence_score=confluence_score,
+            reward_risk_ratio=reward_risk_ratio,
+            max_risk_cap_usd=max_risk_cap_usd,
+            min_risk_floor_usd=min_risk_floor_usd
+        )
+        return vol, status, risk
+    except Exception as e:
+        return admissible_volume(
+            loss_per_lot_step=loss_per_lot_step,
+            volume_step=volume_step,
+            min_lot=min_lot,
+            max_lot=max_lot,
+            floor_usd=min_risk_floor_usd,
+            cap_usd=max_risk_cap_usd
+        )

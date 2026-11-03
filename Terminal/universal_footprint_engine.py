@@ -250,9 +250,9 @@ class UniversalFootprintEngine:
 
         # Signal tracking columns
         df["has_signal"] = False
-        df["signal_type"] = None
-        df["signal_side"] = None
-        df["signal_desc"] = None
+        df["signal_type"] = ""
+        df["signal_side"] = ""
+        df["signal_desc"] = ""
 
         # Detect signals across the entire DataFrame
         signals = []
