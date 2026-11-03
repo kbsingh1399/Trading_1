@@ -556,29 +556,23 @@ class RealtimeSignalEvaluator:
 
 
 
-        # 3.5 CoinGlass TV Live Liquidation Reversal Confluence
-
+        # 3.5 CoinGlass TV Live Liquidation Reversal Confluence (Big Liquidation Flush Reversals)
         tv_liq = self.query_live_tv_liquidations(sym)
-
-        has_tv_liq_spike = bool(tv_liq.get("recent_spike", False))
-
+        has_tv_liq_spike = bool(tv_liq.get("recent_spike", False) or tv_liq.get("is_spike", False))
         tv_liq_bias = tv_liq.get("reversal_bias", "NEUTRAL")
-
         tv_liq_exhaustion = self._finite(tv_liq.get("exhaustion_score"), 0.0)
-
-        tv_liq_long_usd = self._finite(tv_liq.get("latest_long_liq_usd"), 0.0)
-
-        tv_liq_short_usd = self._finite(tv_liq.get("latest_short_liq_usd"), 0.0)
+        tv_liq_long_usd = self._finite(tv_liq.get("latest_long_liq_usd") or tv_liq.get("long_liq_usd"), 0.0)
+        tv_liq_short_usd = self._finite(tv_liq.get("latest_short_liq_usd") or tv_liq.get("short_liq_usd"), 0.0)
+        tv_liq_total_usd = self._finite(tv_liq.get("total_liq_usd"), 0.0)
 
 
 
         if direction == "BUY":
 
             if has_tv_liq_spike and tv_liq_bias == "BULLISH_REVERSAL":
-
-                confluence_score += 15
-
-                reasons.append(f"CoinGlass TV Long Liq Capitulation Reversal (Exhaustion {tv_liq_exhaustion:.0f}/100, Long Liq ${tv_liq_long_usd:,.0f})")
+                boost = 20 if (tv_liq_exhaustion >= 70.0 or tv_liq_long_usd >= 100_000.0) else 15
+                confluence_score += boost
+                reasons.append(f"CoinGlass TV Long Liq Capitulation Reversal (Exhaustion {tv_liq_exhaustion:.0f}/100, Long Liq ${tv_liq_long_usd:,.0f}, Boost +{boost}pts)")
 
             elif has_tv_liq_spike and tv_liq_bias == "BEARISH_REVERSAL":
 
@@ -589,10 +583,9 @@ class RealtimeSignalEvaluator:
         elif direction == "SELL":
 
             if has_tv_liq_spike and tv_liq_bias == "BEARISH_REVERSAL":
-
-                confluence_score += 15
-
-                reasons.append(f"CoinGlass TV Short Liq Blow-Off Reversal (Exhaustion {tv_liq_exhaustion:.0f}/100, Short Liq ${tv_liq_short_usd:,.0f})")
+                boost = 20 if (tv_liq_exhaustion >= 70.0 or tv_liq_short_usd >= 100_000.0) else 15
+                confluence_score += boost
+                reasons.append(f"CoinGlass TV Short Liq Blow-Off Reversal (Exhaustion {tv_liq_exhaustion:.0f}/100, Short Liq ${tv_liq_short_usd:,.0f}, Boost +{boost}pts)")
 
             elif has_tv_liq_spike and tv_liq_bias == "BULLISH_REVERSAL":
 
@@ -671,30 +664,30 @@ class RealtimeSignalEvaluator:
             if direction == "BUY":
                 sl = round(entry * (1.0 - sl_pct), 6)
                 risk_dist_init = abs(entry - sl)
-                vwap_target = day_vwap if day_vwap > entry else entry + 1.8 * risk_dist_init
-                # Target Extension Invariant: If VWAP is too close (< 1.5R), extend to Opposite Value Area High (day_vah)
-                if abs(vwap_target - entry) < 1.5 * risk_dist_init:
-                    tp1_target = max(day_vah, entry + 1.8 * risk_dist_init) if day_vah > entry else entry + 1.8 * risk_dist_init
-                    reasons.append(f"Model 1: Dynamic Target Extension to Opposite Value Area (VAH ${tp1_target:,.2f}) for R:R >= 1.5")
+                vwap_target = day_vwap if day_vwap > (entry + 2.0 * risk_dist_init) else entry + 2.0 * risk_dist_init
+                # Target Extension Invariant: Strict R:R >= 2.0:1 required
+                if abs(vwap_target - entry) < 2.0 * risk_dist_init:
+                    tp1_target = max(day_vah, entry + 2.0 * risk_dist_init) if day_vah > entry else entry + 2.0 * risk_dist_init
+                    reasons.append(f"Model 1: Dynamic Target Extension to Opposite Value Area (VAH ${tp1_target:,.2f}) for R:R >= 2.0")
                 else:
                     tp1_target = vwap_target
-                    reasons.append(f"Model 1: Target Fair Value Day VWAP (${tp1_target:,.2f})")
-                tp1 = round(tp1_target, 6)
-                tp2 = round(max(tp1 * 1.015, day_vah if day_vah > 0 else tp1 * 1.015), 6)
+                    reasons.append(f"Model 1: Target Fair Value Day VWAP (${tp1_target:,.2f}) [R:R >= 2.0]")
+                tp1 = round(max(tp1_target, entry + 2.0 * risk_dist_init), 6)
+                tp2 = round(entry + 3.0 * risk_dist_init, 6)
 
             elif direction == "SELL":
                 sl = round(entry * (1.0 + sl_pct), 6)
                 risk_dist_init = abs(entry - sl)
-                vwap_target = day_vwap if day_vwap < entry else entry - 1.8 * risk_dist_init
-                # Target Extension Invariant: If VWAP is too close (< 1.5R), extend to Opposite Value Area Low (day_val)
-                if abs(entry - vwap_target) < 1.5 * risk_dist_init:
-                    tp1_target = min(day_val, entry - 1.8 * risk_dist_init) if 0 < day_val < entry else entry - 1.8 * risk_dist_init
-                    reasons.append(f"Model 1: Dynamic Target Extension to Opposite Value Area (VAL ${tp1_target:,.2f}) for R:R >= 1.5")
+                vwap_target = day_vwap if day_vwap < (entry - 2.0 * risk_dist_init) else entry - 2.0 * risk_dist_init
+                # Target Extension Invariant: Strict R:R >= 2.0:1 required
+                if abs(entry - vwap_target) < 2.0 * risk_dist_init:
+                    tp1_target = min(day_val, entry - 2.0 * risk_dist_init) if 0 < day_val < entry else entry - 2.0 * risk_dist_init
+                    reasons.append(f"Model 1: Dynamic Target Extension to Opposite Value Area (VAL ${tp1_target:,.2f}) for R:R >= 2.0")
                 else:
                     tp1_target = vwap_target
-                    reasons.append(f"Model 1: Target Fair Value Day VWAP (${tp1_target:,.2f})")
-                tp1 = round(tp1_target, 6)
-                tp2 = round(min(tp1 * 0.985, day_val if day_val > 0 else tp1 * 0.985), 6)
+                    reasons.append(f"Model 1: Target Fair Value Day VWAP (${tp1_target:,.2f}) [R:R >= 2.0]")
+                tp1 = round(min(tp1_target, entry - 2.0 * risk_dist_init), 6)
+                tp2 = round(entry - 3.0 * risk_dist_init, 6)
             else:
                 sl, tp1, tp2 = entry, entry, entry
 
@@ -710,7 +703,7 @@ class RealtimeSignalEvaluator:
 
                 if short_magnets and len(short_magnets) >= 1:
                     sm_p1 = float(short_magnets[0].get("zone_price", 0.0))
-                    if sm_p1 > entry * 1.006:
+                    if sm_p1 >= entry + 2.0 * abs(entry - sl):
                         tp1 = round(sm_p1, 6)
                     else:
                         tp1 = round(entry + 2.0 * abs(entry - sl), 6)
@@ -729,7 +722,7 @@ class RealtimeSignalEvaluator:
 
                 if long_magnets and len(long_magnets) >= 1:
                     lm_p1 = float(long_magnets[0].get("zone_price", 0.0))
-                    if 0 < lm_p1 < entry * 0.994:
+                    if 0 < lm_p1 <= entry - 2.0 * abs(entry - sl):
                         tp1 = round(lm_p1, 6)
                     else:
                         tp1 = round(entry - 2.0 * abs(entry - sl), 6)
@@ -742,22 +735,24 @@ class RealtimeSignalEvaluator:
         else: # MODEL_0_FILTERED_BOUNDARY
             if direction == "BUY":
                 sl = round(entry * (1.0 - sl_pct), 6)
-                tp1_target = entry * (1.0 + sl_pct * 1.8)
+                risk_dist_init = abs(entry - sl)
+                tp1_target = entry + 2.0 * risk_dist_init
                 if short_magnets and len(short_magnets) >= 1:
                     sm_p1 = float(short_magnets[0].get("zone_price", 0.0))
-                    if sm_p1 > entry * 1.006 and sm_p1 <= entry * (1.0 + sl_pct * 2.8):
+                    if sm_p1 >= entry + 2.0 * risk_dist_init:
                         tp1_target = sm_p1
-                tp1 = round(poc_price if (poc_price and poc_price > entry * (1.0 + sl_pct) and not short_magnets) else tp1_target, 6)
-                tp2 = round(entry * (1.0 + sl_pct * 3.0), 6)
+                tp1 = round(tp1_target, 6)
+                tp2 = round(entry + 3.0 * risk_dist_init, 6)
             elif direction == "SELL":
                 sl = round(entry * (1.0 + sl_pct), 6)
-                tp1_target = entry * (1.0 - sl_pct * 1.8)
+                risk_dist_init = abs(entry - sl)
+                tp1_target = entry - 2.0 * risk_dist_init
                 if long_magnets and len(long_magnets) >= 1:
                     lm_p1 = float(long_magnets[0].get("zone_price", 0.0))
-                    if lm_p1 < entry * 0.994 and lm_p1 >= entry * (1.0 - sl_pct * 2.8):
+                    if 0 < lm_p1 <= entry - 2.0 * risk_dist_init:
                         tp1_target = lm_p1
-                tp1 = round(poc_price if (poc_price and poc_price < entry * (1.0 - sl_pct) and not long_magnets) else tp1_target, 6)
-                tp2 = round(entry * (1.0 - sl_pct * 3.0), 6)
+                tp1 = round(tp1_target, 6)
+                tp2 = round(entry - 3.0 * risk_dist_init, 6)
             else:
                 sl, tp1, tp2 = entry, entry, entry
 
