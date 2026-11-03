@@ -16,14 +16,14 @@ Guarantees & Remediated Architecture (Goldfish Audit Validated):
    - Live TV Liquidation spikes & reversal exhaustion (4_coinglass_tv_scraper.py)
    - Google DeepMind TimesFM 2.5 zero-shot drift & quantile forecasting
    - Auction Profile: Day VWAP, Value Area (VAH/VAL/POC), Fib-Prime EMAs
-5. Strict Prop Firm Risk Guardrails & MatchTrader Live Order Dispatch:
+5. Strict Risk Guardrails & Delta Exchange India Live Order Dispatch:
    - If Confluence Score >= 75.0/100 on completed bar:
-     * Audits MatchTrader Account 101305360 ($95K daily floor, $90K total floor)
+     * Audits Delta Exchange India account
      * Auto-dispatches live market order with protective SL and TP
      * Locks WARP IP rotation during execution via Database/.locks/order_execution_inflight.lock
      * Emits audible terminal bell (winsound.Beep + ASCII bell)
      * Prints prominent visual Trade Confluence Card to stdout
-6. Active Management of MatchTrader Running Trades:
+6. Active Management of Delta Exchange Running Trades:
    - Tracks open positions, unrealized PnL, and distance to Stop Loss / Take Profit
    - Enforces -$500.00 (0.5% max risk) emergency circuit breaker and trailing break-even targets
 ========================================================================================
@@ -87,7 +87,7 @@ FOOTPRINT_SIGNALS_JSONL = SIGNALS_DIR / "footprint_signals.jsonl"
 EVALUATED_ALERTS_JSONL = SIGNALS_DIR / "realtime_trade_alerts.jsonl"
 STATE_FILE = DB_DIR / ".wake_on_footprint_state.json"
 
-# Strict Prop Firm Risk Constants (FundingPips MatchTrader $5,000 Challenge Account 101305360)
+# Strict Risk Envelope Constants (Delta Exchange India)
 from Terminal.risk_envelope import (
     MAX_RISK_USD,          # $25.00
     HARD_FLOOR_USD,        # $4,775.00
@@ -148,7 +148,7 @@ def format_confluence_card(alert: Dict[str, Any]) -> str:
     auction = alert.get("auction_profile", {})
     reasons = alert.get("confluence_reasons", [])
     is_actionable = alert.get("is_actionable", False)
-    mtr_auth = alert.get("matchtrader_execution_authorized", False)
+    # MatchTrader excised
     lots = trade.get("admissible_lots", "N/A")
     risk_usd = trade.get("realized_risk_usd", 0.0)
 
@@ -444,7 +444,7 @@ class FootprintSignalSentinel:
             return {}
 
     async def inspect_and_manage_running_trades(self):
-        """Monitors MatchTrader & Delta Exchange positions, verifies risk, and conducts post-mortems on losses."""
+        """Monitors Delta Exchange positions, verifies risk, and executes trailing stop loss."""
         now = time.time()
         if now - self.last_pos_check_ts < 15.0:
             return
@@ -660,7 +660,7 @@ class FootprintSignalSentinel:
                         self.state["processed_signals_count"] += len(new_signals)
                         save_state(self.state)
 
-                    # 2. Guardian check on MatchTrader open positions
+                    # 2. Guardian check on Delta Exchange open positions
                     await self.inspect_and_manage_running_trades()
 
                 except asyncio.CancelledError:

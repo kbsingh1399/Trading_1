@@ -64,7 +64,7 @@ def run_audit():
     buffer_pct = (avail_balance / max(total_balance, 1e-8)) * 100.0 if total_balance > 0 else 0.0
     print(f"  • Total USD Balance:     ${total_balance:.4f}")
     print(f"  • Available Free Margin: ${avail_balance:.4f} ({buffer_pct:.1f}% free buffer)")
-    print(f"  • Margin Buffer Check:   {'PASS (>=20%)' if buffer_pct >= 20.0 or avail_balance >= 0.50 else 'WARNING'}")
+    print(f"  • Margin Buffer Check:   {'PASS (>=20%)' if buffer_pct >= 20.0 else 'WARNING'}")
     print(f"  • Max Risk / Trade Cap:  ${MAX_RISK_USD:.2f}")
 
 if __name__ == "__main__":

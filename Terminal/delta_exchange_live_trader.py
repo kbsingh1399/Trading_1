@@ -74,22 +74,20 @@ def load_credentials() -> Dict[str, str]:
 
 # Canonical pre-populated product metadata for zero-network resolution in tests
 DEFAULT_PRODUCTS = {
-    "BTCUSD": {"id": 1, "symbol": "BTCUSD", "underlying": "BTC", "contract_value": 0.001, "tick_size": 0.5, "default_leverage": 10.0, "status": "operational"},
-    "ETHUSD": {"id": 2, "symbol": "ETHUSD", "underlying": "ETH", "contract_value": 0.01, "tick_size": 0.05, "default_leverage": 10.0, "status": "operational"},
-    "SOLUSD": {"id": 3, "symbol": "SOLUSD", "underlying": "SOL", "contract_value": 0.1, "tick_size": 0.01, "default_leverage": 10.0, "status": "operational"},
-    "XRPUSD": {"id": 4, "symbol": "XRPUSD", "underlying": "XRP", "contract_value": 1.0, "tick_size": 0.0001, "default_leverage": 10.0, "status": "operational"},
-    "LTCUSD": {"id": 5, "symbol": "LTCUSD", "underlying": "LTC", "contract_value": 0.1, "tick_size": 0.01, "default_leverage": 10.0, "status": "operational"},
-    "DOGEUSD": {"id": 6, "symbol": "DOGEUSD", "underlying": "DOGE", "contract_value": 10.0, "tick_size": 0.00001, "default_leverage": 10.0, "status": "operational"},
-    "BNBUSD": {"id": 7, "symbol": "BNBUSD", "underlying": "BNB", "contract_value": 0.01, "tick_size": 0.1, "default_leverage": 10.0, "status": "operational"},
-    "AVAXUSD": {"id": 8, "symbol": "AVAXUSD", "underlying": "AVAX", "contract_value": 0.1, "tick_size": 0.01, "default_leverage": 10.0, "status": "operational"},
-    "LINKUSD": {"id": 9, "symbol": "LINKUSD", "underlying": "LINK", "contract_value": 0.1, "tick_size": 0.001, "default_leverage": 10.0, "status": "operational"},
-    "NEARUSD": {"id": 10, "symbol": "NEARUSD", "underlying": "NEAR", "contract_value": 1.0, "tick_size": 0.001, "default_leverage": 10.0, "status": "operational"},
-    "SUIUSD": {"id": 11, "symbol": "SUIUSD", "underlying": "SUI", "contract_value": 1.0, "tick_size": 0.0001, "default_leverage": 10.0, "status": "operational"},
-    "TRXUSD": {"id": 12, "symbol": "TRXUSD", "underlying": "TRX", "contract_value": 10.0, "tick_size": 0.00001, "default_leverage": 10.0, "status": "operational"},
-    "1INCHUSD": {"id": 13, "symbol": "1INCHUSD", "underlying": "1INCH", "contract_value": 1.0, "tick_size": 0.0001, "default_leverage": 10.0, "status": "operational"},
-    "ZECUSD": {"id": 98573, "symbol": "ZECUSD", "underlying": "ZEC", "contract_value": 0.1, "tick_size": 0.01, "default_leverage": 10.0, "status": "operational"},
-    "SUSHIUSD": {"id": 14, "symbol": "SUSHIUSD", "underlying": "SUSHI", "contract_value": 1.0, "tick_size": 0.0001, "default_leverage": 10.0, "status": "operational"},
-    "ARUSD": {"id": 15, "symbol": "ARUSD", "underlying": "AR", "contract_value": 0.1, "tick_size": 0.001, "default_leverage": 10.0, "status": "operational"}
+    "BTCUSD": {"id": 1, "symbol": "BTCUSD", "underlying": "BTC", "contract_value": 0.001, "tick_size": 0.5, "default_leverage": 100.0, "status": "operational"},
+    "ETHUSD": {"id": 2, "symbol": "ETHUSD", "underlying": "ETH", "contract_value": 0.01, "tick_size": 0.05, "default_leverage": 100.0, "status": "operational"},
+    "SOLUSD": {"id": 3, "symbol": "SOLUSD", "underlying": "SOL", "contract_value": 0.1, "tick_size": 0.01, "default_leverage": 50.0, "status": "operational"},
+    "XRPUSD": {"id": 4, "symbol": "XRPUSD", "underlying": "XRP", "contract_value": 1.0, "tick_size": 0.0001, "default_leverage": 50.0, "status": "operational"},
+    "DOGEUSD": {"id": 5, "symbol": "DOGEUSD", "underlying": "DOGE", "contract_value": 10.0, "tick_size": 0.00001, "default_leverage": 50.0, "status": "operational"},
+    "BNBUSD": {"id": 6, "symbol": "BNBUSD", "underlying": "BNB", "contract_value": 0.1, "tick_size": 0.05, "default_leverage": 50.0, "status": "operational"},
+    "SUIUSD": {"id": 7, "symbol": "SUIUSD", "underlying": "SUI", "contract_value": 1.0, "tick_size": 0.0001, "default_leverage": 20.0, "status": "operational"},
+    "NEARUSD": {"id": 16615, "symbol": "NEARUSD", "underlying": "NEAR", "contract_value": 1.0, "tick_size": 0.0001, "default_leverage": 20.0, "status": "operational"},
+    "TRXUSD": {"id": 20193, "symbol": "TRXUSD", "underlying": "TRX", "contract_value": 1.0, "tick_size": 0.00001, "default_leverage": 50.0, "status": "operational"},
+    "LTCUSD": {"id": 10, "symbol": "LTCUSD", "underlying": "LTC", "contract_value": 0.1, "tick_size": 0.01, "default_leverage": 50.0, "status": "operational"},
+    "LINKUSD": {"id": 15041, "symbol": "LINKUSD", "underlying": "LINK", "contract_value": 1.0, "tick_size": 0.001, "default_leverage": 20.0, "status": "operational"},
+    "ARUSD": {"id": 21523, "symbol": "ARUSD", "underlying": "AR", "contract_value": 1.0, "tick_size": 0.001, "default_leverage": 20.0, "status": "operational"},
+    "SUSHIUSD": {"id": 21525, "symbol": "SUSHIUSD", "underlying": "SUSHI", "contract_value": 1.0, "tick_size": 0.0001, "default_leverage": 20.0, "status": "operational"},
+    "HBARUSD": {"id": 18288, "symbol": "HBARUSD", "underlying": "HBAR", "contract_value": 1.0, "tick_size": 0.00001, "default_leverage": 10.0, "status": "operational"}
 }
 
 
@@ -338,13 +336,20 @@ class DeltaExchangeTrader:
 
     def quantize_price(self, price: float, product_id: int) -> str:
         """Quantizes price to the instrument's exact legal tick size and precision."""
-        prod = next((p for p in self.products_cache.values() if p.get("id") == product_id), None)
+        from decimal import Decimal
+        p_val = float(price)
+        prod = next((p for p in self.products_cache.values() if int(p.get("id", 0)) == int(product_id)), None)
         tick = float(prod.get("tick_size", 0.01)) if prod else 0.01
         if tick <= 0:
             tick = 0.01
-        quantized = round(price / tick) * tick
-        decimals = max(0, -int(math.floor(math.log10(tick)))) if tick < 1.0 else 0
+        quantized = round(p_val / tick) * tick
+        tick_dec = Decimal(str(tick)).normalize()
+        decimals = max(0, -tick_dec.as_tuple().exponent)
         return f"{quantized:.{decimals}f}"
+
+    def cancel_order(self, order_id: int, product_id: int) -> Dict[str, Any]:
+        """Cancels an existing order on Delta Exchange India."""
+        return self.request("DELETE", "/v2/orders", body={"id": int(order_id), "product_id": int(product_id)})
 
     def get_open_orders(self) -> List[Dict[str, Any]]:
         """Returns all open and pending conditional orders (including bracket TP/SL)."""
@@ -413,8 +418,7 @@ class DeltaExchangeTrader:
         body: Dict[str, Any] = {
             "id": int(order_id),
             "product_id": int(product_id),
-            "size": int(size),
-            "reduce_only": bool(reduce_only)
+            "size": int(size)
         }
         if stop_price is not None:
             body["stop_price"] = self.quantize_price(stop_price, product_id)
@@ -527,15 +531,46 @@ class DeltaExchangeTrader:
 
     def audit_and_trail_positions(self) -> List[Dict[str, Any]]:
         """
-        Audits all active Delta Exchange positions, enforces R:R >= 2.0, and ratchets
-        trailing stop-loss to Breakeven (+1R) and trailing profit locks (+2R, +3R).
+        Audits all active Delta Exchange positions, enforces R:R >= 2.0, ratchets
+        trailing stop-loss monotonically, recovers naked positions, and cancels orphaned ghost orders.
         """
         reports = []
-        active_positions = self.get_active_positions()
+        raw_positions = self.get_active_positions()
+        if raw_positions is None:
+            return reports
+
+        active_positions = [p for p in raw_positions if int(p.get("size", 0)) != 0]
+        active_symbols = [p.get("product_symbol", "") for p in active_positions]
+
+        # Invariant 1: Always prune closed positions immediately (even if 0 remain)
+        prune_closed_positions(active_symbols)
+
+        # Invariant 2: Orphaned ghost orders cleanup (cancel resting orders for closed positions)
+        active_sym_set = {
+            s.upper().replace(".PI", "").replace("USDT", "").replace("USD", "") + "USD"
+            for s in active_symbols if s
+        }
+        open_orders = self.get_open_orders()
+        for o in open_orders:
+            raw_sym = o.get("product_symbol") or ""
+            if not raw_sym:
+                prod = next((p for p in self.products_cache.values() if int(p.get("id", 0)) == int(o.get("product_id", -1))), None)
+                if prod:
+                    raw_sym = prod.get("symbol", "")
+            if not raw_sym:
+                continue
+            osym = raw_sym.upper().replace(".PI", "").replace("USDT", "").replace("USD", "") + "USD"
+            if osym not in active_sym_set:
+                logger.warning(f"[{osym}] Detected orphaned resting order #{o.get('id')} with position closed. Cancelling!")
+                try:
+                    self.cancel_order(o.get("id"), o.get("product_id"))
+                except Exception as ex:
+                    logger.debug(f"Error cancelling orphaned order: {ex}")
+
         if not active_positions:
             return reports
 
-        # 1. Fetch live mark prices via bulk tickers endpoint
+        # Live mark prices
         mark_prices = {}
         try:
             t_res = self.request("GET", "/v2/tickers")
@@ -547,8 +582,8 @@ class DeltaExchangeTrader:
         except Exception as e:
             logger.warning(f"Could not load live tickers for trailing SL: {e}")
 
+        # Refresh open orders after orphan cancellation
         open_orders = self.get_open_orders()
-        prune_closed_positions([p.get("product_symbol", "") for p in active_positions])
 
         for pos in active_positions:
             p_sym = pos.get("product_symbol", "")
@@ -560,6 +595,7 @@ class DeltaExchangeTrader:
             if not prod:
                 continue
             prod_id = prod["id"]
+            contract_val = float(prod.get("contract_value", 1.0) or 1.0)
             tick_size = float(prod.get("tick_size", 0.01) or 0.01)
 
             entry_price = float(pos.get("entry_price", 0.0) or 0.0)
@@ -570,24 +606,64 @@ class DeltaExchangeTrader:
             direction = "BUY" if size > 0 else "SELL"
             dir_mult = 1.0 if direction == "BUY" else -1.0
 
-            # Locate associated Stop-Loss and Take-Profit orders
+            # Match SL and TP orders
             sl_order = None
             tp_order = None
             for o in open_orders:
-                if o.get("product_id") == prod_id:
+                if int(o.get("product_id", 0)) == prod_id:
                     s_type = str(o.get("stop_order_type", "")).lower()
                     if "stop_loss" in s_type:
                         sl_order = o
                     elif "take_profit" in s_type:
                         tp_order = o
 
+            # --- NAKED POSITION RECOVERY ---
             if not sl_order:
-                continue
+                cur_tp_price = float(tp_order.get("stop_price", 0.0)) if tp_order else None
+                anchor = get_or_recover_anchor(
+                    symbol=p_sym,
+                    product_id=prod_id,
+                    direction=direction,
+                    entry_price=entry_price,
+                    cur_sl_price=0.0,
+                    cur_tp_price=cur_tp_price,
+                    size=abs(size),
+                    contract_val=contract_val,
+                    max_risk_usd=MAX_RISK_USD
+                )
+                r0 = float(anchor.get("initial_risk_dist", 0.0))
+                rec_sl = float(anchor.get("last_ratchet_price") or anchor.get("initial_sl"))
+
+                breached = (mark_price <= rec_sl) if direction == "BUY" else (mark_price >= rec_sl)
+                if breached:
+                    logger.error(f"🚨 [{p_sym}] NAKED POSITION BREACHED STOP LEVEL (${rec_sl:.5f} vs Mark ${mark_price:.5f}). Emergency closing!")
+                    self.close_position(p_sym)
+                    reports.append({"symbol": p_sym, "action": "EMERGENCY_CLOSE_NAKED_BREACH", "mark_price": mark_price, "target_sl": rec_sl})
+                    continue
+
+                sl_body = {
+                    "product_id": prod_id,
+                    "size": abs(size),
+                    "side": "sell" if direction == "BUY" else "buy",
+                    "order_type": "market_order",
+                    "stop_order_type": "stop_loss_order",
+                    "stop_price": self.quantize_price(rec_sl, prod_id),
+                    "stop_trigger_method": "last_traded_price",
+                    "reduce_only": True
+                }
+                res = self.request("POST", "/v2/orders", body=sl_body)
+                order_res = res.get("result", {})
+                if res.get("success") or ("id" in order_res):
+                    logger.info(f"🛡️ [{p_sym}] Attached recovery SL order #{order_res.get('id')} @ {rec_sl}")
+                    reports.append({"symbol": p_sym, "action": "RECOVERED_NAKED_SL", "sl_price": rec_sl, "order_id": order_res.get("id")})
+                    sl_order = order_res
+                else:
+                    logger.error(f"[{p_sym}] Failed to attach recovery SL order: {res}")
+                    continue
 
             cur_sl_price = float(sl_order.get("stop_price", 0.0) or 0.0)
             cur_tp_price = float(tp_order.get("stop_price", 0.0) or 0.0) if tp_order else None
 
-            # Retrieve immutable initial risk anchor (R0)
             anchor = get_or_recover_anchor(
                 symbol=p_sym,
                 product_id=prod_id,
@@ -596,24 +672,22 @@ class DeltaExchangeTrader:
                 cur_sl_price=cur_sl_price,
                 cur_tp_price=cur_tp_price,
                 size=abs(size),
-                contract_val=float(prod.get("contract_value", 1.0) or 1.0),
+                contract_val=contract_val,
                 max_risk_usd=MAX_RISK_USD
             )
             r0 = float(anchor.get("initial_risk_dist", 0.0))
             cur_tier = int(anchor.get("current_tier", 0))
-
             if r0 <= 0:
                 continue
 
-            # Calculate current profit in R0-multiples
             unrealized_dist = dir_mult * (mark_price - entry_price)
             r_gain = unrealized_dist / r0
 
-            # Check R:R compliance on TP relative to R0
+            # TP Calibration check
             if tp_order and cur_tp_price:
                 reward_dist = abs(cur_tp_price - entry_price)
                 rr = reward_dist / r0
-                if rr < 1.95:  # Margin for rounding
+                if rr < 1.95:
                     target_tp = entry_price + (dir_mult * 2.0 * r0)
                     self.edit_order(
                         order_id=tp_order["id"],
@@ -635,17 +709,23 @@ class DeltaExchangeTrader:
             tier_tag = None
 
             if r_gain >= 3.0 and cur_tier < 3:
-                # Tier 3 (+2R0 Profit Lock)
                 target_sl = entry_price + (dir_mult * 2.0 * r0)
                 target_tier = 3
                 tier_tag = "TIER_3_PLUS_2R_LOCK"
+                if tp_order and cur_tp_price:
+                    widen_tp = entry_price + (dir_mult * 4.0 * r0)
+                    if (direction == "BUY" and widen_tp > cur_tp_price) or (direction == "SELL" and widen_tp < cur_tp_price):
+                        self.edit_order(
+                            order_id=tp_order["id"],
+                            product_id=prod_id,
+                            size=abs(size),
+                            stop_price=widen_tp
+                        )
             elif r_gain >= 2.0 and cur_tier < 2:
-                # Tier 2 (+1R0 Profit Lock and widen TP)
                 target_sl = entry_price + (dir_mult * 1.0 * r0)
                 target_tier = 2
                 tier_tag = "TIER_2_PLUS_1R_LOCK"
                 if tp_order and cur_tp_price:
-                    # Widen TP to +3R0 so position can achieve Tier 3
                     widen_tp = entry_price + (dir_mult * 3.0 * r0)
                     if (direction == "BUY" and widen_tp > cur_tp_price) or (direction == "SELL" and widen_tp < cur_tp_price):
                         self.edit_order(
@@ -655,16 +735,12 @@ class DeltaExchangeTrader:
                             stop_price=widen_tp
                         )
             elif r_gain >= 1.0 and cur_tier < 1:
-                # Tier 1 (Breakeven + 1 tick buffer)
                 target_sl = entry_price + (dir_mult * 1.0 * tick_size)
                 target_tier = 1
                 tier_tag = "TIER_1_BREAKEVEN"
 
-            # Monotonicity & Validity Checks
             if target_sl is not None and target_tier > cur_tier:
-                # Check monotonic improvement (never move SL backwards)
                 is_better = (target_sl > cur_sl_price + tick_size * 0.5) if direction == "BUY" else (target_sl < cur_sl_price - tick_size * 0.5)
-                # Check stop trigger validity (must preserve buffer against mark_price)
                 is_valid_trigger = (target_sl < mark_price - tick_size) if direction == "BUY" else (target_sl > mark_price + tick_size)
 
                 if is_better and is_valid_trigger:
@@ -675,7 +751,8 @@ class DeltaExchangeTrader:
                             size=abs(size),
                             stop_price=target_sl
                         )
-                        if edit_res.get("success"):
+                        is_ok = edit_res.get("success") or ("result" in edit_res and "id" in edit_res.get("result", {}))
+                        if is_ok:
                             update_anchor_tier(p_sym, target_tier, target_sl)
                             logger.info(f"🛡️ [{p_sym}] Ratcheted Stop Loss to {target_sl} ({tier_tag}, gain: +{r_gain:.2f}R0, mark: {mark_price})")
                             reports.append({
@@ -688,7 +765,7 @@ class DeltaExchangeTrader:
                                 "mark_price": mark_price
                             })
                         else:
-                            logger.warning(f"[{p_sym}] Failed to ratchet SL: {edit_res.get('error')}")
+                            logger.warning(f"[{p_sym}] Failed to ratchet SL: {edit_res}")
                     except Exception as exc:
                         logger.warning(f"[{p_sym}] Error during SL ratchet: {exc}")
 
@@ -781,11 +858,11 @@ class DeltaExchangeTrader:
         free_cash_mode = os.environ.get("DELTA_FREE_CASH_MODE", "true").lower() in ("true", "1", "yes")
         avail_margin = self.get_available_margin_usd()
 
-        # Capital & Margin Preservation Invariant: available free margin buffer >= 20%
+        # Capital & Margin Preservation Invariant: available free margin buffer >= 20% universal floor
         wb = self.get_wallet_balances()
         usd_item = next((b for b in wb if b.get("asset_symbol") == "USD"), {}) if isinstance(wb, list) else {}
         total_balance = float(usd_item.get("balance", 0.0) or 0.0)
-        if total_balance > 0 and len(active_pos) > 0:
+        if total_balance > 0:
             margin_buffer_pct = (avail_margin / total_balance) * 100.0
             if margin_buffer_pct < 20.0:
                 logger.warning(f"Live dispatch blocked: free margin buffer {margin_buffer_pct:.1f}% is below 20.0% minimum guardrail (${avail_margin:.4f} of ${total_balance:.4f} USD).")
@@ -795,28 +872,13 @@ class DeltaExchangeTrader:
                     "reason": f"INSUFFICIENT_MARGIN_BUFFER: {margin_buffer_pct:.1f}% < 20.0% floor (available=${avail_margin:.4f} USD of ${total_balance:.4f})"
                 }
 
-        if free_cash_mode:
-            # "Till the time we have free cash...keep on trading..."
-            max_limit = int(os.environ.get("MAX_DELTA_POSITIONS", "10"))
-            if len(active_pos) >= max_limit:
-                return {
-                    "ok": False,
-                    "status": "REJECTED",
-                    "reason": f"DELTA_MAX_POSITIONS_REACHED: {len(active_pos)}/{max_limit}"
-                }
-            if avail_margin <= 0.02 and len(active_pos) > 0:
-                return {
-                    "ok": False,
-                    "status": "REJECTED",
-                    "reason": f"INSUFFICIENT_FREE_MARGIN: available=${avail_margin:.2f} USD"
-                }
-        else:
-            if len(active_pos) >= MAX_DELTA_CONCURRENT_POSITIONS:
-                return {
-                    "ok": False,
-                    "status": "REJECTED",
-                    "reason": f"DELTA_MAX_POSITIONS_REACHED: {len(active_pos)}/{MAX_DELTA_CONCURRENT_POSITIONS}"
-                }
+        # Strict Single Source of Truth for Max Open Positions (AGENTS.md Rule 3: Max 2 positions)
+        if len(active_pos) >= MAX_DELTA_CONCURRENT_POSITIONS:
+            return {
+                "ok": False,
+                "status": "REJECTED",
+                "reason": f"DELTA_MAX_POSITIONS_REACHED: {len(active_pos)}/{MAX_DELTA_CONCURRENT_POSITIONS}"
+            }
 
         trade_params = signal.get("trade_parameters") or signal.get("trade_levels") or {}
         entry = float(trade_params.get("entry_price") or signal.get("price") or 0.0)
@@ -868,6 +930,12 @@ class DeltaExchangeTrader:
             req_margin = (entry * contract_val * size) / float(leverage)
             if req_margin > avail_margin:
                 sized_down = int((avail_margin * 0.80 * leverage) / (entry * contract_val))
+                if sized_down < 1:
+                    return {
+                        "ok": False,
+                        "status": "REJECTED",
+                        "reason": f"INSUFFICIENT_MARGIN_FOR_MIN_LOT: required=${req_margin:.4f} > available=${avail_margin:.4f}"
+                    }
                 size = max(1, min(size, sized_down))
                 logger.info(f"Scaled size to {size} contracts to fit available margin (${avail_margin:.2f} USD)")
 

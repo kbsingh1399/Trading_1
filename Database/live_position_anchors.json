@@ -11,17 +11,29 @@
     "size": 100,
     "last_ratchet_price": 0.0688
   },
-  "TRXUSD": {
-    "symbol": "TRXUSD",
-    "product_id": 20193,
+  "LINKUSD": {
+    "symbol": "LINKUSD",
+    "product_id": 15041,
     "direction": "BUY",
-    "entry_price": 0.32274,
-    "initial_sl": 0.3201,
-    "initial_tp": 0.32802,
-    "initial_risk_dist": 0.002640000000000031,
+    "entry_price": 11.157,
+    "initial_sl": 11.066,
+    "initial_tp": 11.338,
+    "initial_risk_dist": 0.0909999999999993,
     "current_tier": 0,
     "size": 1,
-    "last_ratchet_price": 0.3201
+    "last_ratchet_price": 11.066
+  },
+  "NEARUSD": {
+    "symbol": "NEARUSD",
+    "product_id": 16615,
+    "direction": "BUY",
+    "entry_price": 3.88,
+    "initial_sl": 3.8406,
+    "initial_tp": 3.9588,
+    "initial_risk_dist": 0.0394000000000001,
+    "current_tier": 0,
+    "size": 2,
+    "last_ratchet_price": 3.8406
   },
   "ARUSD": {
     "symbol": "ARUSD",
@@ -46,5 +58,17 @@
     "current_tier": 0,
     "size": 1,
     "last_ratchet_price": 0.1934
+  },
+  "TRXUSD": {
+    "symbol": "TRXUSD",
+    "product_id": 20193,
+    "direction": "BUY",
+    "entry_price": 0.32274,
+    "initial_sl": 0.3201,
+    "initial_tp": 0.32802,
+    "initial_risk_dist": 0.00264,
+    "current_tier": 0,
+    "size": 1,
+    "last_ratchet_price": 0.3201
   }
 }

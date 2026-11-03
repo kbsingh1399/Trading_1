@@ -15,7 +15,7 @@ This repository follows Google's **Elephant-Goldfish Model (EGM)** for architect
 - **Lock-Free Atomic Persistence**: Write to temporary `.parquet.tmp` files and atomic-rename via `os.replace`. Never create orphaned `.lock` files inside `Database/Candle_Data`.
 
 ## 3. Strict Live Execution & Risk Guardrails (Delta Exchange India)
-- **Primary Target Venue**: Delta Exchange India authenticated REST API (`Terminal/delta_exchange_live_trader.py`). MatchTrader is completely removed from live routing.
+- **Primary Target Venue**: Delta Exchange India authenticated REST API (`Terminal/delta_exchange_live_trader.py`).
 - **Capital & Margin Preservation**: Available free margin buffer >= 20% to cover taker exchange commissions and eliminate `insufficient_commission` rejections.
 - **Position Limits**: Max 2 concurrent open positions across all instruments (`MAX_OPEN_POSITIONS`).
 - **Risk Sizing**: Max $25.00 (`MAX_RISK_USD`) risk per trade based on stop loss distance and discrete contract grid solver.

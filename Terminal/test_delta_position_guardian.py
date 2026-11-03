@@ -9,6 +9,9 @@ Validates:
 3. Dollar risk cap preservation ($25.00 MAX_RISK_USD) under adverse entry slippage
 4. Multi-tier trailing stop progression (Tier 1 Breakeven, Tier 2 +1R, Tier 3 +2R)
 5. Monotonic stop ratchet invariant (rejection of adverse movement)
+6. Naked position auto-recovery (synthesis of protective SL when unhedged)
+7. Orphaned ghost order cancellation upon position closure
+8. SHORT position trailing stop progression
 ========================================================================================
 """
 
@@ -17,6 +20,14 @@ import math
 from unittest.mock import MagicMock, patch
 from Terminal.delta_exchange_live_trader import DeltaExchangeTrader
 from Terminal.risk_envelope import MAX_RISK_USD
+
+
+@pytest.fixture(autouse=True)
+def isolate_anchors_file(tmp_path):
+    """Ensures unit tests never overwrite or unlink production live_position_anchors.json."""
+    test_anchor_file = tmp_path / "live_position_anchors.json"
+    with patch("Terminal.position_anchors.ANCHORS_FILE", test_anchor_file):
+        yield test_anchor_file
 
 
 @pytest.fixture
@@ -29,6 +40,7 @@ def trader():
                 "ETHUSD": {"id": 2, "symbol": "ETHUSD", "tick_size": "0.05", "contract_value": "0.01"},
                 "DOGEUSD": {"id": 3, "symbol": "DOGEUSD", "tick_size": "0.00001", "contract_value": "100"},
                 "HBARUSD": {"id": 18288, "symbol": "HBARUSD", "tick_size": "0.00001", "contract_value": "1.0"},
+                "SOLUSD": {"id": 4, "symbol": "SOLUSD", "tick_size": "0.25", "contract_value": "1.0"},
             }
             return tr
 
@@ -47,6 +59,11 @@ def test_quantize_price(trader):
     # HBAR (0.00001 tick)
     assert trader.quantize_price(0.069412, 18288) == "0.06941"
     assert trader.quantize_price(0.069418, 18288) == "0.06942"
+
+    # SOL (0.25 tick - fractional tick check)
+    assert trader.quantize_price(185.25, 4) == "185.25"
+    assert trader.quantize_price(185.10, 4) == "185.00"
+    assert trader.quantize_price(185.40, 4) == "185.50"
 
 
 def test_reanchor_brackets_to_fill_min_rr(trader):
@@ -80,9 +97,6 @@ def test_reanchor_brackets_to_fill_min_rr(trader):
             res = trader.reanchor_brackets_to_fill(symbol, fill_price, sl_price, min_rr=2.0)
             assert res["ok"] is True
             assert res["status"] == "REANCHORED"
-            # Actual risk: 0.06941 - 0.06880 = 0.00061
-            # Required reward: 2.0 * 0.00061 = 0.00122
-            # Calibrated TP: 0.06941 + 0.00122 = 0.07063
             expected_tp = round(0.06941 + 2.0 * (0.06941 - 0.06880), 5)
             assert round(res["calibrated_tp"], 5) == expected_tp
             mock_edit.assert_called_once()
@@ -99,7 +113,6 @@ def test_reanchor_caps_dollar_risk(trader):
     symbol = "HBARUSD"
     fill_price = 0.07000
     initial_sl = 0.06500  # 0.00500 risk distance
-    # 10,000 contracts * 0.00500 * 1.0 = $50.00 risk (> $25.00 limit!)
     mock_tp = {"id": 201, "product_id": 18288, "stop_order_type": "take_profit_order", "side": "sell", "size": 10000, "stop_price": "0.08000"}
     mock_sl = {"id": 202, "product_id": 18288, "stop_order_type": "stop_loss_order", "side": "sell", "size": 10000, "stop_price": "0.06500"}
 
@@ -107,8 +120,6 @@ def test_reanchor_caps_dollar_risk(trader):
         with patch.object(trader, "edit_order", return_value={"success": True}) as mock_edit:
             res = trader.reanchor_brackets_to_fill(symbol, fill_price, initial_sl, min_rr=2.0)
             assert res["ok"] is True
-            # Max distance for $25.00 with 10,000 contracts is 25 / 10000 = 0.0025
-            # Calibrated SL should be 0.07000 - 0.0025 = 0.06750
             assert round(res["calibrated_sl"], 5) == 0.06750
 
 
@@ -152,7 +163,6 @@ def test_audit_and_trail_positions_progression(trader):
                     rep = reports[0]
                     assert rep["action"] == "RATCHET_SL"
                     assert rep["tier"] == "TIER_1_BREAKEVEN"
-                    # New SL should be entry (0.06941) + 1 tick (0.00001) = 0.06942
                     assert round(rep["new_sl"], 5) == 0.06942
 
 
@@ -164,7 +174,6 @@ def test_monotonic_ratchet_rejects_adverse_move(trader):
         "entry_price": "0.06941",
         "mark_price": "0.06900"  # Losing position: r = -0.67R
     }
-    # Existing SL is already at 0.06880
     sl_order = {
         "id": 401,
         "product_id": 18288,
@@ -187,13 +196,12 @@ def test_monotonic_ratchet_rejects_adverse_move(trader):
             with patch.object(trader, "request", return_value={"result": [{"symbol": "HBARUSD", "mark_price": "0.06900"}]}):
                 with patch.object(trader, "edit_order") as mock_edit:
                     reports = trader.audit_and_trail_positions()
-                    # No SL ratchet should occur for a losing position
                     sl_ratchets = [r for r in reports if r.get("action") == "RATCHET_SL"]
                     assert len(sl_ratchets) == 0
                     mock_edit.assert_not_called()
 
 
-def test_r0_stability_after_breakeven(trader, tmp_path):
+def test_r0_stability_after_breakeven(trader):
     """
     Verifies that once SL is moved to Breakeven (+1 tick), R0 remains anchored
     to the initial 0.00061 risk distance, preventing denominator collapse.
@@ -210,7 +218,6 @@ def test_r0_stability_after_breakeven(trader, tmp_path):
         initial_risk_dist=0.00061
     )
 
-    # Position is currently at 0.07005 (+1.05R0), and SL is ALREADY at Breakeven (0.06942)
     pos = {'product_symbol': 'HBARUSD', 'size': 100, 'entry_price': '0.06941', 'mark_price': '0.07005'}
     sl_order = {'id': 501, 'product_id': 18288, 'stop_order_type': 'stop_loss_order', 'side': 'sell', 'size': 100, 'stop_price': '0.06942'}
     tp_order = {'id': 502, 'product_id': 18288, 'stop_order_type': 'take_profit_order', 'side': 'sell', 'size': 100, 'stop_price': '0.07063'}
@@ -220,7 +227,6 @@ def test_r0_stability_after_breakeven(trader, tmp_path):
             with patch.object(trader, 'request', return_value={'result': [{'symbol': 'HBARUSD', 'mark_price': '0.07005'}]}):
                 with patch.object(trader, 'edit_order') as mock_edit:
                     reports = trader.audit_and_trail_positions()
-                    # Since Tier 1 is already achieved and price is < +2.0R0, no edits should be fired!
                     mock_edit.assert_not_called()
 
 
@@ -229,9 +235,7 @@ def test_cold_start_recovery_from_tp(trader):
     Verifies that on a cold start without prior anchor records,
     R0 is recovered via TP inverse calculation (|TP - Entry| / 2.0).
     """
-    from Terminal.position_anchors import get_or_recover_anchor, ANCHORS_FILE
-    if ANCHORS_FILE.exists():
-        ANCHORS_FILE.unlink()
+    from Terminal.position_anchors import get_or_recover_anchor
 
     anchor = get_or_recover_anchor(
         symbol='HBARUSD',
@@ -244,3 +248,99 @@ def test_cold_start_recovery_from_tp(trader):
     )
     # Recovered R0 should be (0.07063 - 0.06941) / 2 = 0.00061
     assert round(anchor['initial_risk_dist'], 5) == 0.00061
+
+
+def test_naked_position_auto_recovery(trader):
+    """
+    Verifies that when an active position exists on Delta Exchange without
+    an SL order, audit_and_trail_positions() synthesizes and posts a protective SL order.
+    """
+    pos = {
+        "product_symbol": "HBARUSD",
+        "size": 100,
+        "entry_price": "0.06941",
+        "mark_price": "0.06950"
+    }
+    tp_order = {
+        "id": 601,
+        "product_id": 18288,
+        "stop_order_type": "take_profit_order",
+        "side": "sell",
+        "size": 100,
+        "stop_price": "0.07063"
+    }
+
+    with patch.object(trader, "get_active_positions", return_value=[pos]):
+        with patch.object(trader, "get_open_orders", return_value=[tp_order]):
+            with patch.object(trader, "request") as mock_req:
+                mock_req.side_effect = [
+                    {"result": [{"symbol": "HBARUSD", "mark_price": "0.06950"}]},  # tickers
+                    {"success": True, "result": {"id": 999123}}  # place order response
+                ]
+                reports = trader.audit_and_trail_positions()
+                assert len(reports) >= 1
+                rec_rep = next((r for r in reports if r.get("action") == "RECOVERED_NAKED_SL"), None)
+                assert rec_rep is not None
+                assert rec_rep["order_id"] == 999123
+
+
+def test_orphaned_orders_cancelled_when_position_closed(trader):
+    """
+    Verifies that when a position is closed (size=0), any resting conditional
+    orders for that symbol are cancelled to prevent reverse ghost fills.
+    """
+    active_positions = []
+    orphaned_order = {
+        "id": 701,
+        "product_symbol": "HBARUSD",
+        "product_id": 18288,
+        "stop_order_type": "take_profit_order",
+        "side": "sell",
+        "size": 100,
+        "stop_price": "0.07063"
+    }
+
+    with patch.object(trader, "get_active_positions", return_value=active_positions):
+        with patch.object(trader, "get_open_orders", return_value=[orphaned_order]):
+            with patch.object(trader, "cancel_order", return_value={"success": True}) as mock_cancel:
+                trader.audit_and_trail_positions()
+                mock_cancel.assert_called_once_with(701, 18288)
+
+
+def test_short_position_trailing_ratchet(trader):
+    """
+    Verifies that SHORT positions correctly ratchet SL downwards towards profit.
+    """
+    pos = {
+        "product_symbol": "ARUSD",
+        "size": -1,
+        "entry_price": "3.1330",
+        "mark_price": "3.0700"
+    }
+    trader.products_cache["ARUSD"] = {"id": 21523, "symbol": "ARUSD", "tick_size": "0.001", "contract_value": "1.0"}
+    sl_order = {
+        "id": 801,
+        "product_id": 21523,
+        "stop_order_type": "stop_loss_order",
+        "side": "buy",
+        "size": 1,
+        "stop_price": "3.1914"
+    }
+    tp_order = {
+        "id": 802,
+        "product_id": 21523,
+        "stop_order_type": "take_profit_order",
+        "side": "buy",
+        "size": 1,
+        "stop_price": "3.0160"
+    }
+
+    with patch.object(trader, "get_active_positions", return_value=[pos]):
+        with patch.object(trader, "get_open_orders", return_value=[sl_order, tp_order]):
+            with patch.object(trader, "request", return_value={"result": [{"symbol": "ARUSD", "mark_price": "3.0700"}]}):
+                with patch.object(trader, "edit_order", return_value={"success": True}) as mock_edit:
+                    reports = trader.audit_and_trail_positions()
+                    assert len(reports) >= 1
+                    rep = next(r for r in reports if r.get("action") == "RATCHET_SL")
+                    assert rep["tier"] == "TIER_1_BREAKEVEN"
+                    assert round(rep["new_sl"], 4) == 3.1320

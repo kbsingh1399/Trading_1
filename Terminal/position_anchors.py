@@ -44,15 +44,28 @@ def load_position_anchors() -> Dict[str, Any]:
 
 
 def save_position_anchors(anchors: Dict[str, Any]):
-    """Atomically writes position anchors to disk (lock-free via os.replace)."""
+    """Atomically writes position anchors to disk (lock-free via os.replace with Windows retry)."""
+    import time
+    DB_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_file = ANCHORS_FILE.with_suffix(".json.tmp")
     try:
-        DB_DIR.mkdir(parents=True, exist_ok=True)
-        tmp_file = ANCHORS_FILE.with_suffix(".json.tmp")
         with open(tmp_file, "w", encoding="utf-8") as f:
             json.dump(anchors, f, indent=2)
-        os.replace(tmp_file, ANCHORS_FILE)
+        for attempt in range(5):
+            try:
+                os.replace(tmp_file, ANCHORS_FILE)
+                break
+            except (PermissionError, OSError):
+                if attempt == 4:
+                    raise
+                time.sleep(0.05)
     except Exception as e:
         logger.error(f"Error saving position anchors: {e}")
+        if tmp_file.exists():
+            try:
+                tmp_file.unlink()
+            except Exception:
+                pass
 
 
 def register_position_anchor(
@@ -63,18 +76,28 @@ def register_position_anchor(
     initial_sl: float,
     initial_tp: float,
     size: int,
-    initial_risk_dist: Optional[float] = None
+    initial_risk_dist: Optional[float] = None,
+    current_tier: int = 0
 ) -> Dict[str, Any]:
     """
     Registers an immutable initial risk anchor upon order execution fill.
     R0 = |entry_price - initial_sl| is permanently locked.
+    Idempotent: will not reset an existing anchor at a higher tier.
     """
     anchors = load_position_anchors()
+    clean_sym = symbol.upper().replace(".PI", "").replace("USDT", "").replace("USD", "") + "USD"
+    existing = anchors.get(clean_sym)
+
+    # Protect existing active ratcheted positions from denominator collapse
+    if existing and abs(existing.get("entry_price", 0.0) - float(entry_price)) < (float(entry_price) * 0.001):
+        if existing.get("current_tier", 0) > 0 or existing.get("initial_risk_dist", 0.0) > 0:
+            logger.info(f"[{clean_sym}] Preserving existing anchor (Tier {existing.get('current_tier', 0)}, R0={existing.get('initial_risk_dist', 0.0):.6f})")
+            return existing
+
     r0 = abs(entry_price - initial_sl) if initial_risk_dist is None else float(initial_risk_dist)
     if r0 <= 0:
         r0 = entry_price * 0.005  # 0.5% safety floor
 
-    clean_sym = symbol.upper().replace(".PI", "").replace("USDT", "").replace("USD", "") + "USD"
     anchor = {
         "symbol": clean_sym,
         "product_id": int(product_id),
@@ -83,13 +106,13 @@ def register_position_anchor(
         "initial_sl": float(initial_sl),
         "initial_tp": float(initial_tp),
         "initial_risk_dist": float(r0),
-        "current_tier": 0,
+        "current_tier": int(current_tier),
         "size": int(size),
         "last_ratchet_price": float(initial_sl)
     }
     anchors[clean_sym] = anchor
     save_position_anchors(anchors)
-    logger.info(f"[{clean_sym}] Registered permanent risk anchor: Entry=${entry_price} | SL=${initial_sl} | R0=${r0:.6f} | TP=${initial_tp}")
+    logger.info(f"[{clean_sym}] Registered permanent risk anchor: Entry=${entry_price} | SL=${initial_sl} | R0=${r0:.6f} | TP=${initial_tp} | Tier={current_tier}")
     return anchor
 
 
@@ -142,7 +165,8 @@ def get_or_recover_anchor(
         initial_sl=cur_sl_price if is_sl_loss_side else entry_price - (dir_mult * r0),
         initial_tp=cur_tp_price if cur_tp_price else entry_price + (dir_mult * 2.0 * r0),
         size=size,
-        initial_risk_dist=r0
+        initial_risk_dist=r0,
+        current_tier=recovered_tier
     )
 
 
@@ -159,10 +183,13 @@ def update_anchor_tier(symbol: str, new_tier: int, new_sl_price: float):
 def prune_closed_positions(active_symbols: list):
     """Removes anchors for positions that are no longer open."""
     anchors = load_position_anchors()
-    clean_active = {s.upper().replace(".PI", "").replace("USDT", "").replace("USD", "") + "USD" for s in active_symbols}
+    clean_active = {
+        s.upper().replace(".PI", "").replace("USDT", "").replace("USD", "") + "USD"
+        for s in active_symbols if s
+    }
     to_remove = [k for k in anchors if k not in clean_active]
     if to_remove:
         for k in to_remove:
-            del anchors[k]
+            anchors.pop(k, None)
         save_position_anchors(anchors)
         logger.info(f"Pruned closed positions from anchor store: {to_remove}")
