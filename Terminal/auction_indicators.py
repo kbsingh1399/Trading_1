@@ -90,8 +90,8 @@ def get_tick_bin_size(symbol: str, price: float) -> float:
 
 
 def compute_fib_prime_emas(series: pd.Series) -> Dict[str, float]:
-    """Computes Fibonacci & Prime EMAs: 5, 13, 21, 55, 89, 144, 233."""
-    spans = [5, 13, 21, 55, 89, 144, 233]
+    """Computes Fibonacci & Prime EMAs: 5, 13, 21, 34, 55, 59, 89, 144, 233."""
+    spans = [5, 13, 21, 34, 55, 59, 89, 144, 233]
     emas = {}
     for s in spans:
         if len(series) >= s:
@@ -106,21 +106,57 @@ def evaluate_fib_prime_stack(price: float, emas: Dict[str, float]) -> str:
     e5 = emas.get("ema5", price)
     e13 = emas.get("ema13", price)
     e21 = emas.get("ema21", price)
+    e34 = emas.get("ema34", price)
     e55 = emas.get("ema55", price)
+    e59 = emas.get("ema59", price)
     e89 = emas.get("ema89", price)
     e144 = emas.get("ema144", price)
     e233 = emas.get("ema233", price)
 
-    if price > e5 > e13 > e21 > e55 > e89 > e144 > e233:
+    if price > e5 > e13 > e21 > e34 > e55 > e59 > e89 > e144 > e233:
         return "BULLISH_FIB_PRIME_STACK"
-    elif price < e5 < e13 < e21 < e55 < e89 < e144 < e233:
+    elif price < e5 < e13 < e21 < e34 < e55 < e59 < e89 < e144 < e233:
         return "BEARISH_FIB_PRIME_STACK"
-    elif price > e55 > e89 and e5 < e21:
+    elif price > e59 > e89 and e5 < e21:
         return "BULLISH_TREND_PULLBACK"
-    elif price < e55 < e89 and e5 > e21:
+    elif price < e59 < e89 and e5 > e21:
         return "BEARISH_TREND_RALLY"
+    elif price > e55 and price > e59:
+        return "BULLISH_ABOVE_POCKET"
+    elif price < e55 and price < e59:
+        return "BEARISH_BELOW_POCKET"
     else:
         return "MIXED_COMPRESSION"
+
+
+def compute_fib_prime_pullback_proximity(price: float, emas: Dict[str, float]) -> Dict[str, Any]:
+    """Computes proximity to dynamic Fib-Prime pocket [EMA 34, EMA 55, EMA 59, EMA 89]."""
+    e34 = emas.get("ema34", price)
+    e55 = emas.get("ema55", price)
+    e59 = emas.get("ema59", price)
+    e89 = emas.get("ema89", price)
+    e233 = emas.get("ema233", price)
+
+    d34 = abs(price - e34) / price * 100.0 if price > 0 else 999.0
+    d55 = abs(price - e55) / price * 100.0 if price > 0 else 999.0
+    d59 = abs(price - e59) / price * 100.0 if price > 0 else 999.0
+    d89 = abs(price - e89) / price * 100.0 if price > 0 else 999.0
+    d233 = abs(price - e233) / price * 100.0 if price > 0 else 999.0
+
+    dist_55_59 = min(d55, d59)
+    in_pullback_pocket = dist_55_59 <= 0.60
+    in_deep_pocket = min(d55, d59, d89) <= 0.60
+
+    return {
+        "dist_34_pct": round(d34, 3),
+        "dist_55_pct": round(d55, 3),
+        "dist_59_pct": round(d59, 3),
+        "dist_89_pct": round(d89, 3),
+        "dist_233_pct": round(d233, 3),
+        "dist_55_59_pct": round(dist_55_59, 3),
+        "in_pullback_pocket": in_pullback_pocket,
+        "in_deep_pocket": in_deep_pocket
+    }
 
 
 def extract_prior_day_levels(df: pd.DataFrame, today_date) -> Dict[str, Any]:
@@ -191,7 +227,7 @@ def compute_htf_alignment(df: pd.DataFrame) -> Dict[str, Any]:
             "open": "first", "high": "max", "low": "min", "close": "last", "total_volume": "sum"
         }).dropna()
         
-        # 1H Metrics
+        # 1H Metrics (Direct 1H resample + 15m native span verification)
         h1_trend = "NEUTRAL"
         h1_ema13 = None
         h1_ema55 = None
@@ -206,13 +242,23 @@ def compute_htf_alignment(df: pd.DataFrame) -> Dict[str, Any]:
                 h1_trend = "BULLISH"
             elif last_c1 < h1_ema13 < h1_ema55:
                 h1_trend = "BEARISH"
+        elif len(df) >= 52:
+            # 15m native equivalent: span 52 (1H EMA 13) and span 220 (1H EMA 55)
+            c_15m = df["close"]
+            h1_ema13 = float(c_15m.ewm(span=52, adjust=False).mean().iloc[-1])
+            h1_ema55 = float(c_15m.ewm(span=min(len(c_15m), 220), adjust=False).mean().iloc[-1])
+            last_c = float(c_15m.iloc[-1])
+            if last_c > h1_ema13 > h1_ema55:
+                h1_trend = "BULLISH"
+            elif last_c < h1_ema13 < h1_ema55:
+                h1_trend = "BEARISH"
                 
-        # 4H Metrics
+        # 4H Metrics (Native 15m span verification to avoid sample starvation)
         h4_trend = "NEUTRAL"
         h4_ema21 = None
         h4_ema55 = None
         h4_ema233 = None
-        if len(df_4h) >= 6:
+        if len(df_4h) >= 15:
             c_4h = df_4h["close"]
             h4_ema21 = float(c_4h.ewm(span=21, adjust=False).mean().iloc[-1])
             h4_ema55 = float(c_4h.ewm(span=55, adjust=False).mean().iloc[-1])
@@ -221,6 +267,16 @@ def compute_htf_alignment(df: pd.DataFrame) -> Dict[str, Any]:
             if last_c4 > h4_ema21 > h4_ema55:
                 h4_trend = "BULLISH"
             elif last_c4 < h4_ema21 < h4_ema55:
+                h4_trend = "BEARISH"
+        elif len(df) >= 80:
+            # 15m native equivalent: span 84 (4H EMA 21) and span 220 (4H EMA 55)
+            c_15m = df["close"]
+            h4_ema21 = float(c_15m.ewm(span=84, adjust=False).mean().iloc[-1])
+            h4_ema55 = float(c_15m.ewm(span=min(len(c_15m), 220), adjust=False).mean().iloc[-1])
+            last_c = float(c_15m.iloc[-1])
+            if last_c > h4_ema21 > h4_ema55:
+                h4_trend = "BULLISH"
+            elif last_c < h4_ema21 < h4_ema55:
                 h4_trend = "BEARISH"
 
         # Confluence classification
@@ -449,6 +505,7 @@ def compute_auction_profile(symbol: str) -> Dict[str, Any]:
         # 7. Fibonacci Prime EMAs (15m)
         fib_emas = compute_fib_prime_emas(df["close"])
         fib_prime_alignment = evaluate_fib_prime_stack(latest_close, fib_emas)
+        pullback_prox = compute_fib_prime_pullback_proximity(latest_close, fib_emas)
 
         # 8. HTF Multi-Timeframe Alignment (1H and 4H)
         htf = compute_htf_alignment(df)
@@ -520,11 +577,21 @@ def compute_auction_profile(symbol: str) -> Dict[str, Any]:
             "ema5": round(fib_emas.get("ema5", 0.0), 4),
             "ema13": round(fib_emas.get("ema13", 0.0), 4),
             "ema21": round(fib_emas.get("ema21", 0.0), 4),
+            "ema34": round(fib_emas.get("ema34", 0.0), 4),
             "ema55": round(fib_emas.get("ema55", 0.0), 4),
+            "ema59": round(fib_emas.get("ema59", 0.0), 4),
             "ema89": round(fib_emas.get("ema89", 0.0), 4),
             "ema144": round(fib_emas.get("ema144", 0.0), 4),
             "ema233": round(fib_emas.get("ema233", 0.0), 4),
             "fib_prime_alignment": fib_prime_alignment,
+            "dist_55_59_pct": pullback_prox.get("dist_55_59_pct", 999.0),
+            "in_pullback_pocket": pullback_prox.get("in_pullback_pocket", False),
+            "in_deep_pocket": pullback_prox.get("in_deep_pocket", False),
+            "dist_34_pct": pullback_prox.get("dist_34_pct", 999.0),
+            "dist_55_pct": pullback_prox.get("dist_55_pct", 999.0),
+            "dist_59_pct": pullback_prox.get("dist_59_pct", 999.0),
+            "dist_89_pct": pullback_prox.get("dist_89_pct", 999.0),
+            "dist_233_pct": pullback_prox.get("dist_233_pct", 999.0),
             # Backward compatibility aliases
             "ema9": round(fib_emas.get("ema13", 0.0), 4),
             "ema20": round(fib_emas.get("ema21", 0.0), 4),

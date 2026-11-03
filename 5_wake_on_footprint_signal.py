@@ -86,8 +86,13 @@ FOOTPRINT_SIGNALS_JSONL = SIGNALS_DIR / "footprint_signals.jsonl"
 EVALUATED_ALERTS_JSONL = SIGNALS_DIR / "realtime_trade_alerts.jsonl"
 STATE_FILE = DB_DIR / ".wake_on_footprint_state.json"
 
-# Strict Risk Constants (FundingPips $100K Challenge Profile)
-MAX_INDIVIDUAL_RISK_USD = 500.0   # 0.50% max risk cap on $100K challenge account
+# Strict Prop Firm Risk Constants (FundingPips MatchTrader $5,000 Challenge Account 101305360)
+from Terminal.risk_envelope import (
+    MAX_RISK_USD,          # $25.00
+    HARD_FLOOR_USD,        # $4,775.00
+    MAX_OPEN_POSITIONS,    # 2
+    MAX_DAILY_LOSS_USD     # $250.00
+)
 
 handler = logging.StreamHandler(sys.stdout)
 handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] [WAKE_SENTINEL] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
@@ -154,25 +159,33 @@ def format_confluence_card(alert: Dict[str, Any]) -> str:
     fib_str = f"{auction.get('fib_prime_alignment', 'N/A')}" if auction.get('fib_prime_alignment') else "N/A"
     htf_str = f"{auction.get('mtf_bias', 'N/A')} (1H: {auction.get('htf_1h_trend', 'N/A')} | 4H: {auction.get('htf_4h_trend', 'N/A')})" if auction.get('mtf_bias') else "N/A"
 
+    exec_model = alert.get("execution_model", "MODEL_0_FILTERED_BOUNDARY")
+    headline = f"{sig_det.get('title', '')} - {sig_det.get('description', '')}" if sig_det.get('title') or sig_det.get('description') else "N/A"
+    fib_pocket = alert.get("fib_prime_pocket", {})
+    fib_pocket_str = f"EMA55=${fib_pocket.get('ema55', 0.0):,.2f} | EMA59=${fib_pocket.get('ema59', 0.0):,.2f} | EMA233=${fib_pocket.get('ema233', 0.0):,.2f} (Pocket: {fib_pocket.get('dist_55_59_pct', 0.0):.2f}%)" if fib_pocket.get('ema55') else "N/A"
+
     lines = [
         "",
         "╔" + "═" * 82 + "╗",
         f"║  {status_tag}".ljust(83) + "║",
         f"║  {sym} {direction}  |  CONFLUENCE SCORE: {score:.1f} / 100".ljust(83) + "║",
+        f"║  Execution Model:  {exec_model}".ljust(83) + "║",
         "╠" + "═" * 82 + "╣",
+        f"║  Signal Headline:  {headline[:60]}".ljust(83) + "║",
         f"║  Evaluation Time:  {eval_ist}".ljust(83) + "║",
         f"║  Signal Bar Time:  {sig_det.get('candle_ist', '')} (UTC: {sig_det.get('candle_utc', '')})".ljust(83) + "║",
         f"║  Signal Type:      {sig_det.get('sig_name', '')} [{sig_det.get('sig_code', '')}] ({sig_det.get('side', '')})".ljust(83) + "║",
         "╟" + "─" * 82 + "╢",
         f"║  Trade Geometry:   Entry=${trade.get('entry_price', 0.0):,.4f} | SL=${trade.get('stop_loss', 0.0):,.4f} (-{trade.get('sl_pct', 0.0)}%)".ljust(83) + "║",
         f"║                    TP1=${trade.get('take_profit_1', 0.0):,.4f} | TP2=${trade.get('take_profit_2', 0.0):,.4f} | R:R={trade.get('rr_ratio', 0.0)}:1".ljust(83) + "║",
-        f"║  Risk Allocation:  Lots={lots} | Risk=${risk_usd:.2f} (Cap: ${trade.get('hard_max_risk_usd', 500.0)})".ljust(83) + "║",
+        f"║  Risk Allocation:  Lots={lots} | Risk=${risk_usd:.2f} (Cap: ${trade.get('hard_max_risk_usd', MAX_RISK_USD):.2f})".ljust(83) + "║",
         f"║  MatchTrader:      Authorized={'✅ YES (LIVE DISPATCH)' if mtr_auth else '❌ NO'} | Symbol={alert.get('matchtrader_symbol', 'N/A')}".ljust(83) + "║",
         "╟" + "─" * 82 + "╢",
         f"║  Auction Profile:  Day VWAP: {vwap_str}".ljust(83) + "║",
         f"║  Value Area:       {poc_vah_val}".ljust(83) + "║",
         f"║  Prior Day Levels: {prior_str}".ljust(83) + "║",
         f"║  Fib-Prime EMAs:   {fib_str}".ljust(83) + "║",
+        f"║  Fib Dynamic Pocket: {fib_pocket_str}".ljust(83) + "║",
         f"║  HTF Multi-TF:     {htf_str}".ljust(83) + "║",
         "╟" + "─" * 82 + "╢",
         f"║  DeepMind TimesFM: CVD Dir={tfm.get('cvd_direction', 'N/A')} ({tfm.get('cvd_confidence', 0.0):.0%}) | Price Dir={tfm.get('price_direction', 'N/A')}".ljust(83) + "║",
@@ -263,10 +276,16 @@ class FootprintSignalSentinel:
                     logger.info(f"⏳ [INTRA-BAR WICK VETO] {sym} {sig_name} on active candle (closes in {mins_remaining:.1f}m). Skipped to prevent wick repainting.")
                     continue
 
-                logger.info(f"⚡ [WAKE EVENT] Evaluating closed-bar Footprint Signal: {sym} | {sig_name} ({side})")
+                title = str(raw.get("title") or raw.get("sig_name") or "Footprint Signal")
+                desc = str(raw.get("description") or raw.get("desc") or "")
+                price_val = float(raw.get("price", 0.0)) if raw.get("price") else 0.0
+                c_ist = str(raw.get("candle_ist") or "")
 
-                # 1. Multi-factor quantitative evaluation
-                eval_res = self.evaluator.evaluate_signal(raw)
+                # Phase 1: Immediate Ingest Log
+                logger.info(f"⚡ [WAKE EVENT] {sym} {sig_name} ({side}) @ ${price_val:,.4f} | Candle: {c_ist} | Title: '{title}' | Detail: '{desc}'")
+
+                # Phase 2: Multi-factor quantitative evaluation offloaded to thread
+                eval_res = await asyncio.to_thread(self.evaluator.evaluate_signal, raw)
                 evaluations.append(eval_res)
 
                 score = eval_res.get("confluence_score", 0.0)
@@ -343,9 +362,10 @@ class FootprintSignalSentinel:
 
                     pos_log = f"   -> Pos #{idx}: {sym} {side} {vol} | PnL: ${pnl:+.2f} ({pct:+.2f}%)"
                     
-                    # Individual hard loss limit ($500 max risk cap for $100K account)
-                    if pnl <= -MAX_INDIVIDUAL_RISK_USD:
-                        logger.warning(f"🛑 Pos #{idx} {sym} loss exceeded hard floor -${MAX_INDIVIDUAL_RISK_USD:.2f} (${pnl:.2f})! Emergency close triggered.")
+                    # Individual hard loss limit ($25.00 max risk with 1.25 buffer = -$31.25)
+                    max_loss_thresh = MAX_RISK_USD * 1.25
+                    if pnl <= -max_loss_thresh:
+                        logger.warning(f"🛑 Pos #{idx} {sym} loss exceeded hard risk envelope -${max_loss_thresh:.2f} (${pnl:.2f})! Emergency close triggered.")
                         await close_position_by_index(ws, idx)
                     elif pnl >= 250.0:
                         logger.info(f"✨ Pos #{idx} {sym} in strong profit (+${pnl:.2f}) | Trailing Break-Even / Target Qualified.")

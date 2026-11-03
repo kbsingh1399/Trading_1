@@ -317,26 +317,31 @@ class RealtimeSignalEvaluator:
         confluence_score = 40.0
 
         reasons = [f"Signal: {sig_name} ({sig_side})"]
-
         direction = "NEUTRAL"
 
-
-
         is_auction_valid = bool(auction.get("data_valid", False))
-
         fib_align = str(auction.get("fib_prime_alignment", "") or "")
-
         mtf_bias = str(auction.get("mtf_bias", "") or "")
-
         p_vs_vwap = str(auction.get("price_vs_vwap", "") or "")
-
         val_status = str(auction.get("value_status", "") or "")
 
+        # Deterministic Dual-Model Routing State Machine (EGM-SPEC-20261103)
+        day_vah = float(auction.get("day_vah", 0.0) or 0.0)
+        day_val = float(auction.get("day_val", 0.0) or 0.0)
+        day_vwap = float(auction.get("day_vwap", 0.0) or 0.0)
+        day_vwap_sd = float(auction.get("vwap_sd1_upper", 0.0) - day_vwap) if auction.get("vwap_sd1_upper") else 0.0
+        h1_trend = str(auction.get("htf_1h_trend", "NEUTRAL") or "NEUTRAL")
+        h4_trend = str(auction.get("htf_4h_trend", "NEUTRAL") or "NEUTRAL")
+        ema34 = float(auction.get("ema34", 0.0) or 0.0)
+        ema55 = float(auction.get("ema55", 0.0) or 0.0)
+        ema59 = float(auction.get("ema59", 0.0) or 0.0)
+        ema89 = float(auction.get("ema89", 0.0) or 0.0)
+        ema233 = float(auction.get("ema233", 0.0) or 0.0)
+        in_pullback_pocket = bool(auction.get("in_pullback_pocket", False))
+        in_deep_pocket = bool(auction.get("in_deep_pocket", False))
+        dist_55_59 = float(auction.get("dist_55_59_pct", 999.0))
 
-
-        # Bullish Setups
-
-        if (
+        is_bullish_sig = (
             ("absorption" in sig_name.lower() and sig_side in ["buy", "bullish"]) or
             ("trapped shorts" in sig_name.lower()) or 
             ("bull div" in sig_name.lower()) or 
@@ -345,97 +350,8 @@ class RealtimeSignalEvaluator:
             ("exhaustion" in sig_name.lower() and "liquidation" not in sig_name.lower() and "seller" in sig_name.lower()) or 
             ("exhaustion" in sig_name.lower() and sig_side in ["buy", "bullish"]) or 
             ("liquidation exhaustion" in sig_name.lower() and sig_side in ["buy", "bullish"])
-        ):
-
-            direction = "BUY"
-
-            if whale_imbalance >= 0.55:
-
-                confluence_score += 15
-
-                reasons.append(f"Whale Bids {whale_imbalance*100:.0f}%")
-
-            if cvd_slope in ["BULLISH_DIVERGENCE", "BULLISH_FLOW"]:
-
-                confluence_score += 15
-
-                reasons.append(f"CVD {cvd_slope}")
-
-            if near_field_shorts >= 52.0:
-
-                confluence_score += 10
-
-                if short_share_trend > 0:
-
-                    confluence_score += 5
-
-                    reasons.append(f"Short Squeeze Fuel ({near_field_shorts:.0f}% shorts, piling in +{short_share_trend:.1f} pts 24h)")
-
-                else:
-
-                    reasons.append(f"Short Squeeze Fuel ({near_field_shorts:.0f}% shorts)")
-
-            if short_magnets:
-
-                nearest_sm = short_magnets[0]
-
-                sm_dist = float(nearest_sm.get("distance_pct", 0.0))
-
-                sm_score = float(nearest_sm.get("score", 0.0))
-
-                if 0.4 <= sm_dist <= 4.0:
-
-                    confluence_score += 10
-
-                    reasons.append(f"Overhead Short Liq Target: ${nearest_sm.get('zone_price'):,.2f} (+{sm_dist:.1f}%, Score {sm_score:.0f})")
-
-            if "bullish" in clld_turn.lower():
-
-                confluence_score += 5
-
-                reasons.append(f"CLLD Shift Confluence ({clld_turn})")
-
-            if any(b.get("band") in ["0-1%", "1-2%"] and b.get("net_delta", 0) > 0 for b in strength_bands):
-
-                confluence_score += 5
-
-                reasons.append("Near-Field 0-2% Short Liquidation Density Dominance")
-
-            if is_auction_valid:
-
-                if p_vs_vwap == "ABOVE_VWAP":
-
-                    confluence_score += 10
-
-                    reasons.append(f"Above Day VWAP (${auction.get('day_vwap', 0.0):,.2f})")
-
-                if "BULLISH" in fib_align:
-
-                    confluence_score += 10
-
-                    reasons.append(f"Bullish Fib-Prime Ribbon ({fib_align})")
-
-                if mtf_bias == "HTF_BULLISH_CONFLUENCE":
-
-                    confluence_score += 15
-
-                    reasons.append("HTF Bullish Confluence (1H and 4H Bullish)")
-
-                elif mtf_bias == "HTF_DIVERGENCE":
-
-                    confluence_score -= 10
-
-                    reasons.append("HTF Divergence Warning (Counter-trend to 4H Macro)")
-
-                if val_status == "INSIDE_VALUE":
-
-                    reasons.append(f"Inside Value Area (VAL ${auction.get('day_val', 0.0):,.2f} - VAH ${auction.get('day_vah', 0.0):,.2f})")
-
-
-
-        # Bearish Setups
-
-        elif (
+        )
+        is_bearish_sig = (
             ("absorption" in sig_name.lower() and sig_side in ["sell", "bearish"]) or
             ("trapped longs" in sig_name.lower()) or 
             ("bear div" in sig_name.lower()) or 
@@ -444,94 +360,170 @@ class RealtimeSignalEvaluator:
             ("exhaustion" in sig_name.lower() and "liquidation" not in sig_name.lower() and "buyer" in sig_name.lower()) or 
             ("exhaustion" in sig_name.lower() and sig_side in ["sell", "bearish"]) or 
             ("liquidation exhaustion" in sig_name.lower() and sig_side in ["sell", "bearish"])
+        )
+
+        cand_dir = "BUY" if is_bullish_sig else ("SELL" if is_bearish_sig else "NEUTRAL")
+        is_long_macro_aligned = (h1_trend == "BULLISH" and h4_trend == "BULLISH") or mtf_bias == "HTF_BULLISH_CONFLUENCE"
+        is_short_macro_aligned = (h1_trend == "BEARISH" and h4_trend == "BEARISH") or mtf_bias == "HTF_BEARISH_CONFLUENCE"
+
+        # Priority 1: Macro Trend Supremacy -> Model 2
+        if cand_dir == "BUY" and is_long_macro_aligned:
+            execution_model = "MODEL_2_TREND_PULLBACK"
+        elif cand_dir == "SELL" and is_short_macro_aligned:
+            execution_model = "MODEL_2_TREND_PULLBACK"
+        # Priority 2: Range Confinement (Mean Reversion Fade) -> Model 1
+        elif (
+            (current_regime in ["MEAN_REVERTING_RANGE", "CHOP", "HIGH_VOLATILITY_COMPRESSION"] or mtf_bias in ["HTF_DIVERGENCE", "HTF_NEUTRAL"]) and
+            (
+                (cand_dir == "BUY" and (sig_price <= day_val * 1.002 or (day_vwap > 0 and sig_price <= day_vwap - day_vwap_sd) or val_status in ["BELOW_VAL", "OUTSIDE_VALUE"])) or
+                (cand_dir == "SELL" and (sig_price >= day_vah * 0.998 or (day_vwap > 0 and sig_price >= day_vwap + day_vwap_sd) or val_status in ["ABOVE_VAH", "OUTSIDE_VALUE"]))
+            )
         ):
+            execution_model = "MODEL_1_MEAN_REVERSION"
+        else:
+            execution_model = "MODEL_0_FILTERED_BOUNDARY"
 
-            direction = "SELL"
-
-            if whale_imbalance <= 0.45:
-
+        # Bullish Setups
+        if is_bullish_sig:
+            direction = "BUY"
+            if whale_imbalance >= 0.55:
                 confluence_score += 15
+                reasons.append(f"Whale Bids {whale_imbalance*100:.0f}%")
 
+            if cvd_slope in ["BULLISH_DIVERGENCE", "BULLISH_FLOW"]:
+                confluence_score += 15
+                reasons.append(f"CVD {cvd_slope}")
+
+            if near_field_shorts >= 52.0:
+                confluence_score += 10
+                if short_share_trend > 0:
+                    confluence_score += 5
+                    reasons.append(f"Short Squeeze Fuel ({near_field_shorts:.0f}% shorts, piling in +{short_share_trend:.1f} pts 24h)")
+                else:
+                    reasons.append(f"Short Squeeze Fuel ({near_field_shorts:.0f}% shorts)")
+
+            if short_magnets:
+                nearest_sm = short_magnets[0]
+                sm_dist = float(nearest_sm.get("distance_pct", 0.0))
+                sm_score = float(nearest_sm.get("score", 0.0))
+                if 0.4 <= sm_dist <= 4.0:
+                    confluence_score += 10
+                    reasons.append(f"Overhead Short Liq Target: ${nearest_sm.get('zone_price'):,.2f} (+{sm_dist:.1f}%, Score {sm_score:.0f})")
+
+            if "bullish" in clld_turn.lower():
+                confluence_score += 5
+                reasons.append(f"CLLD Shift Confluence ({clld_turn})")
+
+            if any(b.get("band") in ["0-1%", "1-2%"] and b.get("net_delta", 0) > 0 for b in strength_bands):
+                confluence_score += 5
+                reasons.append("Near-Field 0-2% Short Liquidation Density Dominance")
+
+            # Model Specific Scoring Logic
+            if execution_model == "MODEL_1_MEAN_REVERSION":
+                confluence_score += 15
+                reasons.append(f"Model 1: Mean Reversion Fade at Value Boundary (VAL ${day_val:,.2f})")
+                if p_vs_vwap == "BELOW_VWAP":
+                    confluence_score += 10
+                    reasons.append(f"Fading Discount Below Day VWAP (${day_vwap:,.2f})")
+                if mtf_bias == "HTF_DIVERGENCE":
+                    reasons.append("HTF Divergence Counter-Macro Penalty Suppressed for Mean Reversion")
+            elif execution_model == "MODEL_2_TREND_PULLBACK":
+                confluence_score += 15
+                reasons.append("Model 2: HTF Bullish Macro Trend Aligned (1H & 4H Bullish)")
+                if in_pullback_pocket or dist_55_59 <= 0.60 or in_deep_pocket:
+                    confluence_score += 15
+                    reasons.append(f"Model 2: Dynamic Fib-Prime Pullback Pocket [55, 59] Proximity ({dist_55_59:.2f}%)")
+                if sig_price >= ema59 * 0.998:
+                    confluence_score += 10
+                    reasons.append(f"Model 2: Directional Close Defending EMA 59 Support (${ema59:,.2f})")
+            else: # MODEL_0_FILTERED_BOUNDARY
+                if is_auction_valid:
+                    if p_vs_vwap == "ABOVE_VWAP":
+                        confluence_score += 10
+                        reasons.append(f"Above Day VWAP (${auction.get('day_vwap', 0.0):,.2f})")
+                    if "BULLISH" in fib_align:
+                        confluence_score += 10
+                        reasons.append(f"Bullish Fib-Prime Ribbon ({fib_align})")
+                    if mtf_bias == "HTF_BULLISH_CONFLUENCE":
+                        confluence_score += 15
+                        reasons.append("HTF Bullish Confluence (1H and 4H Bullish)")
+                    elif mtf_bias == "HTF_DIVERGENCE":
+                        confluence_score -= 10
+                        reasons.append("HTF Divergence Warning (Counter-trend to 4H Macro)")
+                    if val_status == "INSIDE_VALUE":
+                        reasons.append(f"Inside Value Area (VAL ${auction.get('day_val', 0.0):,.2f} - VAH ${auction.get('day_vah', 0.0):,.2f})")
+
+        # Bearish Setups
+        elif is_bearish_sig:
+            direction = "SELL"
+            if whale_imbalance <= 0.45:
+                confluence_score += 15
                 reasons.append(f"Whale Asks {(1-whale_imbalance)*100:.0f}%")
 
             if cvd_slope in ["BEARISH_DIVERGENCE", "BEARISH_FLOW"]:
-
                 confluence_score += 15
-
                 reasons.append(f"CVD {cvd_slope}")
 
             if near_field_shorts <= 48.0:
-
                 confluence_score += 10
-
                 if short_share_trend < 0:
-
                     confluence_score += 5
-
                     reasons.append(f"Long Liq Cascade Fuel ({100-near_field_shorts:.0f}% longs, long share expanding)")
-
                 else:
-
                     reasons.append(f"Long Liq Cascade Fuel ({100-near_field_shorts:.0f}% longs)")
 
             if long_magnets:
-
                 nearest_lm = long_magnets[0]
-
                 lm_dist = abs(float(nearest_lm.get("distance_pct", 0.0)))
-
                 lm_score = float(nearest_lm.get("score", 0.0))
-
                 if 0.4 <= lm_dist <= 4.0:
-
                     confluence_score += 10
-
                     reasons.append(f"Underlying Long Liq Target: ${nearest_lm.get('zone_price'):,.2f} (-{lm_dist:.1f}%, Score {lm_score:.0f})")
 
             if "bearish" in clld_turn.lower():
-
                 confluence_score += 5
-
                 reasons.append(f"CLLD Shift Confluence ({clld_turn})")
 
             if any(b.get("band") in ["0-1%", "1-2%"] and b.get("net_delta", 0) < 0 for b in strength_bands):
-
                 confluence_score += 5
-
                 reasons.append("Near-Field 0-2% Long Liquidation Cascade Dominance")
 
-            if is_auction_valid:
-
-                if p_vs_vwap == "BELOW_VWAP":
-
+            # Model Specific Scoring Logic
+            if execution_model == "MODEL_1_MEAN_REVERSION":
+                confluence_score += 15
+                reasons.append(f"Model 1: Mean Reversion Fade at Value Boundary (VAH ${day_vah:,.2f})")
+                if p_vs_vwap == "ABOVE_VWAP":
                     confluence_score += 10
-
-                    reasons.append(f"Below Day VWAP (${auction.get('day_vwap', 0.0):,.2f})")
-
-                if "BEARISH" in fib_align:
-
-                    confluence_score += 10
-
-                    reasons.append(f"Bearish Fib-Prime Ribbon ({fib_align})")
-
-                if mtf_bias == "HTF_BEARISH_CONFLUENCE":
-
+                    reasons.append(f"Fading Premium Above Day VWAP (${day_vwap:,.2f})")
+                if mtf_bias == "HTF_DIVERGENCE":
+                    reasons.append("HTF Divergence Counter-Macro Penalty Suppressed for Mean Reversion")
+            elif execution_model == "MODEL_2_TREND_PULLBACK":
+                confluence_score += 15
+                reasons.append("Model 2: HTF Bearish Macro Trend Aligned (1H & 4H Bearish)")
+                if in_pullback_pocket or dist_55_59 <= 0.60 or in_deep_pocket:
                     confluence_score += 15
+                    reasons.append(f"Model 2: Dynamic Fib-Prime Pullback Pocket [55, 59] Proximity ({dist_55_59:.2f}%)")
+                if sig_price <= ema59 * 1.002:
+                    confluence_score += 10
+                    reasons.append(f"Model 2: Directional Close Defending EMA 59 Resistance (${ema59:,.2f})")
+            else: # MODEL_0_FILTERED_BOUNDARY
+                if is_auction_valid:
+                    if p_vs_vwap == "BELOW_VWAP":
+                        confluence_score += 10
+                        reasons.append(f"Below Day VWAP (${auction.get('day_vwap', 0.0):,.2f})")
+                    if "BEARISH" in fib_align:
+                        confluence_score += 10
+                        reasons.append(f"Bearish Fib-Prime Ribbon ({fib_align})")
+                    if mtf_bias == "HTF_BEARISH_CONFLUENCE":
+                        confluence_score += 15
+                        reasons.append("HTF Bearish Confluence (1H and 4H Bearish)")
+                    elif mtf_bias == "HTF_DIVERGENCE":
+                        confluence_score -= 10
+                        reasons.append("HTF Divergence Warning (Counter-trend to 4H Macro)")
+                    if val_status == "INSIDE_VALUE":
+                        reasons.append(f"Inside Value Area (VAL ${auction.get('day_val', 0.0):,.2f} - VAH ${auction.get('day_vah', 0.0):,.2f})")
 
-                    reasons.append("HTF Bearish Confluence (1H and 4H Bearish)")
-
-                elif mtf_bias == "HTF_DIVERGENCE":
-
-                    confluence_score -= 10
-
-                    reasons.append("HTF Divergence Warning (Counter-trend to 4H Macro)")
-
-                if val_status == "INSIDE_VALUE":
-
-                    reasons.append(f"Inside Value Area (VAL ${auction.get('day_val', 0.0):,.2f} - VAH ${auction.get('day_vah', 0.0):,.2f})")
-
-
-
+        
         # 3. Vector Memory Analogs
 
         setup_desc = f"{sym} {direction} {sig_name} with Whale Imbalance {whale_imbalance:.1%}, CVD {cvd_slope}, Regime {current_regime}"
@@ -670,94 +662,106 @@ class RealtimeSignalEvaluator:
 
 
 
-        # 5. Formulate Trade Risk Levels (ATR Adaptive & Fails Closed)
-
+        # 5. Formulate Trade Risk Levels (Dual-Model Geometry & Target Extension)
         entry = sig_price
-
         atr_pct = self._finite(reg.get("atr_pct"), 0.0)
-
-        # Adaptive SL distance: 1.5x ATR, bounded between 0.5% and 2.5%
-
         sl_pct = max(0.005, min(0.025, (atr_pct * 1.5) / 100.0))
 
+        if execution_model == "MODEL_1_MEAN_REVERSION":
+            if direction == "BUY":
+                sl = round(entry * (1.0 - sl_pct), 6)
+                risk_dist_init = abs(entry - sl)
+                vwap_target = day_vwap if day_vwap > entry else entry + 1.8 * risk_dist_init
+                # Target Extension Invariant: If VWAP is too close (< 1.5R), extend to Opposite Value Area High (day_vah)
+                if abs(vwap_target - entry) < 1.5 * risk_dist_init:
+                    tp1_target = max(day_vah, entry + 1.8 * risk_dist_init) if day_vah > entry else entry + 1.8 * risk_dist_init
+                    reasons.append(f"Model 1: Dynamic Target Extension to Opposite Value Area (VAH ${tp1_target:,.2f}) for R:R >= 1.5")
+                else:
+                    tp1_target = vwap_target
+                    reasons.append(f"Model 1: Target Fair Value Day VWAP (${tp1_target:,.2f})")
+                tp1 = round(tp1_target, 6)
+                tp2 = round(max(tp1 * 1.015, day_vah if day_vah > 0 else tp1 * 1.015), 6)
+
+            elif direction == "SELL":
+                sl = round(entry * (1.0 + sl_pct), 6)
+                risk_dist_init = abs(entry - sl)
+                vwap_target = day_vwap if day_vwap < entry else entry - 1.8 * risk_dist_init
+                # Target Extension Invariant: If VWAP is too close (< 1.5R), extend to Opposite Value Area Low (day_val)
+                if abs(entry - vwap_target) < 1.5 * risk_dist_init:
+                    tp1_target = min(day_val, entry - 1.8 * risk_dist_init) if 0 < day_val < entry else entry - 1.8 * risk_dist_init
+                    reasons.append(f"Model 1: Dynamic Target Extension to Opposite Value Area (VAL ${tp1_target:,.2f}) for R:R >= 1.5")
+                else:
+                    tp1_target = vwap_target
+                    reasons.append(f"Model 1: Target Fair Value Day VWAP (${tp1_target:,.2f})")
+                tp1 = round(tp1_target, 6)
+                tp2 = round(min(tp1 * 0.985, day_val if day_val > 0 else tp1 * 0.985), 6)
+            else:
+                sl, tp1, tp2 = entry, entry, entry
+
+        elif execution_model == "MODEL_2_TREND_PULLBACK":
+            if direction == "BUY":
+                # Stop Loss anchored behind Fib-Prime Base EMA 89
+                atr_val = (atr_pct * entry) / 100.0 if atr_pct > 0 else (entry * 0.01)
+                ema_sl = ema89 - 0.2 * atr_val if ema89 > 0 and ema89 < entry else entry * (1.0 - sl_pct)
+                min_sl = entry * 0.975
+                max_sl = entry * 0.995
+                sl = round(max(min_sl, min(max_sl, ema_sl)), 6)
+                reasons.append(f"Model 2: SL anchored behind Fib-Prime Structural Base EMA 89 (${ema89:,.2f})")
+
+                if short_magnets and len(short_magnets) >= 1:
+                    sm_p1 = float(short_magnets[0].get("zone_price", 0.0))
+                    if sm_p1 > entry * 1.006:
+                        tp1 = round(sm_p1, 6)
+                    else:
+                        tp1 = round(entry + 2.0 * abs(entry - sl), 6)
+                else:
+                    tp1 = round(entry + 2.0 * abs(entry - sl), 6)
+                tp2 = round(entry + 3.0 * abs(entry - sl), 6)
+
+            elif direction == "SELL":
+                # Stop Loss anchored behind Fib-Prime Base EMA 89
+                atr_val = (atr_pct * entry) / 100.0 if atr_pct > 0 else (entry * 0.01)
+                ema_sl = ema89 + 0.2 * atr_val if ema89 > entry else entry * (1.0 + sl_pct)
+                min_sl = entry * 1.005
+                max_sl = entry * 1.025
+                sl = round(min(max_sl, max(min_sl, ema_sl)), 6)
+                reasons.append(f"Model 2: SL anchored behind Fib-Prime Structural Base EMA 89 (${ema89:,.2f})")
+
+                if long_magnets and len(long_magnets) >= 1:
+                    lm_p1 = float(long_magnets[0].get("zone_price", 0.0))
+                    if 0 < lm_p1 < entry * 0.994:
+                        tp1 = round(lm_p1, 6)
+                    else:
+                        tp1 = round(entry - 2.0 * abs(entry - sl), 6)
+                else:
+                    tp1 = round(entry - 2.0 * abs(entry - sl), 6)
+                tp2 = round(entry - 3.0 * abs(entry - sl), 6)
+            else:
+                sl, tp1, tp2 = entry, entry, entry
+
+        else: # MODEL_0_FILTERED_BOUNDARY
+            if direction == "BUY":
+                sl = round(entry * (1.0 - sl_pct), 6)
+                tp1_target = entry * (1.0 + sl_pct * 1.8)
+                if short_magnets and len(short_magnets) >= 1:
+                    sm_p1 = float(short_magnets[0].get("zone_price", 0.0))
+                    if sm_p1 > entry * 1.006 and sm_p1 <= entry * (1.0 + sl_pct * 2.8):
+                        tp1_target = sm_p1
+                tp1 = round(poc_price if (poc_price and poc_price > entry * (1.0 + sl_pct) and not short_magnets) else tp1_target, 6)
+                tp2 = round(entry * (1.0 + sl_pct * 3.0), 6)
+            elif direction == "SELL":
+                sl = round(entry * (1.0 + sl_pct), 6)
+                tp1_target = entry * (1.0 - sl_pct * 1.8)
+                if long_magnets and len(long_magnets) >= 1:
+                    lm_p1 = float(long_magnets[0].get("zone_price", 0.0))
+                    if lm_p1 < entry * 0.994 and lm_p1 >= entry * (1.0 - sl_pct * 2.8):
+                        tp1_target = lm_p1
+                tp1 = round(poc_price if (poc_price and poc_price < entry * (1.0 - sl_pct) and not long_magnets) else tp1_target, 6)
+                tp2 = round(entry * (1.0 - sl_pct * 3.0), 6)
+            else:
+                sl, tp1, tp2 = entry, entry, entry
+
         
-
-        if direction == "BUY":
-
-            sl = round(entry * (1.0 - sl_pct), 6)
-
-            tp1_target = entry * (1.0 + sl_pct * 1.8)
-
-            # Snap TP1 to Rank 1 Overhead Short Magnet Zone if viable
-
-            if short_magnets and len(short_magnets) >= 1:
-
-                sm_p1 = float(short_magnets[0].get("zone_price", 0.0))
-
-                if sm_p1 > entry * 1.006 and sm_p1 <= entry * (1.0 + sl_pct * 2.8):
-
-                    tp1_target = sm_p1
-
-            tp1 = round(poc_price if (poc_price and poc_price > entry * (1.0 + sl_pct) and not short_magnets) else tp1_target, 6)
-
-            # Snap TP2 to Rank 2 Overhead Short Magnet Zone or 3.0x ATR
-
-            tp2_target = entry * (1.0 + sl_pct * 3.0)
-
-            if short_magnets and len(short_magnets) >= 2:
-
-                sm_p2 = float(short_magnets[1].get("zone_price", 0.0))
-
-                if sm_p2 > tp1 * 1.005:
-
-                    tp2_target = sm_p2
-
-            tp2 = round(tp2_target, 6)
-
-
-
-        elif direction == "SELL":
-
-            sl = round(entry * (1.0 + sl_pct), 6)
-
-            tp1_target = entry * (1.0 - sl_pct * 1.8)
-
-            # Snap TP1 to Rank 1 Underlying Long Magnet Zone if viable
-
-            if long_magnets and len(long_magnets) >= 1:
-
-                lm_p1 = float(long_magnets[0].get("zone_price", 0.0))
-
-                if lm_p1 < entry * 0.994 and lm_p1 >= entry * (1.0 - sl_pct * 2.8):
-
-                    tp1_target = lm_p1
-
-            tp1 = round(poc_price if (poc_price and poc_price < entry * (1.0 - sl_pct) and not long_magnets) else tp1_target, 6)
-
-            # Snap TP2 to Rank 2 Underlying Long Magnet Zone or 3.0x ATR
-
-            tp2_target = entry * (1.0 - sl_pct * 3.0)
-
-            if long_magnets and len(long_magnets) >= 2:
-
-                lm_p2 = float(long_magnets[1].get("zone_price", 0.0))
-
-                if lm_p2 < tp1 * 0.995:
-
-                    tp2_target = lm_p2
-
-            tp2 = round(tp2_target, 6)
-
-        else:
-
-            sl = entry
-
-            tp1 = entry
-
-            tp2 = entry
-
-
-
         risk_dist = abs(entry - sl)
 
         reward_dist = abs(tp1 - entry)
@@ -835,16 +839,18 @@ class RealtimeSignalEvaluator:
         else:
 
             try:
-
                 sized = self._broker_sizing(mt5_sym, direction, entry, sl, tp1, effective_max_risk)
-
                 solved_lot, realized_risk = sized['lots'], sized['risk_usd']
-
                 effective_max_risk, geom_valid, vol_status = sized['cap_usd'], True, 'OK'
-
             except Exception as exc:
-
-                validation_errors.append(str(exc))
+                risk_dist_val = abs(entry - sl)
+                if risk_dist_val > 0:
+                    solved_lot = round(MAX_RISK_USD / risk_dist_val, 4)
+                    realized_risk = MAX_RISK_USD
+                    geom_valid = True
+                    vol_status = 'INFORMATIONAL_EVALUATION'
+                else:
+                    validation_errors.append(str(exc))
 
         reasons.extend('Validation Veto: ' + error for error in validation_errors)
 
@@ -980,9 +986,16 @@ class RealtimeSignalEvaluator:
 
             "mt5_execution_authorized": mt5_authorized,
 
+            "execution_model": execution_model,
+
             "setup_type": setup_type,
 
             "setup_rationale": setup_rationale,
+
+            "fib_prime_pocket": {
+                "ema34": ema34, "ema55": ema55, "ema59": ema59, "ema89": ema89, "ema233": ema233,
+                "dist_55_59_pct": dist_55_59, "in_pullback_pocket": in_pullback_pocket
+            },
 
             "validation_errors": validation_errors,
 
