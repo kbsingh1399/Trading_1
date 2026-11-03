@@ -781,6 +781,20 @@ class DeltaExchangeTrader:
         free_cash_mode = os.environ.get("DELTA_FREE_CASH_MODE", "true").lower() in ("true", "1", "yes")
         avail_margin = self.get_available_margin_usd()
 
+        # Capital & Margin Preservation Invariant: available free margin buffer >= 20%
+        wb = self.get_wallet_balances()
+        usd_item = next((b for b in wb if b.get("asset_symbol") == "USD"), {}) if isinstance(wb, list) else {}
+        total_balance = float(usd_item.get("balance", 0.0) or 0.0)
+        if total_balance > 0 and len(active_pos) > 0:
+            margin_buffer_pct = (avail_margin / total_balance) * 100.0
+            if margin_buffer_pct < 20.0:
+                logger.warning(f"Live dispatch blocked: free margin buffer {margin_buffer_pct:.1f}% is below 20.0% minimum guardrail (${avail_margin:.4f} of ${total_balance:.4f} USD).")
+                return {
+                    "ok": False,
+                    "status": "REJECTED",
+                    "reason": f"INSUFFICIENT_MARGIN_BUFFER: {margin_buffer_pct:.1f}% < 20.0% floor (available=${avail_margin:.4f} USD of ${total_balance:.4f})"
+                }
+
         if free_cash_mode:
             # "Till the time we have free cash...keep on trading..."
             max_limit = int(os.environ.get("MAX_DELTA_POSITIONS", "10"))
