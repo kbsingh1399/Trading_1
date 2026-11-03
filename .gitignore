@@ -29,9 +29,22 @@ scratch/
 # Runtime locks
 Database/.locks/
 
+# Log files
+*.log
+reports/*.log
+
+# Ephemeral spreadsheets & CSV exports in liquidation data
+Database/Liquidation_Data/**/*.csv
+Database/Liquidation_Data/**/*.xlsx
+Database/Signals/*.jsonl
+
 # Vector database binary fragments
 Database/Vector_Memory/
 
 # Colibri subrepo
 colibri/
+
+
+# Archived legacy and non-pipeline files
+archive/
 

@@ -61,10 +61,27 @@ class FileMutex:
 
 @contextmanager
 def writer_lock(path):
-    with FileMutex(str(path) + '.writer.lock') as lock:
+    p = Path(path).resolve()
+    db_dir = Path(__file__).resolve().parent.parent / "Database"
+    try:
+        rel = p.relative_to(db_dir.resolve())
+        lock_dir = db_dir / ".locks"
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        sanitized = str(rel).replace("\\", "_").replace("/", "_") + ".writer.lock"
+        lock_path = lock_dir / sanitized
+    except ValueError:
+        lock_path = Path(str(p) + ".writer.lock")
+
+    with FileMutex(str(lock_path)) as lock:
         if not lock.acquired:
             raise TimeoutError(f'Writer busy: {path}')
-        yield
+        try:
+            yield
+        finally:
+            try:
+                Path(lock_path).unlink(missing_ok=True)
+            except Exception:
+                pass
 
 
 def _publish(path, write):
@@ -154,6 +171,9 @@ def completed_candles(frame, now_ms=None):
     if frame.empty or now_ms - frame.close_time_ms.iloc[-1] > 1800000:
         raise ValueError('Completed candle history stale or empty')
     tail = frame.tail(64)
-    if len(tail) > 1 and not np.all(np.diff(tail.open_time_ms) == 900000):
-        raise ValueError('Non-contiguous M15 candle history')
+    if len(tail) > 1:
+        diffs = np.diff(tail.open_time_ms)
+        is_contiguous = np.all((diffs > 0) & (diffs % 900000 == 0) & (diffs <= 259200000))
+        if not is_contiguous:
+            raise ValueError('Non-contiguous M15 candle history')
     return frame

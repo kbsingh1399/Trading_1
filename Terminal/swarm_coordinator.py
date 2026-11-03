@@ -28,7 +28,8 @@ from Terminal.deepmind_timesfm_forecaster import DeepMindTimesFMForecaster
 from Terminal.persistent_memory import get_rules, get_strategy_weight, get_lessons
 
 DB_DIR = ROOT_DIR / "Database"
-DECISIONS_LOG = DB_DIR / "swarm_decisions.jsonl"
+SIGNALS_DIR = DB_DIR / "Signals"
+DECISIONS_LOG = (SIGNALS_DIR / "swarm_decisions.jsonl") if (SIGNALS_DIR / "swarm_decisions.jsonl").exists() else (DB_DIR / "swarm_decisions.jsonl")
 REGISTRY_FILE = DB_DIR / "mutual_asset_capability_registry.json"
 
 logging.basicConfig(
@@ -61,7 +62,7 @@ class SwarmCoordinator:
         }
 
         # Check Footprint Signals
-        signals_p = DB_DIR / "coinglass_aggregated_futures_signals.parquet"
+        signals_p = (SIGNALS_DIR / "coinglass_aggregated_futures_signals.parquet") if (SIGNALS_DIR / "coinglass_aggregated_futures_signals.parquet").exists() else (DB_DIR / "coinglass_aggregated_futures_signals.parquet")
         if signals_p.exists():
             mod_time = datetime.fromtimestamp(signals_p.stat().st_mtime, timezone.utc)
             age_s = (now - mod_time).total_seconds()

@@ -43,6 +43,43 @@ SURVIVAL_LOSSES = 10           # Required consecutive loss survival streak
 SURVIVAL_DIVISOR = SURVIVAL_LOSSES * MAX_OPEN_POSITIONS
 
 
+# ---------------------------------------------------------------------------
+# Daily Loss Tracking (prop challenge trailing drawdown guard)
+# ---------------------------------------------------------------------------
+# FundingPips challenge: max daily loss = 5% of initial balance ($250 for $5k).
+# This module tracks P&L booked today relative to the platform opening equity.
+# Callers (realtime_signal_evaluator) must feed opening_equity each day.
+MAX_DAILY_LOSS_PCT = 0.05          # 5 % of account balance per challenge rules
+MAX_DAILY_LOSS_USD = MAX_DAILY_LOSS_PCT * 5000.0  # = $250.00 for $5k account
+
+
+def daily_loss_remaining(opening_equity: float, current_equity: float) -> Tuple[float, bool, str]:
+    """
+    Returns how much further loss is allowed today.
+
+    Args:
+        opening_equity: Equity at the start of today's trading session (platform day).
+        current_equity: Current live equity.
+
+    Returns:
+        (remaining_usd, is_tradeable, reason)
+    """
+    if not all(isinstance(x, (int, float)) and math.isfinite(x) and x > 0 for x in (opening_equity, current_equity)):
+        return 0.0, False, "INVALID_EQUITY_STATE"
+
+    daily_cap = opening_equity * MAX_DAILY_LOSS_PCT
+    booked_loss = max(0.0, opening_equity - current_equity)
+    remaining = daily_cap - booked_loss
+
+    if remaining <= 0.0:
+        return 0.0, False, f"DAILY_LOSS_LIMIT_REACHED: Lost ${booked_loss:.2f} of ${daily_cap:.2f} daily cap"
+
+    if remaining < HALT_CUSHION_USD:
+        return remaining, False, f"DAILY_LOSS_CUSHION_BREACH: Only ${remaining:.2f} remaining today"
+
+    return remaining, True, f"OK (Daily loss: ${booked_loss:.2f} of ${daily_cap:.2f} cap; ${remaining:.2f} remaining)"
+
+
 def budget_per_trade(
     equity: float,
     balance: float,
@@ -133,6 +170,8 @@ def admissible_volume(
     else:
         return None, "NO_BROKER_VALUATION", 0.0
 
+    if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in (actual_loss_step, actual_step, min_lot, max_lot, floor_usd, cap_usd)):
+        return None, "INVALID_VOLUME_INPUT", 0.0
     if actual_loss_step <= 0.0 or actual_step <= 0.0:
         return None, "NO_BROKER_VALUATION", 0.0
 

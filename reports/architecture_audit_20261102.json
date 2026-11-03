@@ -1,0 +1,35 @@
+{
+  "verified_at_utc": "2026-11-02T06:59:57.009808+00:00",
+  "live_orders_sent": 0,
+  "cdp": {
+    "reachable": true,
+    "page_count": 2,
+    "matchtrader_present": false
+  },
+  "btc_readonly_confluence": {
+    "whale": {
+      "data_valid": false,
+      "error": "Snapshot stale or future",
+      "whale_imbalance_bid_ratio": 0.5
+    },
+    "liquidation": {
+      "data_valid": false,
+      "near_field_shorts_pct": 50.0,
+      "top_magnet_zone": null,
+      "error": "Snapshot stale or future"
+    },
+    "cvd": {
+      "data_valid": false,
+      "error": "Completed candle history stale or empty",
+      "cvd_slope": "NEUTRAL"
+    },
+    "latency_ms_p50": 12.223400000038964,
+    "latency_ms_max": 54.38469999990048,
+    "iterations": 15
+  },
+  "mt5": {
+    "error": "(-10005, 'IPC timeout')"
+  },
+  "visible_collector_or_trader_processes": [],
+  "process_check_method": "PowerShell Get-CimInstance Win32_Process; python command lines filtered by collector and execution script names"
+}

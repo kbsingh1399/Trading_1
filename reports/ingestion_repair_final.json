@@ -1,0 +1,1587 @@
+{
+  "verified_at_utc": "2026-11-02T07:34:00.168279+00:00",
+  "coverage": {
+    "footprint": {
+      "refreshed": 36,
+      "configured": 36
+    },
+    "whales": {
+      "refreshed": 12,
+      "configured": 12
+    },
+    "liquidation_maps": {
+      "refreshed": 13,
+      "configured": 13
+    },
+    "tv_liquidations": {
+      "refreshed": 36,
+      "configured": 36
+    },
+    "rest_liquidations": {
+      "refreshed": 29,
+      "configured": 34,
+      "no_observations": [
+        "UKOIL",
+        "USOIL",
+        "NDX100",
+        "DJI30",
+        "JP225"
+      ]
+    }
+  },
+  "parquets_decoded": 312,
+  "read_errors": [],
+  "tv_missing_quote": [
+    "BTC_tv_liquidations"
+  ],
+  "tests": "54 passed in 4.18s",
+  "live_order_dispatch": false,
+  "health": {
+    "timestamp_utc": "2026-11-02T07:34:00.169928+00:00",
+    "status": "ATTENTION_REQUIRED",
+    "pipelines": {
+      "footprint_signals": {
+        "status": "HEALTHY",
+        "healthy_files": 1,
+        "total_files": 1,
+        "files": [
+          {
+            "file": "coinglass_aggregated_futures_signals.parquet",
+            "rows": 9638,
+            "age_seconds": 613.1,
+            "status": "HEALTHY"
+          }
+        ]
+      },
+      "candle_data": {
+        "status": "HEALTHY",
+        "healthy_files": 36,
+        "total_files": 36,
+        "files": [
+          {
+            "file": "Candle_Data\\1INCH.parquet",
+            "rows": 368,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\AAVE.parquet",
+            "rows": 365,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\ADA.parquet",
+            "rows": 538,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\ALGO.parquet",
+            "rows": 363,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\AR.parquet",
+            "rows": 365,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\ATOM.parquet",
+            "rows": 364,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\AVAX.parquet",
+            "rows": 364,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\AXS.parquet",
+            "rows": 538,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\BAT.parquet",
+            "rows": 538,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\BCH.parquet",
+            "rows": 538,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\BNB.parquet",
+            "rows": 364,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\BTC.parquet",
+            "rows": 759,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\CHZ.parquet",
+            "rows": 369,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\COMP.parquet",
+            "rows": 363,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\COPPER.parquet",
+            "rows": 364,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\CRV.parquet",
+            "rows": 538,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\DOGE.parquet",
+            "rows": 365,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\DOT.parquet",
+            "rows": 368,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\ETH.parquet",
+            "rows": 538,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\FIL.parquet",
+            "rows": 538,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\GAS.parquet",
+            "rows": 363,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\HBAR.parquet",
+            "rows": 538,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\LINK.parquet",
+            "rows": 538,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\LTC.parquet",
+            "rows": 364,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\NEAR.parquet",
+            "rows": 538,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\NEO.parquet",
+            "rows": 538,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\SNX.parquet",
+            "rows": 538,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\SOL.parquet",
+            "rows": 538,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\SUSHI.parquet",
+            "rows": 538,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\TRX.parquet",
+            "rows": 365,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\UNI.parquet",
+            "rows": 366,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\XAG.parquet",
+            "rows": 364,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\XAU.parquet",
+            "rows": 369,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\XRP.parquet",
+            "rows": 538,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\ZEC.parquet",
+            "rows": 362,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Candle_Data\\ZRX.parquet",
+            "rows": 368,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          }
+        ]
+      },
+      "whale_orders": {
+        "status": "HEALTHY",
+        "healthy_files": 12,
+        "total_files": 12,
+        "files": [
+          {
+            "file": "Whale_Orders\\Open_Orders\\ADA_whale_open_orders.parquet",
+            "rows": 246,
+            "age_seconds": 534.8,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Whale_Orders\\Open_Orders\\AVAX_whale_open_orders.parquet",
+            "rows": 130,
+            "age_seconds": 516.3,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Whale_Orders\\Open_Orders\\BNB_whale_open_orders.parquet",
+            "rows": 211,
+            "age_seconds": 546.3,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Whale_Orders\\Open_Orders\\BTC_whale_open_orders.parquet",
+            "rows": 722,
+            "age_seconds": 598.4,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Whale_Orders\\Open_Orders\\DOGE_whale_open_orders.parquet",
+            "rows": 170,
+            "age_seconds": 557.8,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Whale_Orders\\Open_Orders\\ETH_whale_open_orders.parquet",
+            "rows": 288,
+            "age_seconds": 586.4,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Whale_Orders\\Open_Orders\\HYPE_whale_open_orders.parquet",
+            "rows": 539,
+            "age_seconds": 477.3,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Whale_Orders\\Open_Orders\\LINK_whale_open_orders.parquet",
+            "rows": 154,
+            "age_seconds": 525.8,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Whale_Orders\\Open_Orders\\NEAR_whale_open_orders.parquet",
+            "rows": 531,
+            "age_seconds": 492.3,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Whale_Orders\\Open_Orders\\SOL_whale_open_orders.parquet",
+            "rows": 177,
+            "age_seconds": 577.5,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Whale_Orders\\Open_Orders\\SUI_whale_open_orders.parquet",
+            "rows": 251,
+            "age_seconds": 505.6,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Whale_Orders\\Open_Orders\\XRP_whale_open_orders.parquet",
+            "rows": 279,
+            "age_seconds": 567.0,
+            "status": "HEALTHY"
+          }
+        ]
+      },
+      "liquidation_data": {
+        "status": "DEGRADED",
+        "healthy_files": 39,
+        "total_files": 135,
+        "files": [
+          {
+            "file": "Liquidation_Data\\Key_Levels\\1INCH_key_levels.parquet",
+            "rows": 1317,
+            "age_seconds": 146943.0,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\AAVE_key_levels.parquet",
+            "rows": 1077,
+            "age_seconds": 145513.7,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\ADA_key_levels.parquet",
+            "rows": 10,
+            "age_seconds": 446.3,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\ALGO_key_levels.parquet",
+            "rows": 1831,
+            "age_seconds": 145382.0,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\AR_key_levels.parquet",
+            "rows": 596,
+            "age_seconds": 147002.3,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\ATOM_key_levels.parquet",
+            "rows": 1810,
+            "age_seconds": 145413.6,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\AVAX_key_levels.parquet",
+            "rows": 10,
+            "age_seconds": 438.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\AXS_key_levels.parquet",
+            "rows": 1361,
+            "age_seconds": 147105.4,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\BAT_key_levels.parquet",
+            "rows": 1040,
+            "age_seconds": 147075.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\BCH_key_levels.parquet",
+            "rows": 1743,
+            "age_seconds": 145653.0,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\BNB_key_levels.parquet",
+            "rows": 10,
+            "age_seconds": 450.4,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\BRENTOIL_key_levels.parquet",
+            "rows": 555,
+            "age_seconds": 146633.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\BTC_key_levels.parquet",
+            "rows": 10,
+            "age_seconds": 471.0,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\CHZ_key_levels.parquet",
+            "rows": 1211,
+            "age_seconds": 147040.4,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\COMP_key_levels.parquet",
+            "rows": 1358,
+            "age_seconds": 146972.8,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\COPPER_key_levels.parquet",
+            "rows": 548,
+            "age_seconds": 146670.1,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\CRV_key_levels.parquet",
+            "rows": 1121,
+            "age_seconds": 145443.7,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\DOGE_key_levels.parquet",
+            "rows": 10,
+            "age_seconds": 454.5,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\DOT_key_levels.parquet",
+            "rows": 1224,
+            "age_seconds": 145687.7,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\ETH_key_levels.parquet",
+            "rows": 10,
+            "age_seconds": 466.9,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\EURUSD_key_levels.parquet",
+            "rows": 1272,
+            "age_seconds": 146485.9,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\FIL_key_levels.parquet",
+            "rows": 940,
+            "age_seconds": 145477.1,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\GAS_key_levels.parquet",
+            "rows": 499,
+            "age_seconds": 146653.5,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\GBPUSD_key_levels.parquet",
+            "rows": 1293,
+            "age_seconds": 146451.1,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\HBAR_key_levels.parquet",
+            "rows": 764,
+            "age_seconds": 146771.5,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\LINK_key_levels.parquet",
+            "rows": 10,
+            "age_seconds": 442.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\LTC_key_levels.parquet",
+            "rows": 10,
+            "age_seconds": 421.7,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\NAS100_key_levels.parquet",
+            "rows": 380,
+            "age_seconds": 146559.3,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\NEAR_key_levels.parquet",
+            "rows": 5,
+            "age_seconds": 434.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\NEO_key_levels.parquet",
+            "rows": 1282,
+            "age_seconds": 146841.0,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\SNX_key_levels.parquet",
+            "rows": 1336,
+            "age_seconds": 146874.3,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\SOL_key_levels.parquet",
+            "rows": 10,
+            "age_seconds": 462.9,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\SP500_key_levels.parquet",
+            "rows": 995,
+            "age_seconds": 146578.7,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\SUI_key_levels.parquet",
+            "rows": 10,
+            "age_seconds": 430.0,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\SUSHI_key_levels.parquet",
+            "rows": 1337,
+            "age_seconds": 146907.9,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\TRX_key_levels.parquet",
+            "rows": 10,
+            "age_seconds": 426.0,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\UNI_key_levels.parquet",
+            "rows": 1047,
+            "age_seconds": 145549.7,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\US30_key_levels.parquet",
+            "rows": 981,
+            "age_seconds": 146523.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\USDJPY_key_levels.parquet",
+            "rows": 1319,
+            "age_seconds": 146418.1,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\USOIL_key_levels.parquet",
+            "rows": 158,
+            "age_seconds": 146611.9,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\XAG_key_levels.parquet",
+            "rows": 761,
+            "age_seconds": 146688.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\XAU_key_levels.parquet",
+            "rows": 1067,
+            "age_seconds": 146704.7,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\XRP_key_levels.parquet",
+            "rows": 10,
+            "age_seconds": 458.6,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\ZEC_key_levels.parquet",
+            "rows": 1289,
+            "age_seconds": 146807.5,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Key_Levels\\ZRX_key_levels.parquet",
+            "rows": 1151,
+            "age_seconds": 146738.3,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\1INCH_magnet_zones.parquet",
+            "rows": 81,
+            "age_seconds": 146942.9,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\AAVE_magnet_zones.parquet",
+            "rows": 82,
+            "age_seconds": 145513.7,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\ADA_magnet_zones.parquet",
+            "rows": 2,
+            "age_seconds": 446.3,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\ALGO_magnet_zones.parquet",
+            "rows": 127,
+            "age_seconds": 145382.0,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\AR_magnet_zones.parquet",
+            "rows": 54,
+            "age_seconds": 147002.3,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\ATOM_magnet_zones.parquet",
+            "rows": 126,
+            "age_seconds": 145413.6,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\AVAX_magnet_zones.parquet",
+            "rows": 2,
+            "age_seconds": 438.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\AXS_magnet_zones.parquet",
+            "rows": 98,
+            "age_seconds": 147105.3,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\BAT_magnet_zones.parquet",
+            "rows": 92,
+            "age_seconds": 147075.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\BCH_magnet_zones.parquet",
+            "rows": 144,
+            "age_seconds": 145652.9,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\BNB_magnet_zones.parquet",
+            "rows": 2,
+            "age_seconds": 450.4,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\BRENTOIL_magnet_zones.parquet",
+            "rows": 48,
+            "age_seconds": 146633.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\BTC_magnet_zones.parquet",
+            "rows": 2,
+            "age_seconds": 471.0,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\CHZ_magnet_zones.parquet",
+            "rows": 85,
+            "age_seconds": 147040.3,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\COMP_magnet_zones.parquet",
+            "rows": 100,
+            "age_seconds": 146972.8,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\COPPER_magnet_zones.parquet",
+            "rows": 35,
+            "age_seconds": 146670.1,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\CRV_magnet_zones.parquet",
+            "rows": 70,
+            "age_seconds": 145443.6,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\DOGE_magnet_zones.parquet",
+            "rows": 2,
+            "age_seconds": 454.5,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\DOT_magnet_zones.parquet",
+            "rows": 101,
+            "age_seconds": 145687.7,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\ETH_magnet_zones.parquet",
+            "rows": 2,
+            "age_seconds": 466.9,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\EURUSD_magnet_zones.parquet",
+            "rows": 86,
+            "age_seconds": 146485.9,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\FIL_magnet_zones.parquet",
+            "rows": 84,
+            "age_seconds": 145477.0,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\GAS_magnet_zones.parquet",
+            "rows": 29,
+            "age_seconds": 146653.5,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\GBPUSD_magnet_zones.parquet",
+            "rows": 69,
+            "age_seconds": 146451.1,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\HBAR_magnet_zones.parquet",
+            "rows": 65,
+            "age_seconds": 146771.4,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\LINK_magnet_zones.parquet",
+            "rows": 2,
+            "age_seconds": 442.3,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\LTC_magnet_zones.parquet",
+            "rows": 2,
+            "age_seconds": 421.7,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\NAS100_magnet_zones.parquet",
+            "rows": 44,
+            "age_seconds": 146559.3,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\NEAR_magnet_zones.parquet",
+            "rows": 1,
+            "age_seconds": 434.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\NEO_magnet_zones.parquet",
+            "rows": 87,
+            "age_seconds": 146841.0,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\SNX_magnet_zones.parquet",
+            "rows": 81,
+            "age_seconds": 146874.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\SOL_magnet_zones.parquet",
+            "rows": 2,
+            "age_seconds": 462.9,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\SP500_magnet_zones.parquet",
+            "rows": 72,
+            "age_seconds": 146578.7,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\SUI_magnet_zones.parquet",
+            "rows": 2,
+            "age_seconds": 430.0,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\SUSHI_magnet_zones.parquet",
+            "rows": 90,
+            "age_seconds": 146907.9,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\TRX_magnet_zones.parquet",
+            "rows": 2,
+            "age_seconds": 426.0,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\UNI_magnet_zones.parquet",
+            "rows": 72,
+            "age_seconds": 145549.7,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\US30_magnet_zones.parquet",
+            "rows": 70,
+            "age_seconds": 146523.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\USDJPY_magnet_zones.parquet",
+            "rows": 71,
+            "age_seconds": 146418.1,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\USOIL_magnet_zones.parquet",
+            "rows": 11,
+            "age_seconds": 146611.8,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\XAG_magnet_zones.parquet",
+            "rows": 38,
+            "age_seconds": 146688.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\XAU_magnet_zones.parquet",
+            "rows": 75,
+            "age_seconds": 146704.7,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\XRP_magnet_zones.parquet",
+            "rows": 2,
+            "age_seconds": 458.6,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\ZEC_magnet_zones.parquet",
+            "rows": 102,
+            "age_seconds": 146807.5,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Magnet_Zones\\ZRX_magnet_zones.parquet",
+            "rows": 108,
+            "age_seconds": 146738.3,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\1INCH_near_field.parquet",
+            "rows": 18,
+            "age_seconds": 146942.9,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\AAVE_near_field.parquet",
+            "rows": 24,
+            "age_seconds": 145513.7,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\ADA_near_field.parquet",
+            "rows": 1,
+            "age_seconds": 446.3,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\ALGO_near_field.parquet",
+            "rows": 24,
+            "age_seconds": 145382.0,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\AR_near_field.parquet",
+            "rows": 15,
+            "age_seconds": 147002.3,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\ATOM_near_field.parquet",
+            "rows": 24,
+            "age_seconds": 145413.5,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\AVAX_near_field.parquet",
+            "rows": 1,
+            "age_seconds": 438.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\AXS_near_field.parquet",
+            "rows": 18,
+            "age_seconds": 147105.3,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\BAT_near_field.parquet",
+            "rows": 18,
+            "age_seconds": 147075.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\BCH_near_field.parquet",
+            "rows": 24,
+            "age_seconds": 145652.9,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\BNB_near_field.parquet",
+            "rows": 1,
+            "age_seconds": 450.4,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\BRENTOIL_near_field.parquet",
+            "rows": 9,
+            "age_seconds": 146633.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\BTC_near_field.parquet",
+            "rows": 1,
+            "age_seconds": 471.0,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\CHZ_near_field.parquet",
+            "rows": 18,
+            "age_seconds": 147040.3,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\COMP_near_field.parquet",
+            "rows": 18,
+            "age_seconds": 146972.7,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\COPPER_near_field.parquet",
+            "rows": 9,
+            "age_seconds": 146670.1,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\CRV_near_field.parquet",
+            "rows": 24,
+            "age_seconds": 145443.6,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\DOGE_near_field.parquet",
+            "rows": 1,
+            "age_seconds": 454.5,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\DOT_near_field.parquet",
+            "rows": 24,
+            "age_seconds": 145687.7,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\ETH_near_field.parquet",
+            "rows": 1,
+            "age_seconds": 466.9,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\EURUSD_near_field.parquet",
+            "rows": 18,
+            "age_seconds": 146485.8,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\FIL_near_field.parquet",
+            "rows": 24,
+            "age_seconds": 145477.0,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\GAS_near_field.parquet",
+            "rows": 9,
+            "age_seconds": 146653.4,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\GBPUSD_near_field.parquet",
+            "rows": 18,
+            "age_seconds": 146451.1,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\HBAR_near_field.parquet",
+            "rows": 18,
+            "age_seconds": 146771.4,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\LINK_near_field.parquet",
+            "rows": 1,
+            "age_seconds": 442.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\LTC_near_field.parquet",
+            "rows": 1,
+            "age_seconds": 421.7,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\NAS100_near_field.parquet",
+            "rows": 9,
+            "age_seconds": 146559.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\NEAR_near_field.parquet",
+            "rows": 1,
+            "age_seconds": 434.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\NEO_near_field.parquet",
+            "rows": 18,
+            "age_seconds": 146841.0,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\SNX_near_field.parquet",
+            "rows": 18,
+            "age_seconds": 146874.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\SOL_near_field.parquet",
+            "rows": 1,
+            "age_seconds": 462.9,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\SP500_near_field.parquet",
+            "rows": 15,
+            "age_seconds": 146578.6,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\SUI_near_field.parquet",
+            "rows": 1,
+            "age_seconds": 430.0,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\SUSHI_near_field.parquet",
+            "rows": 18,
+            "age_seconds": 146907.9,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\TRX_near_field.parquet",
+            "rows": 1,
+            "age_seconds": 426.0,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\UNI_near_field.parquet",
+            "rows": 24,
+            "age_seconds": 145549.7,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\US30_near_field.parquet",
+            "rows": 15,
+            "age_seconds": 146523.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\USDJPY_near_field.parquet",
+            "rows": 18,
+            "age_seconds": 146418.1,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\USOIL_near_field.parquet",
+            "rows": 9,
+            "age_seconds": 146611.8,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\XAG_near_field.parquet",
+            "rows": 9,
+            "age_seconds": 146688.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\XAU_near_field.parquet",
+            "rows": 20,
+            "age_seconds": 146704.7,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\XRP_near_field.parquet",
+            "rows": 1,
+            "age_seconds": 458.6,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\ZEC_near_field.parquet",
+            "rows": 18,
+            "age_seconds": 146807.5,
+            "status": "STALE"
+          },
+          {
+            "file": "Liquidation_Data\\Near_Field_Balance\\ZRX_near_field.parquet",
+            "rows": 18,
+            "age_seconds": 146738.3,
+            "status": "STALE"
+          }
+        ]
+      },
+      "tv_liquidations": {
+        "status": "HEALTHY",
+        "healthy_files": 36,
+        "total_files": 36,
+        "files": [
+          {
+            "file": "Live_Liquidations\\1000PEPE_tv_liquidations.parquet",
+            "rows": 300,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\1000SHIB_tv_liquidations.parquet",
+            "rows": 300,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\ADA_tv_liquidations.parquet",
+            "rows": 301,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\APT_tv_liquidations.parquet",
+            "rows": 300,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\ARB_tv_liquidations.parquet",
+            "rows": 300,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\ATOM_tv_liquidations.parquet",
+            "rows": 300,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\AVAX_tv_liquidations.parquet",
+            "rows": 301,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\BCH_tv_liquidations.parquet",
+            "rows": 300,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\BNB_tv_liquidations.parquet",
+            "rows": 301,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\BRENTOIL_tv_liquidations.parquet",
+            "rows": 345,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\BTC_tv_liquidations.parquet",
+            "rows": 301,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\DJI30_tv_liquidations.parquet",
+            "rows": 346,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\DOGE_tv_liquidations.parquet",
+            "rows": 301,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\DOT_tv_liquidations.parquet",
+            "rows": 300,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\ETH_tv_liquidations.parquet",
+            "rows": 301,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\FET_tv_liquidations.parquet",
+            "rows": 300,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\FIL_tv_liquidations.parquet",
+            "rows": 300,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\HYPE_tv_liquidations.parquet",
+            "rows": 344,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\JP225_tv_liquidations.parquet",
+            "rows": 344,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\LINK_tv_liquidations.parquet",
+            "rows": 301,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\LTC_tv_liquidations.parquet",
+            "rows": 300,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\NDX100_tv_liquidations.parquet",
+            "rows": 344,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\NEAR_tv_liquidations.parquet",
+            "rows": 301,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\OP_tv_liquidations.parquet",
+            "rows": 300,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\POL_tv_liquidations.parquet",
+            "rows": 300,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\RENDER_tv_liquidations.parquet",
+            "rows": 300,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\SOL_tv_liquidations.parquet",
+            "rows": 301,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\SPX500_tv_liquidations.parquet",
+            "rows": 344,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\SUI_tv_liquidations.parquet",
+            "rows": 301,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\TAO_tv_liquidations.parquet",
+            "rows": 300,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\TRX_tv_liquidations.parquet",
+            "rows": 300,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\UKOIL_tv_liquidations.parquet",
+            "rows": 344,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\UNI_tv_liquidations.parquet",
+            "rows": 300,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\XAG_tv_liquidations.parquet",
+            "rows": 300,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\XAU_tv_liquidations.parquet",
+            "rows": 300,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\XRP_tv_liquidations.parquet",
+            "rows": 301,
+            "age_seconds": 240.2,
+            "status": "HEALTHY"
+          }
+        ]
+      },
+      "rest_liquidations": {
+        "status": "DEGRADED",
+        "healthy_files": 8,
+        "total_files": 30,
+        "files": [
+          {
+            "file": "Live_Liquidations\\1000PEPE_coinalyze_liquidations.parquet",
+            "rows": 137,
+            "age_seconds": 2040.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Live_Liquidations\\1000SHIB_coinalyze_liquidations.parquet",
+            "rows": 27,
+            "age_seconds": 3840.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Live_Liquidations\\ADA_coinalyze_liquidations.parquet",
+            "rows": 27,
+            "age_seconds": 3840.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Live_Liquidations\\APT_coinalyze_liquidations.parquet",
+            "rows": 36,
+            "age_seconds": 2940.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Live_Liquidations\\ARB_coinalyze_liquidations.parquet",
+            "rows": 36,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\ATOM_coinalyze_liquidations.parquet",
+            "rows": 30,
+            "age_seconds": 3840.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Live_Liquidations\\AVAX_coinalyze_liquidations.parquet",
+            "rows": 42,
+            "age_seconds": 3840.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Live_Liquidations\\BCH_coinalyze_liquidations.parquet",
+            "rows": 40,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\BNB_coinalyze_liquidations.parquet",
+            "rows": 73,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\BTC_coinalyze_liquidations.parquet",
+            "rows": 145,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\DOGE_coinalyze_liquidations.parquet",
+            "rows": 51,
+            "age_seconds": 3840.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Live_Liquidations\\DOT_coinalyze_liquidations.parquet",
+            "rows": 24,
+            "age_seconds": 3840.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Live_Liquidations\\ETH_coinalyze_liquidations.parquet",
+            "rows": 139,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\FET_coinalyze_liquidations.parquet",
+            "rows": 39,
+            "age_seconds": 3840.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Live_Liquidations\\FIL_coinalyze_liquidations.parquet",
+            "rows": 42,
+            "age_seconds": 3840.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Live_Liquidations\\LINK_coinalyze_liquidations.parquet",
+            "rows": 60,
+            "age_seconds": 2940.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Live_Liquidations\\LTC_coinalyze_liquidations.parquet",
+            "rows": 32,
+            "age_seconds": 4740.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Live_Liquidations\\NEAR_coinalyze_liquidations.parquet",
+            "rows": 124,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\OP_coinalyze_liquidations.parquet",
+            "rows": 40,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\POL_coinalyze_liquidations.parquet",
+            "rows": 11,
+            "age_seconds": 3840.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Live_Liquidations\\RENDER_coinalyze_liquidations.parquet",
+            "rows": 17,
+            "age_seconds": 4740.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Live_Liquidations\\SOL_coinalyze_liquidations.parquet",
+            "rows": 113,
+            "age_seconds": 2940.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Live_Liquidations\\SUI_coinalyze_liquidations.parquet",
+            "rows": 61,
+            "age_seconds": 3840.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Live_Liquidations\\summary_coinalyze_liquidations.parquet",
+            "rows": 29,
+            "status": "ERROR",
+            "error": "'DataFrame' object has no attribute 'timestamp'"
+          },
+          {
+            "file": "Live_Liquidations\\TAO_coinalyze_liquidations.parquet",
+            "rows": 36,
+            "age_seconds": 3840.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Live_Liquidations\\TRX_coinalyze_liquidations.parquet",
+            "rows": 90,
+            "age_seconds": 1140.2,
+            "status": "HEALTHY"
+          },
+          {
+            "file": "Live_Liquidations\\UNI_coinalyze_liquidations.parquet",
+            "rows": 61,
+            "age_seconds": 2940.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Live_Liquidations\\XAG_coinalyze_liquidations.parquet",
+            "rows": 39,
+            "age_seconds": 3840.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Live_Liquidations\\XAU_coinalyze_liquidations.parquet",
+            "rows": 62,
+            "age_seconds": 4740.2,
+            "status": "STALE"
+          },
+          {
+            "file": "Live_Liquidations\\XRP_coinalyze_liquidations.parquet",
+            "rows": 79,
+            "age_seconds": 3840.2,
+            "status": "STALE"
+          }
+        ]
+      }
+    }
+  }
+}

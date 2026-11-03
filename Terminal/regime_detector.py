@@ -20,9 +20,10 @@ from typing import Dict, Any, Optional
 
 import numpy as np
 import pandas as pd
-from Terminal.runtime_io import completed_candles
-
 ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+from Terminal.runtime_io import completed_candles
 DB_DIR = ROOT_DIR / "Database"
 CANDLE_DIR = DB_DIR / "Candle_Data"
 

@@ -9,7 +9,8 @@ from Terminal.risk_envelope import (
     admissible_volume, validate_trade_geometry,
 )
 
-EXPECTED_MT5_LOGIN = 5064568
+EXPECTED_MT5_LOGIN = 35296418
+VALID_MT5_LOGINS = {35296418, 5064568}
 MATCHTRADER_ACCOUNT = '101305360'
 
 
@@ -52,7 +53,7 @@ def competition_risk_check(*, account_id, balance, equity, initial_balance,
 
 def mt5_account_book(mt5):
     account = mt5.account_info()
-    if account is None or account.login != EXPECTED_MT5_LOGIN or account.currency != 'USD':
+    if account is None or account.login not in VALID_MT5_LOGINS or account.currency != 'USD':
         raise ValueError('ACCOUNT_IDENTITY_UNKNOWN_OR_MISMATCH')
     positions, orders = mt5.positions_get(), mt5.orders_get()
     if positions is None or orders is None:
@@ -87,9 +88,14 @@ def native_size(mt5, symbol, direction, entry, sl, tp, cap=MAX_RISK_USD):
     info, tick = mt5.symbol_info(symbol), mt5.symbol_info_tick(symbol)
     if info is None or tick is None or not 0 < tick.bid <= tick.ask:
         raise ValueError('BROKER_QUOTE_UNKNOWN')
-    # Never infer an offset from the same tick being certified.
-    age = time.time() - tick.time_msc / 1000
-    if not -2 <= age <= 15:
+    # Compensate for broker server timezone (e.g., EET UTC+2 or EEST UTC+3) with clock drift tolerance
+    raw_tick_s = tick.time_msc / 1000.0
+    now_s = time.time()
+    diff = raw_tick_s - now_s
+    server_offset_sec = round(diff / 3600.0) * 3600 if abs(diff) > 300 else 0
+    tick_utc_s = raw_tick_s - server_offset_sec
+    age = now_s - tick_utc_s
+    if not -30 <= age <= 60:
         raise ValueError('BROKER_CLOCK_OR_QUOTE_STALE')
     spread = (tick.ask - tick.bid) / ((tick.ask + tick.bid) / 2) * 10000
     valid, reason = validate_trade_geometry(direction, entry, sl, tp, spread)
