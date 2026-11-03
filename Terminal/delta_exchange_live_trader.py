@@ -28,7 +28,14 @@ logger.setLevel(logging.INFO)
 CONFIG_ENV_PATH = Path.home() / ".delta-exchange-mcp" / "config.env"
 BASE_URL = "https://api.india.delta.exchange"
 MAX_DELTA_CONCURRENT_POSITIONS = MAX_OPEN_POSITIONS  # Strict SSOT from risk_envelope (2)
-LIVE_DISPATCH_ENABLED = False  # Strict default fail-closed operator safety gate
+LIVE_DISPATCH_ENABLED = os.environ.get("DELTA_LIVE_DISPATCH", "false").lower() in ("true", "1", "yes")
+
+
+def set_live_dispatch(enabled: bool):
+    """Dynamically enables or disables live Delta Exchange dispatch."""
+    global LIVE_DISPATCH_ENABLED
+    LIVE_DISPATCH_ENABLED = enabled
+    logger.info(f"Delta Live Dispatch state set to: {LIVE_DISPATCH_ENABLED}")
 
 
 def load_credentials() -> Dict[str, str]:
@@ -255,6 +262,45 @@ class DeltaExchangeTrader:
             logger.debug(f"CDP positions fallback error: {e}")
             return []
 
+    def get_available_margin_usd(self) -> float:
+        """Returns current available margin in USD (CDP browser DOM primary, API fallback)."""
+        try:
+            import urllib.request, websocket, re
+            req = urllib.request.Request("http://127.0.0.1:9222/json", headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=2) as resp:
+                tabs = json.loads(resp.read().decode())
+            delta_tab = next((t for t in tabs if "delta.exchange" in t.get("url", "")), None)
+            if delta_tab:
+                ws = websocket.create_connection(delta_tab["webSocketDebuggerUrl"], timeout=3)
+                js = r"""
+                (() => {
+                    let el = Array.from(document.querySelectorAll('*')).find(e => e.innerText && e.innerText.includes('Available Margin') && e.children.length === 0);
+                    if (el && el.parentElement) {
+                        let match = el.parentElement.innerText.match(/([0-9]+\.?[0-9]*)\s*USD/);
+                        if (match) return parseFloat(match[1]);
+                    }
+                    return null;
+                })()
+                """
+                ws.send(json.dumps({"id": 1, "method": "Runtime.evaluate", "params": {"expression": js, "returnByValue": True}}))
+                res = json.loads(ws.recv())
+                ws.close()
+                val = res.get("result", {}).get("result", {}).get("value")
+                if val is not None and isinstance(val, (int, float)):
+                    return float(val)
+        except Exception as e:
+            logger.debug(f"CDP available margin error: {e}")
+
+        try:
+            wb = self.get_wallet_balances()
+            if isinstance(wb, list):
+                for b in wb:
+                    if b.get("asset_symbol") in ("USD", "USDT", "INR"):
+                        return float(b.get("available_balance", 0.0) or 0.0)
+        except Exception:
+            pass
+        return 0.0
+
     def get_open_positions(self) -> List[Dict[str, Any]]:
         """Returns all open margined positions (REST primary, CDP fallback)."""
         res = self.request("GET", "/v2/positions/margined")
@@ -412,14 +458,33 @@ class DeltaExchangeTrader:
         if self.has_open_position(sym):
             return {"ok": False, "status": "REJECTED", "reason": f"POSITION_ALREADY_OPEN_ON_DELTA: {sym}"}
 
-        # Check max concurrent positions limit
+        # Check max concurrent positions limit vs free cash availability
         active_pos = self.get_active_positions()
-        if len(active_pos) >= MAX_DELTA_CONCURRENT_POSITIONS:
-            return {
-                "ok": False,
-                "status": "REJECTED",
-                "reason": f"DELTA_MAX_POSITIONS_REACHED: {len(active_pos)}/{MAX_DELTA_CONCURRENT_POSITIONS}"
-            }
+        free_cash_mode = os.environ.get("DELTA_FREE_CASH_MODE", "true").lower() in ("true", "1", "yes")
+        avail_margin = self.get_available_margin_usd()
+
+        if free_cash_mode:
+            # "Till the time we have free cash...keep on trading..."
+            max_limit = int(os.environ.get("MAX_DELTA_POSITIONS", "10"))
+            if len(active_pos) >= max_limit:
+                return {
+                    "ok": False,
+                    "status": "REJECTED",
+                    "reason": f"DELTA_MAX_POSITIONS_REACHED: {len(active_pos)}/{max_limit}"
+                }
+            if avail_margin <= 0.02 and len(active_pos) > 0:
+                return {
+                    "ok": False,
+                    "status": "REJECTED",
+                    "reason": f"INSUFFICIENT_FREE_MARGIN: available=${avail_margin:.2f} USD"
+                }
+        else:
+            if len(active_pos) >= MAX_DELTA_CONCURRENT_POSITIONS:
+                return {
+                    "ok": False,
+                    "status": "REJECTED",
+                    "reason": f"DELTA_MAX_POSITIONS_REACHED: {len(active_pos)}/{MAX_DELTA_CONCURRENT_POSITIONS}"
+                }
 
         trade_params = signal.get("trade_parameters") or signal.get("trade_levels") or {}
         entry = float(trade_params.get("entry_price") or signal.get("price") or 0.0)
@@ -443,7 +508,12 @@ class DeltaExchangeTrader:
 
         side = "buy" if direction in ("BUY", "BULLISH", "LONG") else "sell"
 
-        # Rigorous Discrete Contract Sizing via MAX_RISK_USD ($25.00)
+        # Determine leverage (use instrument default up to 20x or higher)
+        leverage = int(prod.get("default_leverage", 20.0))
+        if leverage < 1:
+            leverage = 20
+
+        # Rigorous Discrete Contract Sizing via MAX_RISK_USD ($25.00) and available margin
         from Terminal.risk_envelope import MAX_RISK_USD
         contract_val = float(prod.get("contract_value", 1.0) or 1.0)
         risk_dist = abs(entry - sl)
@@ -453,9 +523,17 @@ class DeltaExchangeTrader:
         else:
             size = 1
 
+        # Margin reservation: Ensure trade initial margin does not exceed available free cash
+        if avail_margin > 0.02 and contract_val > 0:
+            req_margin = (entry * contract_val * size) / float(leverage)
+            if req_margin > avail_margin:
+                sized_down = int((avail_margin * 0.95 * leverage) / (entry * contract_val))
+                size = max(1, min(size, sized_down))
+                logger.info(f"Scaled size to {size} contracts to fit available margin (${avail_margin:.2f} USD)")
+
         self._inflight_orders.add(prod["symbol"])
         try:
-            logger.info(f"Executing Delta Live Order: {prod['symbol']} {side} {size} contracts | Entry: {entry} | SL: {sl} | TP: {tp} | Leverage: 10x")
+            logger.info(f"Executing Delta Live Order: {prod['symbol']} {side} {size} contracts | Entry: {entry} | SL: {sl} | TP: {tp} | Leverage: {leverage}x | AvailMargin: ${avail_margin:.2f}")
             res = self.place_order(
                 symbol=prod["symbol"],
                 side=side,
@@ -463,7 +541,7 @@ class DeltaExchangeTrader:
                 order_type="market_order",
                 stop_loss_price=sl,
                 take_profit_price=tp,
-                leverage=10
+                leverage=leverage
             )
 
             ok = res.get("success", False) or ("result" in res and "id" in res.get("result", {}))

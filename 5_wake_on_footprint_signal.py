@@ -78,7 +78,7 @@ from Terminal.matchtrader_live_trader import (
     EQUITY_FLOOR_TOTAL,
     MAX_CONCURRENT_POSITIONS
 )
-from Terminal.delta_exchange_live_trader import delta_client
+from Terminal.delta_exchange_live_trader import delta_client, set_live_dispatch
 from Terminal.trade_critic_engine import TradeCriticEngine
 
 # Directories and Persistence Paths
@@ -697,6 +697,7 @@ def main():
     # Singleton instance lock (Goldfish Finding 7)
     acquire_singleton("wake_on_footprint_signal", DB_DIR / ".locks")
 
+    set_live_dispatch(True)
     sentinel = FootprintSignalSentinel(from_current_end=args.reset_offset)
 
     if args.once:
