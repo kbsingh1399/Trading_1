@@ -22,7 +22,7 @@ import urllib.request
 import subprocess
 from pathlib import Path
 from typing import Optional, Tuple
-from Terminal.runtime_io import FileMutex
+from Terminal.runtime_io import FileMutex, atomic_json
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DB_DIR = ROOT_DIR / "Database"
@@ -64,10 +64,7 @@ def _get_last_rotation_time() -> float:
 
 def _set_last_rotation_time(ts: float, ip: str, reason: str):
     try:
-        WARP_ROTATION_FILE.write_text(
-            json.dumps({"last_rotation_time": ts, "last_ip": ip, "reason": reason}),
-            encoding="utf-8"
-        )
+        atomic_json(WARP_ROTATION_FILE, {"last_rotation_time": ts, "last_ip": ip, "reason": reason})
     except Exception:
         pass
 
@@ -87,7 +84,8 @@ def verify_network_stabilization(expected_change_from: str = "", max_timeout: fl
                 ip = data.get("ip", "")
                 if ip and ip != "unknown":
                     changed = (ip != expected_change_from) if expected_change_from else True
-                    return True, ip
+                    if changed:
+                        return True, ip
         except Exception:
             pass
         time.sleep(0.75)
@@ -122,55 +120,55 @@ def rotate_warp_ip(context: str = "Collector", reason: str = "SCHEDULED", force:
             logger.warning(f"[{context}] [Cloudflare WARP] MatchTrader/Delta order execution is currently IN-FLIGHT. Rotation blocked to protect trade.")
             return get_current_ip()
 
-    valid_reasons = ["CHALLENGE", "HTTP_403", "HTTP_429", "FAILED_TO_LOAD", "CONSECUTIVE_EMPTY_SCRAPES", "MANUAL_OVERRIDE"]
-    if not force and reason not in valid_reasons:
-        logger.info(f"[{context}] [Cloudflare WARP] Normal operation ({reason}). Rotation skipped to preserve session cookies.")
-        return get_current_ip()
-
-    if not force and (now - last_rot < MIN_ROTATION_INTERVAL_SECS):
-        logger.info(f"[{context}] [Cloudflare WARP] Cross-process cooldown active ({int(now - last_rot)}s / {int(MIN_ROTATION_INTERVAL_SECS)}s). Skipped.")
-        return get_current_ip()
-
-    if not WARP_CLI.exists():
-        logger.warning(f"[{context}] WARP CLI binary not found at: {WARP_CLI}")
-        return get_current_ip()
-
-    with FileMutex(str(LOCK_DIR / "warp_execution.lock"), timeout=1.0) as mutex:
-        if not mutex.acquired:
-            logger.info(f"[{context}] [Cloudflare WARP] Another process is rotating WARP. Skipped.")
+        valid_reasons = ["CHALLENGE", "HTTP_403", "HTTP_429", "FAILED_TO_LOAD", "CONSECUTIVE_EMPTY_SCRAPES", "MANUAL_OVERRIDE"]
+        if not force and reason not in valid_reasons:
+            logger.info(f"[{context}] [Cloudflare WARP] Normal operation ({reason}). Rotation skipped to preserve session cookies.")
             return get_current_ip()
 
-        old_ip = get_current_ip()
-        logger.info(f"[{context}] [Cloudflare WARP] True IP Rotation triggered ({reason}). Old IP: {old_ip}")
-        new_ip = old_ip
-        try:
-            # Stage 1: Fast toggle (Disconnect to revert to Direct ISP IP)
-            if old_ip.startswith("104.28.") or old_ip.startswith("104."):
-                logger.info(f"[{context}] [Cloudflare WARP] Disconnecting WARP to switch to Direct ISP IP...")
+        if not force and (now - last_rot < MIN_ROTATION_INTERVAL_SECS):
+            logger.info(f"[{context}] [Cloudflare WARP] Cross-process cooldown active ({int(now - last_rot)}s / {int(MIN_ROTATION_INTERVAL_SECS)}s). Skipped.")
+            return get_current_ip()
+
+        if not WARP_CLI.exists():
+            logger.warning(f"[{context}] WARP CLI binary not found at: {WARP_CLI}")
+            return get_current_ip()
+
+        with FileMutex(str(LOCK_DIR / "warp_execution.lock"), timeout=1.0) as mutex:
+            if not mutex.acquired:
+                logger.info(f"[{context}] [Cloudflare WARP] Another process is rotating WARP. Skipped.")
+                return get_current_ip()
+
+            old_ip = get_current_ip()
+            logger.info(f"[{context}] [Cloudflare WARP] True IP Rotation triggered ({reason}). Old IP: {old_ip}")
+            new_ip = old_ip
+            try:
+                # Stage 1: Fast toggle (Disconnect to revert to Direct ISP IP)
+                if old_ip.startswith("104.28.") or old_ip.startswith("104."):
+                    logger.info(f"[{context}] [Cloudflare WARP] Disconnecting WARP to switch to Direct ISP IP...")
+                    subprocess.run([str(WARP_CLI), "disconnect"], capture_output=True, text=True, timeout=8)
+                    stable, new_ip = verify_network_stabilization(expected_change_from=old_ip, max_timeout=8.0)
+                    if stable and new_ip != old_ip:
+                        _set_last_rotation_time(time.time(), new_ip, reason)
+                        logger.info(f"[{context}] [Cloudflare WARP] Toggled to Direct ISP IP: {new_ip}")
+                        return new_ip
+
+                # Stage 2: Full Edge Re-Provisioning (delete registration -> new -> connect)
+                logger.info(f"[{context}] [Cloudflare WARP] Performing Full Registration Re-Provisioning...")
                 subprocess.run([str(WARP_CLI), "disconnect"], capture_output=True, text=True, timeout=8)
-                stable, new_ip = verify_network_stabilization(expected_change_from=old_ip, max_timeout=8.0)
-                if stable and new_ip != old_ip:
-                    _set_last_rotation_time(time.time(), new_ip, reason)
-                    logger.info(f"[{context}] [Cloudflare WARP] Toggled to Direct ISP IP: {new_ip}")
-                    return new_ip
+                time.sleep(0.5)
+                subprocess.run([str(WARP_CLI), "registration", "delete"], capture_output=True, text=True, timeout=8)
+                time.sleep(0.5)
+                subprocess.run([str(WARP_CLI), "registration", "new"], capture_output=True, text=True, timeout=8)
+                time.sleep(0.5)
+                subprocess.run([str(WARP_CLI), "connect"], capture_output=True, text=True, timeout=8)
 
-            # Stage 2: Full Edge Re-Provisioning (delete registration -> new -> connect)
-            logger.info(f"[{context}] [Cloudflare WARP] Performing Full Registration Re-Provisioning...")
-            subprocess.run([str(WARP_CLI), "disconnect"], capture_output=True, text=True, timeout=8)
-            time.sleep(0.5)
-            subprocess.run([str(WARP_CLI), "registration", "delete"], capture_output=True, text=True, timeout=8)
-            time.sleep(0.5)
-            subprocess.run([str(WARP_CLI), "registration", "new"], capture_output=True, text=True, timeout=8)
-            time.sleep(0.5)
-            subprocess.run([str(WARP_CLI), "connect"], capture_output=True, text=True, timeout=8)
-
-            stable, new_ip = verify_network_stabilization(expected_change_from=old_ip, max_timeout=10.0)
-            _set_last_rotation_time(time.time(), new_ip, reason)
-            logger.info(f"[{context}] [Cloudflare WARP] Re-provisioning complete. New IP: {new_ip} (Changed: {new_ip != old_ip})")
-            return new_ip
-        except Exception as e:
-            logger.error(f"[{context}] [Cloudflare WARP] Error during rotation: {e}")
-            return get_current_ip()
+                stable, new_ip = verify_network_stabilization(expected_change_from=old_ip, max_timeout=10.0)
+                _set_last_rotation_time(time.time(), new_ip, reason)
+                logger.info(f"[{context}] [Cloudflare WARP] Re-provisioning complete. New IP: {new_ip} (Changed: {new_ip != old_ip})")
+                return new_ip
+            except Exception as e:
+                logger.error(f"[{context}] [Cloudflare WARP] Error during rotation: {e}")
+                return get_current_ip()
 
 
 # Global lock contention tracking (DeepSeek AUD-07)

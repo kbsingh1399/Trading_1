@@ -39,7 +39,9 @@ Database/Liquidation_Data/**/*.xlsx
 Database/Signals/*.jsonl
 
 # Vector database binary fragments
-Database/Vector_Memory/
+Database/Vector_Memory/*
+!Database/Vector_Memory/losing_trades_postmortem.lance/
+!Database/Vector_Memory/losing_trades_postmortem.lance/**
 
 # Colibri subrepo
 colibri/

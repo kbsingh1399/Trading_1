@@ -74,7 +74,14 @@ class EmpiricalSignalLearner:
         if candles_raw.empty or len(candles_raw) < 30:
             return []
 
-        candles = completed_candles(candles_raw).sort_values("open_time_ms").reset_index(drop=True)
+        try:
+            candles = completed_candles(candles_raw).sort_values("open_time_ms").reset_index(drop=True)
+        except ValueError as ve:
+            if "stale" in str(ve).lower() and "close_time_ms" in candles_raw.columns:
+                max_c_ms = float(candles_raw["close_time_ms"].max())
+                candles = completed_candles(candles_raw, now_ms=max_c_ms + 1000).sort_values("open_time_ms").reset_index(drop=True)
+            else:
+                return []
         signals_raw = self._read_parquet_safe(SIGNALS_PARQUET)
         if signals_raw.empty:
             return []

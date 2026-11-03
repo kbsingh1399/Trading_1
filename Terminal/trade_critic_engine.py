@@ -136,6 +136,31 @@ CANONICAL_SEEDS = [
 ]
 
 
+class DeterministicOfflineEmbedder:
+    """Deterministic, zero-network 384-dimensional embedder for offline/isolated execution and testing."""
+    def embed(self, texts: List[str]):
+        import hashlib
+        import numpy as np
+        for t in texts:
+            h = hashlib.sha256(t.encode("utf-8")).digest()
+            seed = int.from_bytes(h[:4], "big")
+            rng = np.random.RandomState(seed)
+            vec = rng.randn(384).astype(np.float32)
+            words = t.lower()
+            if "falling knife" in words or "cascade" in words:
+                vec[:60] += 3.0
+            if "parabolic" in words or "squeeze" in words:
+                vec[60:120] += 3.0
+            if "whale" in words or "trap" in words:
+                vec[120:180] += 3.0
+            if "chop" in words or "r:r" in words:
+                vec[180:240] += 3.0
+            norm = np.linalg.norm(vec)
+            if norm > 0:
+                vec = vec / norm
+            yield vec
+
+
 class TradeCriticEngine:
     _instance = None
     _embedder = None
@@ -157,8 +182,15 @@ class TradeCriticEngine:
 
     def _init_embedder(self):
         if TradeCriticEngine._embedder is None:
-            logger.info(f"Initializing FastEmbed model for Trade Critic: {MODEL_NAME}")
-            TradeCriticEngine._embedder = TextEmbedding(model_name=MODEL_NAME)
+            if hasattr(self, "_custom_embedder") and self._custom_embedder is not None:
+                TradeCriticEngine._embedder = self._custom_embedder
+            else:
+                try:
+                    logger.info(f"Initializing FastEmbed model for Trade Critic: {MODEL_NAME}")
+                    TradeCriticEngine._embedder = TextEmbedding(model_name=MODEL_NAME)
+                except Exception as e:
+                    logger.warning(f"FastEmbed TextEmbedding unavailable ({e}). Falling back to deterministic offline embedder.")
+                    TradeCriticEngine._embedder = DeterministicOfflineEmbedder()
         self.embedder = TradeCriticEngine._embedder
 
     def embed_text(self, text: str) -> List[float]:
@@ -241,7 +273,8 @@ class TradeCriticEngine:
         has_liq_spike: bool,
         liq_bias: str,
         has_footprint_absorption: bool,
-        rr_ratio: float = 2.0
+        rr_ratio: float = 2.0,
+        ema89: Optional[float] = None
     ) -> Tuple[bool, str, Dict[str, Any]]:
         """
         Deterministic, zero-latency microstructural knife detection.
@@ -254,6 +287,8 @@ class TradeCriticEngine:
             "price": price,
             "ema233": ema233,
             "pct_from_ema233": round(((price - ema233) / (ema233 + 1e-9)) * 100, 2) if ema233 > 0 else 0.0,
+            "ema89": ema89 or 0.0,
+            "pct_from_ema89": round(((price - (ema89 or ema233)) / ((ema89 or ema233) + 1e-9)) * 100, 2) if (ema89 or ema233) > 0 else 0.0,
             "htf_bias": htf_bias.upper(),
             "cvd_slope": cvd_slope,
             "has_liq_spike": has_liq_spike,
@@ -272,7 +307,10 @@ class TradeCriticEngine:
             khi = 0.0
             if ema233 > 0 and price < ema233:
                 pct_under = ((ema233 - price) / ema233) * 100.0
-                khi += min(30.0, pct_under * 12.0)
+                khi += min(25.0, pct_under * 10.0)
+            if ema89 is not None and ema89 > 0 and price < ema89:
+                pct_under_89 = ((ema89 - price) / ema89) * 100.0
+                khi += min(15.0, pct_under_89 * 8.0)
             if cvd_slope < 0:
                 khi += min(25.0, abs(cvd_slope) * 40.0)
             if has_liq_spike and liq_bias in ("BEARISH_REVERSAL", "LONG_LIQ_DOMINANT"):
@@ -319,7 +357,10 @@ class TradeCriticEngine:
             shi = 0.0
             if ema233 > 0 and price > ema233:
                 pct_over = ((price - ema233) / ema233) * 100.0
-                shi += min(30.0, pct_over * 12.0)
+                shi += min(25.0, pct_over * 10.0)
+            if ema89 is not None and ema89 > 0 and price > ema89:
+                pct_over_89 = ((price - ema89) / ema89) * 100.0
+                shi += min(15.0, pct_over_89 * 8.0)
             if cvd_slope > 0:
                 shi += min(25.0, abs(cvd_slope) * 40.0)
             if has_liq_spike and liq_bias in ("BULLISH_REVERSAL", "SHORT_LIQ_DOMINANT"):
@@ -509,11 +550,13 @@ class TradeCriticEngine:
         except Exception as e:
             logger.error(f"Error querying critic vector memory: {e}")
             return {
-                "critic_verdict": "CLEAR",
-                "max_similarity": 0.0,
-                "penalty": 0.0,
-                "reason": f"Critic query bypass: {e}",
-                "narrative": narrative
+                "critic_verdict": "HARD_VETO",
+                "max_similarity": 1.0,
+                "penalty": 100.0,
+                "reason": f"CRITIC_FAIL_CLOSED_VETO: Vector memory query error: {e}",
+                "narrative": narrative,
+                "matched_failure_mode": "CORRUPT_OR_UNAVAILABLE_MEMORY",
+                "matched_lesson": "Fail-closed safety invariant: never execute when critic memory is unavailable."
             }
 
     # =========================================================================
@@ -534,6 +577,22 @@ class TradeCriticEngine:
         Performs automated causal diagnosis, classifies failure mode, derives mitigation
         rule, embeds into LanceDB, and appends to persistent critic JSONL.
         """
+        # Idempotency check:
+        if hasattr(self, "table") and self.table is not None:
+            try:
+                df = self.table.to_pandas()
+                if not df.empty and str(ticket_id) in df["ticket_id"].astype(str).values:
+                    existing = df[df["ticket_id"].astype(str) == str(ticket_id)].iloc[0]
+                    logger.info(f"Post-mortem for ticket {ticket_id} already exists in LanceDB (idempotent no-op).")
+                    return {
+                        "status": "ALREADY_RECORDED",
+                        "failure_id": str(existing["failure_id"]),
+                        "failure_mode": str(existing["failure_mode"]),
+                        "verdict": str(existing["critic_verdict"]),
+                        "mitigation_guard": str(existing["mitigation_guard"])
+                    }
+            except Exception as e:
+                logger.warning(f"Idempotency search check failed: {e}")
         if realized_pnl_usd >= 0:
             logger.info(f"[{symbol}] Trade {ticket_id} closed in PROFIT (${realized_pnl_usd:+.2f}). Skipping post-mortem.")
             return {"status": "SKIPPED_PROFITABLE"}

@@ -39,7 +39,16 @@ if str(ROOT_DIR) not in sys.path:
 from Terminal.runtime_io import acquire_singleton, atomic_json
 from Terminal.collector_lock import BrowserLock
 from Terminal.venue_admission import matchtrader_symbol
-from Terminal.risk_envelope import HARD_FLOOR_USD, MAX_RISK_USD, MAX_OPEN_POSITIONS
+from Terminal.risk_envelope import (
+    HARD_FLOOR_USD,
+    MAX_RISK_USD,
+    MIN_RISK_USD,
+    MAX_OPEN_POSITIONS,
+    MAX_DAILY_LOSS_USD,
+    MIN_RR_RATIO,
+    validate_trade_geometry,
+    daily_loss_remaining
+)
 
 DB_DIR = ROOT_DIR / "Database"
 EXECUTED_TRADES_FILE = DB_DIR / "matchtrader_executed_trades.jsonl"
@@ -56,9 +65,9 @@ TARGET_ACCOUNT_NUMBER = "101305360"
 INITIAL_BALANCE = 5000.0
 EQUITY_FLOOR_TOTAL = HARD_FLOOR_USD
 MAX_TOTAL_DRAWDOWN_LIMIT = INITIAL_BALANCE - HARD_FLOOR_USD  # $225.00 survival buffer
-MAX_DAILY_DRAWDOWN_LIMIT = 150.0
-EQUITY_FLOOR_DAILY = 4850.0
-MAX_CONCURRENT_POSITIONS = int(os.environ.get("MATCHTRADER_MAX_CONCURRENT", 2))
+MAX_DAILY_DRAWDOWN_LIMIT = MAX_DAILY_LOSS_USD  # $250.00 dynamic 5% daily loss limit
+EQUITY_FLOOR_DAILY = INITIAL_BALANCE - MAX_DAILY_LOSS_USD  # $4,750.00 dynamic daily floor
+MAX_CONCURRENT_POSITIONS = MAX_OPEN_POSITIONS  # Strict SSOT: 2, no env override
 DEFAULT_RISK_PER_TRADE_USD = MAX_RISK_USD  # $25.00 strictly capped per trade
 LIVE_DISPATCH_ENABLED = False
 
@@ -535,9 +544,24 @@ async def execute_signal(signal: Dict[str, Any]) -> Dict[str, Any]:
             return {"status": "REJECTED", "ok": False, "reason": f"INVALID_DIRECTION: {side}"}
 
         trade_lvl = signal.get("trade_levels", {})
-        lots = trade_lvl.get("admissible_lots", 0.01) or 0.01
-        sl = trade_lvl.get("stop_loss", 0.0) or 0.0
-        tp = trade_lvl.get("take_profit_1", 0.0) or 0.0
+        lots = trade_lvl.get("admissible_lots")
+        entry = float(trade_lvl.get("entry_price") or signal.get("price") or 0.0)
+        sl = trade_lvl.get("stop_loss")
+        tp = trade_lvl.get("take_profit_1")
+
+        if not lots or not sl or not tp or not math.isfinite(sl) or not math.isfinite(tp) or lots <= 0:
+            return {"status": "REJECTED", "ok": False, "reason": "MISSING_MANDATORY_RISK_PARAMETERS"}
+
+        geom_ok, geom_reason = validate_trade_geometry(
+            entry_price=entry,
+            stop_loss=sl,
+            take_profit=tp,
+            direction=side,
+            min_rr=MIN_RR_RATIO
+        )
+        if not geom_ok:
+            return {"status": "REJECTED", "ok": False, "reason": f"INVALID_TRADE_GEOMETRY: {geom_reason}"}
+
         res = await execute_market_order(ws, side, lots, symbol=mtr_sym, stop_loss=sl, take_profit=tp)
         return res
 

@@ -135,7 +135,8 @@ class UnifiedAPIFootprintEngine:
 
         self._load_known_signals()
         self._init_evaluator()
-        self._init_mt5()
+        if not self.crypto_only:
+            self._init_mt5()
 
     def _init_evaluator(self):
         try:
@@ -236,16 +237,20 @@ class UnifiedAPIFootprintEngine:
         URL: https://fapi.binance.com/fapi/v1/klines?symbol=<SYM>USDT&interval=15m&limit=300
         """
         api_symbol = f"{symbol}USDT"
-        url = f"https://fapi.binance.com/fapi/v1/klines?symbol={api_symbol}&interval=15m&limit={self.rolling_window}"
+        url = f"https://fapi.binance.com/fapi/v1/klines?symbol={api_symbol}&interval=15m&limit={self.rolling_window + 1}"
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
             with urllib.request.urlopen(req, timeout=5) as resp:
                 raw_data = json.loads(resp.read().decode("utf-8"))
 
+            now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
             bars = []
             for k in raw_data:
                 open_t_ms = int(k[0])
                 close_t_ms = int(k[6])
+                # Drop uncompleted forming candle to ensure exact completed rolling window
+                if close_t_ms > now_ms:
+                    continue
                 o = float(k[1])
                 h = float(k[2])
                 l = float(k[3])
@@ -269,6 +274,8 @@ class UnifiedAPIFootprintEngine:
                     "delta": delta,
                     "total_trades": trades_count
                 })
+            if len(bars) > self.rolling_window:
+                bars = bars[-self.rolling_window:]
             return bars
         except urllib.error.HTTPError as e:
             if e.code == 429:
@@ -368,6 +375,11 @@ class UnifiedAPIFootprintEngine:
                     combined_df = new_df
 
                 atomic_parquet(combined_df, SIGNALS_PARQUET)
+                # Deduplication keys marked as known only after verified successful append
+                now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+                for s in new_signals:
+                    key = (str(s["symbol"]), str(s.get("sig_code", "")), int(s.get("time_ms", 0)))
+                    self.known_signal_keys[key] = int(s.get("time_ms", now_ms))
                 logger.info(f"Appended {len(new_signals)} new footprint signals to {SIGNALS_PARQUET.name} (Total: {len(combined_df)})")
             except Exception as e:
                 logger.error(f"Failed to append footprint signals: {e}")
@@ -394,7 +406,7 @@ class UnifiedAPIFootprintEngine:
             bars = self.fetch_mt5_bars(fetch_sym, asset_class)
 
         if not bars or len(bars) < 10:
-            return []
+            return None
 
         # Run Universal Footprint Engine
         rolling_df, recent_sigs = self.engine.analyze_bars(
@@ -419,7 +431,6 @@ class UnifiedAPIFootprintEngine:
                 continue
             key = (str(s["symbol"]), str(s.get("sig_code", "")), int(s.get("time_ms", 0)))
             if key not in self.known_signal_keys:
-                self.known_signal_keys[key] = int(s.get("time_ms", now_ms))  # TTL keyed by candle time_ms
                 fresh_signals.append(s)
 
         return fresh_signals
@@ -453,9 +464,10 @@ class UnifiedAPIFootprintEngine:
                 sym = crypto_futures[fut]
                 try:
                     sigs = fut.result()
-                    if sigs:
-                        all_new_signals.extend(sigs)
-                    processed_count += 1
+                    if sigs is not None:
+                        if sigs:
+                            all_new_signals.extend(sigs)
+                        processed_count += 1
                 except Exception as e:
                     logger.debug(f"Error processing crypto {sym}: {e}")
 

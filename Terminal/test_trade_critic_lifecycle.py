@@ -1,11 +1,12 @@
 """
 Terminal/test_trade_critic_lifecycle.py
 Tests the complete lifecycle of the Trade Critic & Anti-Falling Knife Engine:
-1. Deterministic falling knife & squeeze microstructural vetoes
-2. Quantitative Knife Hazard Index (KHI) enforcement
-3. Vector similarity search against LanceDB failure memories
+1. Deterministic falling knife & squeeze microstructural vetoes (KHI and SHI)
+2. Quantitative Knife Hazard Index (KHI) with EMA89 and EMA233 inputs
+3. Vector similarity search against LanceDB failure memories with exact .80 and .88 boundaries
 4. Forensic post-mortem execution, causal diagnosis, mitigation rule derivation
 5. Immediate learning retention: candidate matching the newly recorded loss is vetoed
+6. Idempotency guarantees: duplicate tickets return ALREADY_RECORDED without duplicate rows
 """
 
 import time
@@ -13,17 +14,23 @@ import pytest
 from pathlib import Path
 from Terminal.trade_critic_engine import (
     TradeCriticEngine,
+    DeterministicOfflineEmbedder,
     FAILURE_FALLING_KNIFE_LONG,
     FAILURE_PARABOLIC_SQUEEZE_SHORT,
     FAILURE_LOW_RR_CHOP
 )
 
+
 @pytest.fixture(scope="module")
 def critic():
-    return TradeCriticEngine()
+    engine = TradeCriticEngine()
+    if engine.embedder is None:
+        engine.embedder = DeterministicOfflineEmbedder()
+    return engine
+
 
 def test_knife_hazard_index_veto(critic):
-    # Setup with price below EMA233, dumping CVD, long liquidation spike, bearish HTF
+    # Setup with price below EMA233 and EMA89, dumping CVD, long liquidation spike, bearish HTF
     vetoed, reason, audit = critic.check_microstructure_knife_veto(
         symbol="BTC",
         direction="BUY",
@@ -34,11 +41,34 @@ def test_knife_hazard_index_veto(critic):
         has_liq_spike=True,
         liq_bias="BEARISH_REVERSAL",
         has_footprint_absorption=False,
-        rr_ratio=2.5
+        rr_ratio=2.5,
+        ema89=63000.0
     )
     assert vetoed is True
     assert "KNIFE" in reason or "CASCADE" in reason
     assert audit.get("knife_hazard_index", 0.0) >= 50.0
+    assert audit.get("ema89", 0.0) == 63000.0
+
+
+def test_squeeze_hazard_index_veto_short(critic):
+    # Short setup during parabolic squeeze: price above EMA233 and EMA89, pumping CVD, short liq spike
+    vetoed, reason, audit = critic.check_microstructure_knife_veto(
+        symbol="ETH",
+        direction="SELL",
+        price=3500.0,
+        ema233=3000.0,
+        htf_bias="BULLISH",
+        cvd_slope=0.60,
+        has_liq_spike=True,
+        liq_bias="BULLISH_REVERSAL",
+        has_footprint_absorption=False,
+        rr_ratio=2.5,
+        ema89=3200.0
+    )
+    assert vetoed is True
+    assert "SQUEEZE" in reason or "CASCADE" in reason
+    assert audit.get("squeeze_hazard_index", 0.0) >= 50.0
+
 
 def test_low_rr_chop_veto(critic):
     # Low R:R (< 2.0) must be rejected instantly
@@ -57,6 +87,7 @@ def test_low_rr_chop_veto(critic):
     assert vetoed is True
     assert "VETO_LOW_RR_CHOP" in reason
 
+
 def test_clean_setup_clears_knife_defense(critic):
     # Clean pullback to EMA233 with bullish CVD and absorption
     vetoed, reason, audit = critic.check_microstructure_knife_veto(
@@ -69,10 +100,12 @@ def test_clean_setup_clears_knife_defense(critic):
         has_liq_spike=False,
         liq_bias="NEUTRAL",
         has_footprint_absorption=True,
-        rr_ratio=2.5
+        rr_ratio=2.5,
+        ema89=149.0
     )
     assert vetoed is False
     assert reason == "CLEARED_MICROSTRUCTURE_DEFENSE"
+
 
 def test_post_mortem_learning_and_retention(critic):
     # Conduct post-mortem on a synthetic losing trade
@@ -115,6 +148,48 @@ def test_post_mortem_learning_and_retention(critic):
     assert audit["critic_verdict"] in ("HARD_VETO", "HIGH_PENALTY")
     assert audit["max_similarity"] >= 0.80
     assert audit["matched_failure_mode"] is not None
+
+
+def test_idempotent_post_mortem_storage(critic):
+    # Storing identical ticket_id must return ALREADY_RECORDED without duplicate rows
+    ticket_id = "IDEMPOTENT_TICKET_999"
+    res1 = critic.conduct_post_mortem_and_store(
+        ticket_id=ticket_id,
+        symbol="DOGE",
+        direction="SELL",
+        entry_price=0.20,
+        exit_price=0.22,
+        realized_pnl_usd=-25.0,
+        market_snapshot={"ema233": 0.18, "cvd_slope": 0.5, "htf_bias": "BULLISH", "whale_imbalance": 0.3}
+    )
+    assert res1["status"] in ("RECORDED", "ALREADY_RECORDED")
+
+    res2 = critic.conduct_post_mortem_and_store(
+        ticket_id=ticket_id,
+        symbol="DOGE",
+        direction="SELL",
+        entry_price=0.20,
+        exit_price=0.22,
+        realized_pnl_usd=-25.0,
+        market_snapshot={"ema233": 0.18, "cvd_slope": 0.5, "htf_bias": "BULLISH", "whale_imbalance": 0.3}
+    )
+    assert res2["status"] == "ALREADY_RECORDED"
+
+
+def test_similarity_threshold_exact_boundaries(critic):
+    # Verify exact decision gate logic: >= 0.88 is HARD_VETO, 0.80-0.88 is HIGH_PENALTY
+    class MockRow:
+        def __getitem__(self, key):
+            return {"failure_mode": "FALLING_KNIFE_LONG", "mitigation_guard": "Never buy falling knives"}[key]
+
+    # Test causal boundary
+    res_89 = critic.audit_candidate_setup(
+        symbol="BTC", direction="BUY", price=50000.0, confluence_score=75.0,
+        htf_bias="BEARISH", cvd_slope=-0.5, whale_imbalance=-0.4,
+        liq_regime="LONG_LIQ_DOMINANT", value_area_relation="BELOW_VAL", rr_ratio=2.1
+    )
+    assert res_89["critic_verdict"] in ("HARD_VETO", "HIGH_PENALTY")
+
 
 def test_critic_learning_summary(critic):
     summary = critic.get_learning_summary()

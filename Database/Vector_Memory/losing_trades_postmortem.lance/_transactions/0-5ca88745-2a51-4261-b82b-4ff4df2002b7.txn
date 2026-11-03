@@ -1,0 +1,3 @@
+$5ca88745-2a51-4261-b82b-4ff4df2002b7²è2vector ÿÿÿÿÿÿÿÿÿ*fixed_size_list:float:38408%
+failure_id ÿÿÿÿÿÿÿÿÿ*string08$	ticket_id ÿÿÿÿÿÿÿÿÿ*string08!symbol ÿÿÿÿÿÿÿÿÿ*string08$	direction ÿÿÿÿÿÿÿÿÿ*string08'failure_mode ÿÿÿÿÿÿÿÿÿ*string08$	narrative ÿÿÿÿÿÿÿÿÿ*string08)critic_verdict ÿÿÿÿÿÿÿÿÿ*string08+mitigation_guard ÿÿÿÿÿÿÿÿÿ*string08#	cvd_slope	 ÿÿÿÿÿÿÿÿÿ*float08)price_vs_ema233
+ ÿÿÿÿÿÿÿÿÿ*float08)whale_imbalance ÿÿÿÿÿÿÿÿÿ*float08'liq_intensity ÿÿÿÿÿÿÿÿÿ*float08+realized_loss_usd ÿÿÿÿÿÿÿÿÿ*float08$	timestamp ÿÿÿÿÿÿÿÿÿ*string08

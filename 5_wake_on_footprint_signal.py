@@ -277,9 +277,7 @@ class FootprintSignalSentinel:
             logger.error(f"Error reading footprint signals: {e}")
             return []
 
-        self.state["offset"] = new_offset
-        self.state["processed_signals_count"] += len(new_signals)
-        save_state(self.state)
+        self._pending_offset = new_offset
         return new_signals
 
     async def evaluate_and_dispatch(self, raw_signals: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -325,8 +323,8 @@ class FootprintSignalSentinel:
                 sig_name = raw.get("sig_name", raw.get("title", "Signal"))
                 side = raw.get("side", raw.get("sig_side", "N/A"))
 
-                # Strict Bar Completion Invariant (AGENTS.md & Goldfish Finding 2)
-                is_bar_closed = (t_ms > 0 and (t_ms + 900_000) <= now_ms) or raw.get("bar_closed") is True
+                # Strict Bar Completion Invariant: Derived strictly from timestamp (never trust producer flag)
+                is_bar_closed = (t_ms > 0 and (t_ms + 900_000) <= now_ms)
                 if not is_bar_closed:
                     mins_remaining = max(0.0, ((t_ms + 900_000) - now_ms) / 60000.0)
                     logger.info(f"⏳ [INTRA-BAR WICK VETO] {sym} {sig_name} on active candle (closes in {mins_remaining:.1f}m). Skipped to prevent wick repainting.")
@@ -369,11 +367,11 @@ class FootprintSignalSentinel:
                         with FileMutex(order_lock_file, timeout=15.0):
                             dispatch_res = await asyncio.to_thread(delta_client.execute_delta_signal, eval_res)
                         logger.info(f"✨ Delta Exchange India Dispatch Result: {dispatch_res}")
+                        if dispatch_res and dispatch_res.get("ok"):
+                            self.state["dispatched_trades_count"] += 1
+                            save_state(self.state)
                     else:
                         logger.warning(f"No Delta Exchange product resolved for {sym}; cannot execute.")
-
-                    self.state["dispatched_trades_count"] += 1
-                    save_state(self.state)
                 else:
                     logger.info(f"[EVALUATOR] {sym} {direction} Confluence Score: {score:.1f}/100 -> Filtered (Required >= 75.0)")
 
@@ -529,20 +527,37 @@ class FootprintSignalSentinel:
                 direction = tracked.get("direction", "")
                 venue = tracked.get("venue", "")
 
-                if pnl < 0:
+                # Reconcile actual realized PnL and exit price against broker history
+                final_pnl = pnl
+                final_exit = tracked.get("last_price", 0.0)
+                reconciled_ticket = key
+                if venue == "DELTA_INDIA":
+                    try:
+                        fills = delta_client.get_fills(symbol=sym, limit=5)
+                        if fills:
+                            latest_fill = fills[0]
+                            fill_pnl = latest_fill.get("realized_pnl")
+                            if fill_pnl is not None:
+                                final_pnl = float(fill_pnl)
+                            final_exit = float(latest_fill.get("price") or final_exit)
+                            reconciled_ticket = str(latest_fill.get("order_id") or latest_fill.get("id") or key)
+                    except Exception as fe:
+                        logger.debug(f"Broker fill reconciliation note: {fe}")
+
+                if final_pnl < 0:
                     logger.warning(
                         f"🚨 [POST-MORTEM TRIGGERED] {venue} position {sym} ({direction}) closed in LOSS: "
-                        f"${pnl:.2f}. Launching adversarial forensic analysis..."
+                        f"${final_pnl:.2f}. Launching adversarial forensic analysis..."
                     )
                     snapshot = self._gather_market_snapshot(sym)
                     if self.critic_engine:
                         diagnosis = self.critic_engine.conduct_post_mortem_and_store(
-                            ticket_id=key,
+                            ticket_id=reconciled_ticket,
                             symbol=sym,
                             direction=direction,
                             entry_price=tracked.get("open_price", 0.0),
-                            exit_price=tracked.get("last_price", 0.0),
-                            realized_pnl_usd=pnl,
+                            exit_price=final_exit,
+                            realized_pnl_usd=final_pnl,
                             market_snapshot=snapshot
                         )
                         logger.info(
@@ -566,7 +581,7 @@ class FootprintSignalSentinel:
         still_pending = {}
         for k, raw in list(self.pending_signals.items()):
             t_ms = int(raw.get("time_ms") or 0)
-            is_bar_closed = (t_ms > 0 and (t_ms + 900_000) <= now_ms) or raw.get("bar_closed") is True
+            is_bar_closed = (t_ms > 0 and (t_ms + 900_000) <= now_ms)
             if now_ms - t_ms > 1_800_000:
                 continue
             if is_bar_closed:
@@ -596,6 +611,12 @@ class FootprintSignalSentinel:
                     logger.info(f"[DELTA GUARDIAN] {d_sym} {d_size} contracts | Entry: ${float(d_entry or 0):,.4f} | Mark: ${float(d_mark or 0):,.4f} | UPnL: ${d_upnl:+.4f}")
         except Exception as e:
             logger.debug(f"Delta position check: {e}")
+
+        # Advance durable offset only after complete signal evaluation cycle
+        if hasattr(self, "_pending_offset") and self._pending_offset > self.state.get("offset", 0):
+            self.state["offset"] = self._pending_offset
+            self.state["processed_signals_count"] += len(new_signals)
+            save_state(self.state)
 
 
     async def run_daemon(self):

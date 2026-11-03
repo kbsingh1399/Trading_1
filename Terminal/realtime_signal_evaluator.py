@@ -894,8 +894,11 @@ class RealtimeSignalEvaluator:
 
         # Trade Critic & Anti-Falling Knife Defense Check
         critic_audit = {"status": "SKIPPED"}
-        if getattr(self, 'critic_engine', None) is not None and direction in ('BUY', 'SELL') and entry > 0:
+        if getattr(self, 'critic_engine', None) is None:
+            validation_errors.append('CRITIC_ENGINE_UNAVAILABLE')
+        elif direction in ('BUY', 'SELL') and entry > 0:
             ema233_val = float(auction.get("ema233", 0.0) or auction.get("day_vwap", 0.0) or 0.0)
+            ema89_val = float(auction.get("ema89", 0.0) or 0.0)
             raw_slope = cvd.get("slope") if cvd.get("slope") is not None else cvd.get("cvd_slope")
             if isinstance(raw_slope, (int, float)):
                 cvd_slope_val = float(raw_slope)
@@ -909,7 +912,14 @@ class RealtimeSignalEvaluator:
                     cvd_slope_val = 0.0
             else:
                 cvd_slope_val = 0.0
-            has_absorption_sig = bool("absorption" in sig_name.lower() or "delta_divergence" in sig_name.lower())
+
+            # Physically validate absorption against footprint taker flow & wick dynamics
+            is_named_absorption = bool("absorption" in sig_name.lower() or "delta_divergence" in sig_name.lower() or "trapped" in sig_name.lower())
+            sig_delta = float(sig.get("delta") or 0.0)
+            has_absorption_sig = is_named_absorption and (
+                (direction == "BUY" and (sig_delta > 0 or cvd_slope_val >= 0.0 or sig.get("side") in ("buy", "bullish"))) or
+                (direction == "SELL" and (sig_delta < 0 or cvd_slope_val <= 0.0 or sig.get("side") in ("sell", "bearish")))
+            )
 
             knife_vetoed, knife_reason, _ = self.critic_engine.check_microstructure_knife_veto(
                 symbol=sym,
@@ -921,7 +931,8 @@ class RealtimeSignalEvaluator:
                 has_liq_spike=has_tv_liq_spike,
                 liq_bias=tv_liq_bias,
                 has_footprint_absorption=has_absorption_sig,
-                rr_ratio=rr
+                rr_ratio=rr,
+                ema89=ema89_val
             )
 
             if knife_vetoed:

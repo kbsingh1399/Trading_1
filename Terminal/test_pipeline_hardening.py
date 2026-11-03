@@ -171,6 +171,9 @@ def test_liquidation_direction_and_real_evaluator_api(side, expected):
     evaluator.regime_det.analyze_symbol.return_value = {'regime': 'MEAN_REVERTING_RANGE', 'atr_pct': 1}
     evaluator.vector_mem = None
     evaluator.timesfm = SimpleNamespace(is_available=False)
+    evaluator.critic_engine = Mock()
+    evaluator.critic_engine.check_microstructure_knife_veto.return_value = (False, "", {})
+    evaluator.critic_engine.audit_candidate_setup.return_value = {"critic_verdict": "CLEAR", "max_similarity": 0.0, "penalty": 0.0}
     evaluator.query_live_tv_liquidations = lambda s: {}
     evaluator._persist_alert = Mock()
     evaluator._broker_sizing = lambda *args: {'lots': .01, 'risk_usd': 5, 'cap_usd': 10}
