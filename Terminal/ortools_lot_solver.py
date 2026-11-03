@@ -6,46 +6,35 @@ Implements exact Mixed-Integer Linear Programming (MILP) using Google OR-Tools (
 Replaces heuristic search loops with mathematically guaranteed discrete lot size selection
 under strict FundingPips prop firm survival constraints ($4,775.00 hard floor, $25.00 risk cap).
 
-Architecture & Mathematical Formulation:
-----------------------------------------
-Decision Variable:
-    k in {0, 1, 2, ..., K_max}  (Integer number of discrete volume steps)
-    Volume = k * volume_step
-
-Constraints:
-    1. Grid bounds:
-       k * volume_step >= min_lot (if entering, else k = 0)
-       k * volume_step <= max_lot
-    2. Capital risk cap:
-       k * loss_per_step <= allowed_budget_usd (<= MAX_RISK_USD $25.00)
-    3. Minimum economic viable risk:
-       k * loss_per_step >= MIN_RISK_USD (e.g. $2.00)
-    4. Account Hard Floor Protection:
-       Base_Equity - Current_Committed - (k * loss_per_step) >= HARD_FLOOR_USD ($4,775.00) + HALT_CUSHION ($25.00)
-    5. Concurrent Position Gate:
-       current_open_positions + 1 <= MAX_OPEN_POSITIONS (2)
-
-Objective:
-    Maximize Expected Payoff:
-    Z(k) = (confluence_score / 100.0) * (k * step_reward_usd) - lambda_risk * (k * loss_per_step)
+Guarantees (EGM Architectural Compliant):
+1. 10-consecutive-loss survival preservation: divides buffer by SURVIVAL_DIVISOR (20).
+2. Exact integer-step compliance: lot = k * volume_step, k in Z+.
+3. Absolute risk cap enforcement: Loss(k) <= MAX_RISK_USD ($25.00).
+4. Account Hard Floor Protection: Equity - Committed - Loss(k) >= HARD_FLOOR_USD ($4,775.00) + Cushion ($20.00).
+5. Concurrent Position Gate: active_open_positions + 1 <= MAX_OPEN_POSITIONS (2).
+6. Conservative volume bias: Defaults to k_min for survival preservation unless high confluence edge.
 ========================================================================================
 """
 
 import math
 import logging
 from typing import Tuple, Optional, Dict, Any
-from decimal import Decimal, ROUND_FLOOR
+from decimal import Decimal
 
 from ortools.linear_solver import pywraplp
 
+from Terminal.risk_envelope import (
+    HARD_FLOOR_USD,
+    HALT_CUSHION_USD,
+    MAX_RISK_USD,
+    MIN_RISK_USD,
+    MAX_OPEN_POSITIONS,
+    SURVIVAL_DIVISOR,
+    STRESS_MULT
+)
+
 logger = logging.getLogger("GoogleORToolsLotSolver")
 logger.setLevel(logging.INFO)
-
-HARD_FLOOR_USD = 4775.00
-HALT_CUSHION_USD = 25.00
-MAX_RISK_USD = 25.00
-MIN_RISK_USD = 2.00
-MAX_OPEN_POSITIONS = 2
 
 
 def solve_optimal_lot_ortools(
@@ -60,7 +49,8 @@ def solve_optimal_lot_ortools(
     confluence_score: float = 80.0,
     reward_risk_ratio: float = 2.0,
     max_risk_cap_usd: float = MAX_RISK_USD,
-    min_risk_floor_usd: float = MIN_RISK_USD
+    min_risk_floor_usd: float = MIN_RISK_USD,
+    stress_native: bool = False
 ) -> Tuple[Optional[float], str, float, Dict[str, Any]]:
     """
     Solves for the optimal volume using Google OR-Tools SCIP Mixed-Integer Linear Program.
@@ -73,7 +63,8 @@ def solve_optimal_lot_ortools(
         "confluence_score": confluence_score,
         "active_positions": active_open_positions,
         "hard_floor_usd": HARD_FLOOR_USD,
-        "max_risk_cap_usd": max_risk_cap_usd
+        "max_risk_cap_usd": max_risk_cap_usd,
+        "survival_divisor": SURVIVAL_DIVISOR
     }
 
     # 1. Capacity & Position Guardrail
@@ -93,10 +84,13 @@ def solve_optimal_lot_ortools(
         msg = f"PROSPECTIVE_HALT: Free survival buffer USD {free_survival_buffer:.2f} <= Cushion USD {HALT_CUSHION_USD:.2f}"
         return None, msg, 0.0, diagnostics
 
-    # 3. Dynamic Per-Trade Risk Cap
-    effective_cap = min(max_risk_cap_usd, free_survival_buffer - HALT_CUSHION_USD)
+    # 3. Dynamic Per-Trade Risk Cap with 10-Loss Streak Survival Divisor
+    divisor = SURVIVAL_DIVISOR * (STRESS_MULT if stress_native else 1.0)
+    per_trade_budget = free_survival_buffer / divisor
+    effective_cap = min(max_risk_cap_usd, max(0.0, math.floor(per_trade_budget * 100.0) / 100.0))
+
     if effective_cap < min_risk_floor_usd:
-        msg = f"BUDGET_BELOW_MIN_FLOOR: Effective cap USD {effective_cap:.2f} < Min USD {min_risk_floor_usd:.2f}"
+        msg = f"BUDGET_BELOW_MIN_FLOOR: Effective cap USD {effective_cap:.2f} < Min USD {min_risk_floor_usd:.2f} (Free buffer: ${free_survival_buffer:.2f})"
         return None, msg, 0.0, diagnostics
 
     # 4. Input Sanity Checks
@@ -106,7 +100,6 @@ def solve_optimal_lot_ortools(
     # 5. Initialize Google OR-Tools Solver
     solver = pywraplp.Solver.CreateSolver("SCIP")
     if not solver:
-        # Fallback to CBC or basic solver if SCIP not compiled
         solver = pywraplp.Solver.CreateSolver("CBC")
     if not solver:
         return None, "OR_TOOLS_SOLVER_UNAVAILABLE", 0.0, diagnostics
@@ -116,39 +109,33 @@ def solve_optimal_lot_ortools(
     k_max_bound = int(math.floor(max_lot / volume_step))
     
     k_var = solver.IntVar(0, k_max_bound, "lot_steps")
-
-    # Binary execution indicator: enter_trade in {0, 1}
     enter_var = solver.BoolVar("enter_trade")
 
     # Constraint A: If enter_trade == 1, k >= k_min_bound; else k == 0
     solver.Add(k_var >= k_min_bound * enter_var)
     solver.Add(k_var <= k_max_bound * enter_var)
 
-    # Constraint B: Risk cap (k * loss_per_lot_step <= effective_cap)
+    # Constraint B: Strict Survival Risk Cap
     solver.Add(k_var * loss_per_lot_step <= effective_cap * enter_var)
 
-    # Constraint C: Minimum risk floor (k * loss_per_lot_step >= min_risk_floor_usd)
+    # Constraint C: Minimum economic viable risk
     solver.Add(k_var * loss_per_lot_step >= min_risk_floor_usd * enter_var)
 
-    # Constraint D: Account Hard Floor Protection
-    # Base_Equity - Committed - (k * loss_per_lot_step) >= HARD_FLOOR_USD + HALT_CUSHION_USD
-    solver.Add(k_var * loss_per_lot_step <= (free_survival_buffer - HALT_CUSHION_USD) * enter_var)
-
-    # Objective Function:
-    # Maximize Expected Payoff:
-    # Win prob proportional to confluence: p_win = (confluence_score / 100.0)
-    # Expected Return = p_win * (reward_risk_ratio * Risk) - (1 - p_win) * Risk
-    #                 = [p_win * reward_risk_ratio - (1 - p_win)] * (k * loss_per_lot_step)
-    p_win = max(0.01, min(0.99, confluence_score / 100.0))
-    expected_value_multiplier = (p_win * reward_risk_ratio) - (1.0 - p_win)
-    
-    # We want to maximize expected net gain while penalizing excessive risk
-    # To prioritize conservative account survival, if expected value is positive, scale linearly with small dampener
+    # Objective Function: Conservative Account Survival
+    # In prop-firm challenge, capital preservation dominates.
+    # We solve for minimal admissible size (k_min) when edge is moderate (75-80),
+    # and only scale up when confluence >= 85.
     objective = solver.Objective()
-    # If edge is positive, maximize k * loss_per_lot_step scaled by edge; otherwise maximize 0
-    edge_coeff = max(0.05, expected_value_multiplier)
-    objective.SetCoefficient(k_var, edge_coeff * loss_per_lot_step)
-    objective.SetMaximization()
+    if confluence_score >= 85.0:
+        # Scale with edge towards effective_cap
+        p_win = max(0.01, min(0.99, confluence_score / 100.0))
+        edge_coeff = (p_win * reward_risk_ratio) - (1.0 - p_win)
+        objective.SetCoefficient(k_var, max(0.01, edge_coeff) * loss_per_lot_step)
+        objective.SetMaximization()
+    else:
+        # Strictly minimize risk (choose k_min)
+        objective.SetCoefficient(k_var, 1.0)
+        objective.SetMinimization()
 
     # Solve the MILP problem
     status = solver.Solve()
@@ -164,8 +151,7 @@ def solve_optimal_lot_ortools(
         diagnostics["solver_status"] = "ZERO_VOLUME_OPTIMAL"
         return None, "ZERO_VOLUME_OPTIMAL", 0.0, diagnostics
 
-    # Calculate exact volume and risk
-    # Use Decimal to ensure zero floating point precision drift
+    # Decimal arithmetic for zero floating-point precision drift
     d_step = Decimal(str(volume_step))
     d_k = Decimal(str(solved_k))
     d_loss = Decimal(str(loss_per_lot_step))

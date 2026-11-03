@@ -50,15 +50,17 @@ logger = logging.getLogger("MatchTraderBridge")
 logger.setLevel(logging.INFO)
 logger.handlers = [handler]
 
-# Strict Risk Constants
+# Strict FundingPips MatchTrader Risk Constants ($5,000 Challenge Account 101305360)
 TARGET_ACCOUNT_NUMBER = "101305360"
-INITIAL_BALANCE = 100000.0
-MAX_TOTAL_DRAWDOWN_LIMIT = 10000.0
-EQUITY_FLOOR_TOTAL = 90000.0
-MAX_DAILY_DRAWDOWN_LIMIT = 5000.0
-EQUITY_FLOOR_DAILY = 95000.0
+INITIAL_BALANCE = 5000.0
+HARD_FLOOR_USD = 4775.00
+EQUITY_FLOOR_TOTAL = HARD_FLOOR_USD
+MAX_TOTAL_DRAWDOWN_LIMIT = INITIAL_BALANCE - HARD_FLOOR_USD  # $225.00 survival buffer
+MAX_DAILY_DRAWDOWN_LIMIT = 150.0
+EQUITY_FLOOR_DAILY = 4850.0
 MAX_CONCURRENT_POSITIONS = int(os.environ.get("MATCHTRADER_MAX_CONCURRENT", 2))
-DEFAULT_RISK_PER_TRADE_USD = 500.0  # 0.50%
+MAX_RISK_USD = 25.00
+DEFAULT_RISK_PER_TRADE_USD = MAX_RISK_USD  # $25.00 strictly capped per trade
 
 # Symbol Map to MatchTrader Instrument Names
 SYMBOL_TO_MATCHTRADER = {
@@ -291,7 +293,9 @@ async def execute_market_order(ws, side: str, lot_size: float = 0.01, symbol: st
     except Exception:
         pass
 
-    try:
+    with BrowserLock("MatchTraderLiveExecution", timeout_secs=8.0) as browser_lock:
+        if not browser_lock.acquired:
+            return {"status": "REJECTED", "ok": False, "reason": "BROWSER_LOCK_CONTENTION_DURING_ORDER"}
         state = await inspect_account_and_positions(ws)
         if not state.get("can_trade"):
             return {

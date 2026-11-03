@@ -297,11 +297,24 @@ def execute_mt5_signal(alert: Dict[str, Any]) -> Dict[str, Any]:
         f"| SL: {sl_adj} | TP: {tp_adj} | Risk: ${realized_risk:.2f}"
     )
 
+    inflight_lock = DB_DIR / ".locks" / "order_execution_inflight.lock"
+    inflight_lock.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        inflight_lock.touch()
+    except Exception:
+        pass
+
     try:
         order_res = mt5.order_send(request)
     except Exception as e:
         logger.error(f"MT5 order_send exception: {e}")
         order_res = None
+    finally:
+        if inflight_lock.exists():
+            try:
+                inflight_lock.unlink()
+            except Exception:
+                pass
 
     if order_res is None or order_res.retcode not in (mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_DONE_PARTIAL):
         ret_comment = getattr(order_res, "comment", "Unknown order_send error")

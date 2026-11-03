@@ -75,13 +75,7 @@ def writer_lock(path):
     with FileMutex(str(lock_path)) as lock:
         if not lock.acquired:
             raise TimeoutError(f'Writer busy: {path}')
-        try:
-            yield
-        finally:
-            try:
-                Path(lock_path).unlink(missing_ok=True)
-            except Exception:
-                pass
+        yield
 
 
 def _publish(path, write):

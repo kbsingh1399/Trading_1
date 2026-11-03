@@ -6,7 +6,7 @@ from pathlib import Path
 from Terminal.risk_envelope import (
     HARD_FLOOR_USD, HALT_CUSHION_USD, STRESS_MULT, EXEC_RESERVE_USD,
     MAX_OPEN_POSITIONS, MIN_RISK_USD, MAX_RISK_USD, budget_per_trade,
-    admissible_volume, validate_trade_geometry,
+    admissible_volume, solve_volume_ortools, validate_trade_geometry,
 )
 
 EXPECTED_MT5_LOGIN = 35296418
@@ -110,8 +110,18 @@ def native_size(mt5, symbol, direction, entry, sl, tp, cap=MAX_RISK_USD):
     loss = mt5.order_calc_profit(side, symbol, info.volume_step, entry, sl)
     if loss is None or not math.isfinite(loss) or loss >= 0:
         raise ValueError('BROKER_VALUATION_UNKNOWN')
-    lots, reason, risk = admissible_volume(loss_per_lot_step=-loss, volume_step=info.volume_step,
-        min_lot=info.volume_min, max_lot=info.volume_max, floor_usd=MIN_RISK_USD, cap_usd=cap)
+    lots, reason, risk = solve_volume_ortools(
+        loss_per_lot_step=-loss,
+        volume_step=info.volume_step,
+        min_lot=info.volume_min,
+        max_lot=info.volume_max,
+        current_equity=account.equity,
+        current_balance=account.balance,
+        committed_risk_usd=committed,
+        active_open_positions=len(positions or []),
+        max_risk_cap_usd=cap,
+        min_risk_floor_usd=MIN_RISK_USD
+    )
     if lots is None:
         raise ValueError(reason)
     margin = mt5.order_calc_margin(side, symbol, lots, entry)

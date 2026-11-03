@@ -48,7 +48,7 @@ def evaluate_whale_causality(
     """
     if len(target_price_series) < 30 or intervention_idx < 15 or (len(target_price_series) - intervention_idx) < 5:
         return {
-            "is_authentic": True,  # Default fail-open to preserve signal if history short
+            "is_authentic": False,  # Strict fail-closed on insufficient history
             "p_value": 0.0,
             "absolute_effect": 0.0,
             "relative_effect_pct": 0.0,
@@ -105,9 +105,9 @@ def evaluate_whale_causality(
     except Exception as e:
         logger.debug(f"CausalImpact evaluation notice: {e}")
         return {
-            "is_authentic": True,
+            "is_authentic": False,
             "p_value": 0.0,
             "absolute_effect": 0.0,
             "relative_effect_pct": 0.0,
-            "summary": f"BSTS_FALLBACK: {e}"
+            "summary": f"BSTS_FAIL_CLOSED: {e}"
         }
