@@ -221,6 +221,7 @@ class FootprintSignalSentinel:
         self.evaluator = RealtimeSignalEvaluator()
         self.last_pos_check_ts = 0.0
         self.wake_event = asyncio.Event()
+        self.pending_signals = {}  # Holds intra-bar signals until 15m candle completion
 
     def read_new_raw_signals(self) -> List[Dict[str, Any]]:
         """Reads any newly appended footprint signal lines from footprint_signals.jsonl."""
@@ -397,12 +398,30 @@ class FootprintSignalSentinel:
 
     async def run_once(self):
         """Processes any unread footprint signals and audits running trades once."""
-        raw_signals = self.read_new_raw_signals()
-        if raw_signals:
-            logger.info(f"Found {len(raw_signals)} unread footprint signal(s). Evaluating...")
-            await self.evaluate_and_dispatch(raw_signals)
+        new_signals = self.read_new_raw_signals()
+        for s in new_signals:
+            k = f"{s.get('symbol')}_{s.get('sig_name')}_{s.get('time_ms')}"
+            self.pending_signals[k] = s
+
+        now_ms = time.time() * 1000
+        signals_ready = []
+        still_pending = {}
+        for k, raw in list(self.pending_signals.items()):
+            t_ms = int(raw.get("time_ms") or 0)
+            is_bar_closed = (t_ms > 0 and (t_ms + 900_000) <= now_ms) or raw.get("bar_closed") is True
+            if now_ms - t_ms > 1_800_000:
+                continue
+            if is_bar_closed:
+                signals_ready.append(raw)
+            else:
+                still_pending[k] = raw
+        self.pending_signals = still_pending
+
+        if signals_ready:
+            logger.info(f"Found {len(signals_ready)} closed footprint signal(s). Evaluating...")
+            await self.evaluate_and_dispatch(signals_ready)
         else:
-            logger.info("No unread footprint signals in stream.")
+            logger.info("No completed candle footprint signals ready for evaluation.")
 
         await self.inspect_and_manage_running_trades()
 
@@ -449,10 +468,30 @@ class FootprintSignalSentinel:
                     except asyncio.TimeoutError:
                         pass
 
-                    # 1. Read newly appended signals
-                    raw_signals = self.read_new_raw_signals()
-                    if raw_signals:
-                        await self.evaluate_and_dispatch(raw_signals)
+                    # 1. Read newly appended signals and buffer intra-bar signals
+                    new_signals = self.read_new_raw_signals()
+                    for s in new_signals:
+                        k = f"{s.get('symbol')}_{s.get('sig_name')}_{s.get('time_ms')}"
+                        self.pending_signals[k] = s
+
+                    # 2. Evaluate signals whose 15m candle has officially completed
+                    now_ms = time.time() * 1000
+                    signals_ready = []
+                    still_pending = {}
+                    for k, raw in list(self.pending_signals.items()):
+                        t_ms = int(raw.get("time_ms") or 0)
+                        is_bar_closed = (t_ms > 0 and (t_ms + 900_000) <= now_ms) or raw.get("bar_closed") is True
+                        if now_ms - t_ms > 1_800_000:
+                            continue  # Discard signals older than 30 mins
+                        if is_bar_closed:
+                            signals_ready.append(raw)
+                        else:
+                            still_pending[k] = raw
+                    self.pending_signals = still_pending
+
+                    if signals_ready:
+                        logger.info(f"⚡ [BAR COMPLETION WAKE] Releasing {len(signals_ready)} fully closed 15m signal(s) to evaluator.")
+                        await self.evaluate_and_dispatch(signals_ready)
 
                     # 2. Guardian check on MatchTrader open positions
                     await self.inspect_and_manage_running_trades()

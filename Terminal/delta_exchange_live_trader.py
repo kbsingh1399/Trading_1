@@ -18,7 +18,7 @@ logger.setLevel(logging.INFO)
 
 CONFIG_ENV_PATH = Path.home() / ".delta-exchange-mcp" / "config.env"
 BASE_URL = "https://api.india.delta.exchange"
-MAX_DELTA_CONCURRENT_POSITIONS = 2
+MAX_DELTA_CONCURRENT_POSITIONS = 5
 
 
 def load_credentials() -> Dict[str, str]:
@@ -280,7 +280,7 @@ class DeltaExchangeTrader:
             order_type="market_order",
             stop_loss_price=sl,
             take_profit_price=tp,
-            leverage=10
+            leverage=25
         )
 
         ok = res.get("success", False) or ("result" in res and "id" in res.get("result", {}))
