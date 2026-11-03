@@ -50,8 +50,11 @@ try:
     from watchdog.observers import Observer
     from watchdog.events import FileSystemEventHandler
     HAS_WATCHDOG = True
+    _BaseHandler = FileSystemEventHandler
 except ImportError:
     HAS_WATCHDOG = False
+    Observer = None
+    _BaseHandler = object
 
 # Reconfigure stdout for UTF-8 line buffering
 try:
@@ -197,8 +200,8 @@ def format_confluence_card(alert: Dict[str, Any]) -> str:
         f"║  HTF Multi-TF:     {htf_str}".ljust(83) + "║",
         "╟" + "─" * 82 + "╢",
         f"║  DeepMind TimesFM: CVD Dir={tfm.get('cvd_direction', 'N/A')} ({tfm.get('cvd_confidence', 0.0):.0%}) | Price Dir={tfm.get('price_direction', 'N/A')}".ljust(83) + "║",
-        f"║  Microstructure:   Whale Bids={order_flow.get('whale_imbalance_bid_ratio', 0.0):.1%} | Near Shorts={order_flow.get('near_field_shorts_pct', 0.0):.1f}% | CVD={order_flow.get('cvd_slope', 'N/A')}".ljust(83) + "║",
-        f"║  Regime & Vector:  Regime={regime.get('regime', 'N/A')} (ATR: {regime.get('atr_pct', 0.0):.2f}%) | VM Analog Win-Rate={vm.get('win_rate', 0.5):.0%}".ljust(83) + "║",
+        f"║  Microstructure:   Whale Bids={('UNTRACKED' if not order_flow.get('whale_tracked') else f'{order_flow.get("whale_imbalance_bid_ratio", 0.0):.1%}')} | Near Shorts={('UNTRACKED' if not order_flow.get('liq_tracked') else f'{order_flow.get("near_field_shorts_pct", 0.0):.1f}%')} | CVD={order_flow.get('cvd_slope', 'N/A')}".ljust(83) + "║",
+        f"║  Regime & Vector:  Regime={regime.get('regime', 'N/A')} (ATR: {regime.get('atr_pct', 0.0):.2f}%) | VM Analog Win-Rate={('N/A (Inconclusive)' if vm.get('verdict') == 'INCONCLUSIVE' else f'{vm.get("win_rate", 0.5):.0%}')}".ljust(83) + "║",
         "╟" + "─" * 82 + "╢",
         f"║  Confluence Drivers:".ljust(83) + "║"
     ]
@@ -220,7 +223,7 @@ def format_confluence_card(alert: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-class SignalFileChangeHandler(FileSystemEventHandler):
+class SignalFileChangeHandler(_BaseHandler):
     """Watchdog event handler waking asyncio sentinel immediately on file write."""
     def __init__(self, loop: asyncio.AbstractEventLoop, wake_event: asyncio.Event):
         self.loop = loop
@@ -659,7 +662,7 @@ class FootprintSignalSentinel:
                     still_pending = {}
                     for k, raw in list(self.pending_signals.items()):
                         t_ms = int(raw.get("time_ms") or 0)
-                        is_bar_closed = (t_ms > 0 and (t_ms + 900_000) <= now_ms) or raw.get("bar_closed") is True
+                        is_bar_closed = (t_ms > 0 and (t_ms + 900_000) <= now_ms)
                         if now_ms - t_ms > 1_800_000:
                             continue  # Discard signals older than 30 mins
                         if is_bar_closed:
@@ -671,6 +674,12 @@ class FootprintSignalSentinel:
                     if signals_ready:
                         logger.info(f"⚡ [BAR COMPLETION WAKE] Releasing {len(signals_ready)} fully closed 15m signal(s) to evaluator.")
                         await self.evaluate_and_dispatch(signals_ready)
+
+                    # Advance durable offset after processing signals
+                    if hasattr(self, "_pending_offset") and self._pending_offset > self.state.get("offset", 0):
+                        self.state["offset"] = self._pending_offset
+                        self.state["processed_signals_count"] += len(new_signals)
+                        save_state(self.state)
 
                     # 2. Guardian check on MatchTrader open positions
                     await self.inspect_and_manage_running_trades()

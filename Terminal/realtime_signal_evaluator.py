@@ -684,7 +684,9 @@ class RealtimeSignalEvaluator:
         else:
             proj_sum = float(tfm_cvd.get('projected_delta_ratio_sum', 0.0) or 0.0)
             cvd_dir = 'BULLISH' if proj_sum > 0 else ('BEARISH' if proj_sum < 0 else 'NEUTRAL')
-            cvd_conf = min(0.99, max(0.50, 0.50 + abs(proj_sum) * 0.15))
+            import numpy as _np
+            _mean_unc = float(tfm_cvd.get("mean_interval_width", 0.40) or 0.40)
+            cvd_conf = float(_np.clip(0.50 + 0.40 * _np.tanh(abs(proj_sum) / (12.0 * max(0.1, _mean_unc))), 0.50, 0.94))
 
         # Price Direction from completed sequence and Auction profile
         if not frame.empty and len(frame) >= 16:

@@ -497,11 +497,11 @@ class DeltaExchangeTrader:
 
         dir_norm = "BUY" if direction in ("BUY", "BULLISH", "LONG") else "SELL"
         geom_ok, geom_reason = validate_trade_geometry(
-            entry_price=entry,
+            direction=dir_norm,
+            entry=entry,
             stop_loss=sl,
             take_profit=tp,
-            direction=dir_norm,
-            min_rr=MIN_RR_RATIO
+            spread_bps=0.0
         )
         if not geom_ok:
             return {"ok": False, "status": "REJECTED", "reason": f"INVALID_TRADE_GEOMETRY: {geom_reason}"}
@@ -517,8 +517,16 @@ class DeltaExchangeTrader:
         from Terminal.risk_envelope import MAX_RISK_USD
         contract_val = float(prod.get("contract_value", 1.0) or 1.0)
         risk_dist = abs(entry - sl)
+        single_contract_risk = risk_dist * contract_val
+        if single_contract_risk > MAX_RISK_USD:
+            return {
+                "ok": False,
+                "status": "REJECTED",
+                "reason": f"SINGLE_CONTRACT_RISK_EXCEEDS_CAP: ${single_contract_risk:.2f} > ${MAX_RISK_USD:.2f}"
+            }
+
         if risk_dist > 0 and contract_val > 0:
-            calc_contracts = int(MAX_RISK_USD / (risk_dist * contract_val))
+            calc_contracts = int(MAX_RISK_USD / single_contract_risk)
             size = max(1, min(calc_contracts, 100))
         else:
             size = 1

@@ -92,6 +92,26 @@ def verify_network_stabilization(expected_change_from: str = "", max_timeout: fl
     return False, get_current_ip()
 
 
+def ensure_delta_split_tunnel_exclusions():
+    """
+    Ensures Delta Exchange India endpoints bypass WARP and route via direct ISP IP.
+    Prevents 'ip_not_whitelisted_for_api_key' errors when WARP rotates.
+    """
+    if not WARP_CLI.exists():
+        return
+    delta_hosts = [
+        "cdn.india.delta.exchange",
+        "api.india.delta.exchange",
+        "india.delta.exchange",
+        "delta.exchange"
+    ]
+    for h in delta_hosts:
+        try:
+            subprocess.run([str(WARP_CLI), "tunnel", "host", "add", h], capture_output=True, timeout=5)
+        except Exception:
+            pass
+
+
 def is_warp_rotating() -> bool:
     """Returns True if a WARP rotation is currently in-flight."""
     lock_file = LOCK_DIR / "warp_execution.lock"
@@ -161,6 +181,7 @@ def rotate_warp_ip(context: str = "Collector", reason: str = "SCHEDULED", force:
                 subprocess.run([str(WARP_CLI), "registration", "new"], capture_output=True, text=True, timeout=8)
                 time.sleep(0.5)
                 subprocess.run([str(WARP_CLI), "connect"], capture_output=True, text=True, timeout=8)
+                ensure_delta_split_tunnel_exclusions()
 
                 stable, new_ip = verify_network_stabilization(expected_change_from=old_ip, max_timeout=10.0)
                 _set_last_rotation_time(time.time(), new_ip, reason)

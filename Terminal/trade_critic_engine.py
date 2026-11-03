@@ -434,7 +434,7 @@ class TradeCriticEngine:
         try:
             query_vec = self.embed_text(narrative)
             # Search top 2 most similar historical failure modes
-            df_matches = self.table.search(query_vec).limit(2).to_pandas()
+            df_matches = self.table.search(query_vec).metric('cosine').limit(2).to_pandas()
 
             if df_matches.empty:
                 return {
@@ -454,7 +454,7 @@ class TradeCriticEngine:
                 dist = float(row.get("_distance", 1.0))
                 # For normalized vectors: cosine_sim = 1.0 - (dist^2)/2 or 1.0 - dist
                 # FastEmbed vectors are unit normalized, so dist is Euclidean sqrt(2*(1-cos))
-                cos_sim = max(0.0, min(1.0, 1.0 - (dist * dist) / 2.0))
+                cos_sim = max(0.0, min(1.0, 1.0 - dist))
                 
                 if row.get("direction", "").upper() == dir_clean:
                     if cos_sim > max_sim:
