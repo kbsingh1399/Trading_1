@@ -7,21 +7,9 @@
     "initial_sl": 3.1914,
     "initial_tp": 3.016,
     "initial_risk_dist": 0.058399999999999785,
-    "current_tier": 1,
-    "size": 1,
-    "last_ratchet_price": 3.132
-  },
-  "SUSHIUSD": {
-    "symbol": "SUSHIUSD",
-    "product_id": 21525,
-    "direction": "SELL",
-    "entry_price": 0.1921,
-    "initial_sl": 0.1934,
-    "initial_tp": 0.1891,
-    "initial_risk_dist": 0.0012999999999999956,
     "current_tier": 2,
     "size": 1,
-    "last_ratchet_price": 0.1908
+    "last_ratchet_price": 3.0746
   },
   "TRXUSD": {
     "symbol": "TRXUSD",
