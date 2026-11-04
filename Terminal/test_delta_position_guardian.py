@@ -24,10 +24,12 @@ from Terminal.risk_envelope import MAX_RISK_USD
 
 @pytest.fixture(autouse=True)
 def isolate_anchors_file(tmp_path):
-    """Ensures unit tests never overwrite or unlink production live_position_anchors.json."""
+    """Ensures unit tests never overwrite production anchors or contend on live daemon locks."""
     test_anchor_file = tmp_path / "live_position_anchors.json"
+    test_lock = tmp_path / "delta_position_management.lock"
     with patch("Terminal.position_anchors.ANCHORS_FILE", test_anchor_file):
-        yield test_anchor_file
+        with patch("Terminal.delta_exchange_live_trader.DELTA_MGMT_LOCK_FILE", test_lock):
+            yield test_anchor_file
 
 
 @pytest.fixture

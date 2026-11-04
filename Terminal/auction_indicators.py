@@ -330,7 +330,7 @@ def extract_microstructure_levels(symbol: str, current_price: float) -> Dict[str
                     near_bid = bids_below.sort_values("price", ascending=False).iloc[0]
                     result["nearest_whale_bid"] = {
                         "price": float(near_bid["price"]),
-                        "amount_usd": float(near_bid.get("amount_usd", near_bid.get("size", 0.0)))
+                        "amount_usd": float(near_bid.get("remaining_usd", near_bid.get("initial_usd", near_bid.get("amount_usd", near_bid.get("size", 0.0)))))
                     }
                     
                 # Nearest ask wall above price
@@ -339,7 +339,7 @@ def extract_microstructure_levels(symbol: str, current_price: float) -> Dict[str
                     near_ask = asks_above.sort_values("price", ascending=True).iloc[0]
                     result["nearest_whale_ask"] = {
                         "price": float(near_ask["price"]),
-                        "amount_usd": float(near_ask.get("amount_usd", near_ask.get("size", 0.0)))
+                        "amount_usd": float(near_ask.get("remaining_usd", near_ask.get("initial_usd", near_ask.get("amount_usd", near_ask.get("size", 0.0)))))
                     }
         except Exception:
             pass
@@ -393,7 +393,11 @@ def compute_auction_profile(symbol: str) -> Dict[str, Any]:
         return {"data_valid": False, "error": f"No candle data for {symbol}"}
 
     try:
-        df = pd.read_parquet(candle_file)
+        auction_cols = ['open_time_utc', 'open_time_ms', 'open', 'high', 'low', 'close', 'total_volume', 'poc_price']
+        try:
+            df = pd.read_parquet(candle_file, columns=auction_cols)
+        except Exception:
+            df = pd.read_parquet(candle_file)
         if df.empty or len(df) < 10:
             return {"data_valid": False, "error": "Insufficient bars"}
 

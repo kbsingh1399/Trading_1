@@ -111,11 +111,32 @@ def atomic_json(path, data):
     _publish(path, lambda p: p.write_text(payload, encoding='utf-8'))
 
 
-def atomic_parquet(frame, path):
-    _publish(path, lambda p: frame.to_parquet(p, index=False, engine='pyarrow'))
+def atomic_append_jsonl(path, records):
+    """
+    Appends one or more JSON records to a JSONL file with cross-process FileMutex
+    and immediate flush + fsync to prevent stream tearing and partial writes.
+    """
+    if isinstance(records, dict):
+        records = [records]
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with writer_lock(p):
+        with open(p, "a", encoding="utf-8") as f:
+            for rec in records:
+                payload = json.dumps(rec, ensure_ascii=True, allow_nan=False)
+                f.write(payload + "\n")
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
 
 
-def upsert_parquet(frame, path, keys, sort_by=None, limit=None):
+def atomic_parquet(frame, path, compression='snappy'):
+    _publish(path, lambda p: frame.to_parquet(p, index=False, engine='pyarrow', compression=compression))
+
+
+def upsert_parquet(frame, path, keys, sort_by=None, limit=None, compression='snappy'):
     import pandas as pd
     with writer_lock(path):
         # A corrupt existing history is an error, never permission to erase it.
@@ -125,7 +146,7 @@ def upsert_parquet(frame, path, keys, sort_by=None, limit=None):
             combined = combined.sort_values(sort_by)
         if limit is not None:
             combined = combined.tail(limit)
-        atomic_parquet(combined, path)
+        atomic_parquet(combined, path, compression=compression)
     return combined
 
 
@@ -154,7 +175,7 @@ def acquire_singleton(name, directory):
     _PROCESS_LOCKS[key] = lock
 
 
-def completed_candles(frame, now_ms=None):
+def completed_candles(frame, now_ms=None, allow_session_breaks=False):
     import pandas as pd
     import numpy as np
     now_ms = time.time() * 1000 if now_ms is None else now_ms
@@ -169,6 +190,17 @@ def completed_candles(frame, now_ms=None):
         raise ValueError('Completed candle history stale or empty')
     if len(frame) > 1:
         diffs = np.diff(frame.open_time_ms.to_numpy(dtype=np.int64))
-        if not np.all(diffs == 900000):
-            raise ValueError('Non-contiguous M15 candle history')
+        is_tradfi = False
+        if 'asset_class' in frame.columns:
+            ac = str(frame['asset_class'].iloc[0]).strip().lower()
+            if ac in {'forex', 'indices', 'metals', 'commodities'}:
+                is_tradfi = True
+        if allow_session_breaks or is_tradfi:
+            # Valid TradFi intervals: exact 15m (900k ms) or legitimate session/weekend breaks (multiples of 15m >= 1h)
+            valid = (diffs == 900000) | ((diffs >= 3600000) & (diffs % 900000 == 0))
+            if not np.all(valid):
+                raise ValueError('Non-contiguous M15 candle history')
+        else:
+            if not np.all(diffs == 900000):
+                raise ValueError('Non-contiguous M15 candle history')
     return frame

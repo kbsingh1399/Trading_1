@@ -154,6 +154,7 @@ def detect_market_pillar_hits(
     whale_history_sweep_bias: str = "NEUTRAL",
     whale_flow_score: Optional[float] = None,
     whale_flow_valid: bool = False,
+    entry_pockets: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, float]:
     """
     Mirrors the POSITIVE contribution conditions of the 4 market-derived
@@ -250,6 +251,11 @@ def detect_market_pillar_hits(
             p5 = max(p5, 6.0)
         if not is_buy and float(whale_flow_score) <= -25.0:
             p5 = max(p5, 6.0)
+    if entry_pockets:
+        if is_buy and any(p.get("pocket_type") == "SUPPORT_FLOOR" and -2.5 <= float(p.get("dist_pct", -99.0)) <= -0.15 for p in entry_pockets):
+            p5 = max(p5, 8.0)
+        if not is_buy and any(p.get("pocket_type") == "OVERHEAD_SUPPLY" and 0.15 <= float(p.get("dist_pct", 99.0)) <= 2.5 for p in entry_pockets):
+            p5 = max(p5, 8.0)
     hits["P5_WHALE_SWEEP"] = p5
 
     return {k: v for k, v in hits.items() if v >= PILLAR_MIN_CONTRIBUTION_PTS}
@@ -572,6 +578,13 @@ class RealtimeSignalEvaluator:
             if whale_imbalance >= 0.55:
                 confluence_score += 15
                 reasons.append(f"Whale Bids {whale_imbalance*100:.0f}%")
+            if whale_imbalance >= 0.75:
+                confluence_score += 5
+                reasons.append(f"Whale Bid Fortress Dominance ({whale_imbalance*100:.0f}% bids)")
+
+            if cvd_slope == "BULLISH_DIVERGENCE" and (sig_price <= day_val * 1.002 or p_vs_vwap == "BELOW_VWAP"):
+                confluence_score += 6
+                reasons.append(f"Wyckoff Spring: Bullish CVD Divergence Absorbed at Value Discount (${day_val:,.2f})")
 
             if cvd_slope in ["BULLISH_DIVERGENCE", "BULLISH_FLOW"]:
                 confluence_score += 15
@@ -592,6 +605,9 @@ class RealtimeSignalEvaluator:
                 if 0.4 <= sm_dist <= 4.0:
                     confluence_score += 10
                     reasons.append(f"Overhead Short Liq Target: ${nearest_sm.get('zone_price'):,.2f} (+{sm_dist:.1f}%, Score {sm_score:.0f})")
+                if 0.4 <= sm_dist <= 2.0 and sm_score >= 35.0 and near_field_shorts >= 55.0:
+                    confluence_score += 6
+                    reasons.append(f"Liquidation Squeeze Ignition Sweet-Spot (+{sm_dist:.1f}%, Score {sm_score:.0f}, {near_field_shorts:.0f}% shorts)")
 
             if "bullish" in clld_turn.lower():
                 confluence_score += 5
@@ -642,6 +658,13 @@ class RealtimeSignalEvaluator:
             if whale_imbalance <= 0.45:
                 confluence_score += 15
                 reasons.append(f"Whale Asks {(1-whale_imbalance)*100:.0f}%")
+            if whale_imbalance <= 0.25:
+                confluence_score += 5
+                reasons.append(f"Whale Ask Fortress Dominance ({(1-whale_imbalance)*100:.0f}% asks)")
+
+            if cvd_slope == "BEARISH_DIVERGENCE" and (sig_price >= day_vah * 0.998 or p_vs_vwap == "ABOVE_VWAP"):
+                confluence_score += 6
+                reasons.append(f"Wyckoff Upthrust: Bearish CVD Divergence Rejected at Value Premium (${day_vah:,.2f})")
 
             if cvd_slope in ["BEARISH_DIVERGENCE", "BEARISH_FLOW"]:
                 confluence_score += 15
@@ -662,6 +685,9 @@ class RealtimeSignalEvaluator:
                 if 0.4 <= lm_dist <= 4.0:
                     confluence_score += 10
                     reasons.append(f"Underlying Long Liq Target: ${nearest_lm.get('zone_price'):,.2f} (-{lm_dist:.1f}%, Score {lm_score:.0f})")
+                if 0.4 <= lm_dist <= 2.0 and lm_score >= 35.0 and near_field_shorts <= 45.0:
+                    confluence_score += 6
+                    reasons.append(f"Liquidation Cascade Ignition Sweet-Spot (-{lm_dist:.1f}%, Score {lm_score:.0f}, {100-near_field_shorts:.0f}% longs)")
 
             if "bearish" in clld_turn.lower():
                 confluence_score += 5
@@ -914,6 +940,19 @@ class RealtimeSignalEvaluator:
                         f"(+{worst.get('dist_pct'):.1f}%, ${worst.get('trapped_musd', 0):.1f}M trapped, "
                         f"{worst.get('whale_count')} whales) (-{pen:.0f})"
                     )
+                support = [
+                    p for p in entry_pockets
+                    if p.get("pocket_type") == "SUPPORT_FLOOR" and -2.5 <= float(p.get("dist_pct", -99.0)) <= -0.15
+                ]
+                if support:
+                    best = max(support, key=lambda p: p.get("pocket_score", 0.0))
+                    boost = 8.0 if float(best.get("dist_pct", -99.0)) >= -1.25 else 5.0
+                    confluence_score += boost
+                    reasons.append(
+                        f"Underwater Short-Whale Support Floor Defense @ ${best.get('pocket_price'):,.2f} "
+                        f"({best.get('dist_pct'):.1f}%, ${best.get('trapped_musd', 0):.1f}M trapped short fuel, "
+                        f"{best.get('whale_count')} whales) (+{boost:.0f})"
+                    )
             elif direction == "SELL":
                 support = [
                     p for p in entry_pockets
@@ -927,6 +966,19 @@ class RealtimeSignalEvaluator:
                         f"Underwater Short-Whale Support Floor @ ${worst.get('pocket_price'):,.2f} "
                         f"({worst.get('dist_pct'):.1f}%, ${worst.get('trapped_musd', 0):.1f}M trapped, "
                         f"{worst.get('whale_count')} whales) (-{pen:.0f})"
+                    )
+                overhead = [
+                    p for p in entry_pockets
+                    if p.get("pocket_type") == "OVERHEAD_SUPPLY" and 0.15 <= float(p.get("dist_pct", 99.0)) <= 2.5
+                ]
+                if overhead:
+                    best = max(overhead, key=lambda p: p.get("pocket_score", 0.0))
+                    boost = 8.0 if float(best.get("dist_pct", 99.0)) <= 1.25 else 5.0
+                    confluence_score += boost
+                    reasons.append(
+                        f"Underwater Long-Whale Overhead Supply Cap Defense @ ${best.get('pocket_price'):,.2f} "
+                        f"(+{best.get('dist_pct'):.1f}%, ${best.get('trapped_musd', 0):.1f}M trapped long supply, "
+                        f"{best.get('whale_count')} whales) (+{boost:.0f})"
                     )
 
             # PATCH P2: INTER-REFRESH WHALE FLOW (accumulating / derisking / dumping)
@@ -1366,6 +1418,7 @@ class RealtimeSignalEvaluator:
             whale_history_sweep_bias=str(whale_history.get("sweep_bias", "NEUTRAL")),
             whale_flow_score=float(_whale_flow.get("flow_score") or 0.0) if _whale_flow.get("data_valid") else None,
             whale_flow_valid=bool(_whale_flow.get("data_valid")) and not bool(_whale_flow.get("low_confidence")),
+            entry_pockets=(hd_intel or {}).get("entry_pockets") or [],
         )
         pillar_count = len(market_pillar_hits)
         pillar_gate_passed = (MIN_INDEPENDENT_MARKET_PILLARS <= 0) or (pillar_count >= MIN_INDEPENDENT_MARKET_PILLARS)

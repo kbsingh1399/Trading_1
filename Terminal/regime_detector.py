@@ -57,7 +57,12 @@ class RegimeDetector:
             }
 
         try:
-            df = completed_candles(pd.read_parquet(candle_file))
+            regime_cols = ['open_time_ms', 'close_time_ms', 'open', 'high', 'low', 'close', 'volume', 'total_volume', 'delta']
+            try:
+                raw_df = pd.read_parquet(candle_file, columns=regime_cols)
+            except Exception:
+                raw_df = pd.read_parquet(candle_file)
+            df = completed_candles(raw_df)
             if len(df) < 10:
                 return {"symbol": symbol, "regime": "INSUFFICIENT_DATA", "strategy_multipliers": {}}
 

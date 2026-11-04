@@ -205,9 +205,23 @@ class UniversalFootprintEngine:
             delta_ratio = np.clip((body / candle_range) * 0.7 + wick_skew * 0.3, -1.0, 1.0)
             df["delta"] = df["total_volume"] * delta_ratio
 
-        if "buy_volume" not in df.columns or df["buy_volume"].isna().all() or "sell_volume" not in df.columns or df["sell_volume"].isna().all():
-            df["buy_volume"] = (df["total_volume"] + df["delta"]) / 2.0
-            df["sell_volume"] = (df["total_volume"] - df["delta"]) / 2.0
+        if "buy_volume" not in df.columns or df["buy_volume"].isna().any() or "sell_volume" not in df.columns or df["sell_volume"].isna().any():
+            calc_buy = (df["total_volume"] + df["delta"]) / 2.0
+            calc_sell = (df["total_volume"] - df["delta"]) / 2.0
+            if "buy_volume" not in df.columns:
+                df["buy_volume"] = calc_buy
+            else:
+                df["buy_volume"] = df["buy_volume"].fillna(calc_buy)
+            if "sell_volume" not in df.columns:
+                df["sell_volume"] = calc_sell
+            else:
+                df["sell_volume"] = df["sell_volume"].fillna(calc_sell)
+
+        # Microstructure invariant: delta == buy_volume - sell_volume
+        mismatch = (df["delta"] - (df["buy_volume"] - df["sell_volume"])).abs() > 1e-3
+        if mismatch.any():
+            df.loc[mismatch, "buy_volume"] = (df.loc[mismatch, "total_volume"] + df.loc[mismatch, "delta"]) / 2.0
+            df.loc[mismatch, "sell_volume"] = (df.loc[mismatch, "total_volume"] - df.loc[mismatch, "delta"]) / 2.0
 
         if "delta_pct" not in df.columns or df["delta_pct"].isna().all():
             v_safe = np.maximum(df["total_volume"], 1e-9)

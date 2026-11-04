@@ -13,6 +13,7 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Set, Tuple
 import requests
+from requests.adapters import HTTPAdapter
 
 from Terminal.risk_envelope import (
     HARD_FLOOR_USD,
@@ -37,6 +38,7 @@ logger.setLevel(logging.INFO)
 CONFIG_ENV_PATH = Path.home() / ".delta-exchange-mcp" / "config.env"
 BASE_URL = "https://api.india.delta.exchange"
 MAX_DELTA_CONCURRENT_POSITIONS = MAX_OPEN_POSITIONS  # Strict SSOT from risk_envelope (2)
+DELTA_MGMT_LOCK_FILE = DB_DIR / ".locks" / "delta_position_management.lock"
 LIVE_DISPATCH_ENABLED = os.environ.get("DELTA_LIVE_DISPATCH", "false").lower() in ("true", "1", "yes")
 PAPER_TRADING_ENABLED = os.environ.get("DELTA_PAPER_TRADING", "true").lower() in ("true", "1", "yes")
 
@@ -99,7 +101,9 @@ def solve_fee_aware_grid(
         }
 
     # Directional round-trip taker commission per contract (entry + SL exit)
-    commission_per_contract = 2.0 * taker_fee_rate * float(entry) * contract_value
+    entry_notional = float(entry) * contract_value
+    exit_notional = float(stop_loss) * contract_value
+    commission_per_contract = taker_fee_rate * (entry_notional + exit_notional)
     loss_per_contract = (risk_dist * contract_value) + commission_per_contract
 
     if loss_per_contract <= 0:
@@ -198,6 +202,11 @@ class DeltaExchangeTrader:
         self.server_time_offset = 0.0
         self.products_cache: Dict[str, Dict[str, Any]] = dict(DEFAULT_PRODUCTS)
         self._inflight_orders: Set[str] = set()
+        # Persistent HTTP connection pooling for sub-50ms RTT
+        self.session = requests.Session()
+        adapter = HTTPAdapter(pool_connections=20, pool_maxsize=50, max_retries=1)
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
         if (self.api_key and self.api_secret) or self.token:
             try:
                 self._sync_server_time()
@@ -211,7 +220,7 @@ class DeltaExchangeTrader:
             ts = str(int(time.time()))
             sig = hmac.new(self.api_secret.encode(), ("GET" + ts + "/v2/positions/margined").encode(), hashlib.sha256).hexdigest()
             headers = {"api-key": self.api_key, "timestamp": ts, "signature": sig}
-            resp = requests.get(f"{BASE_URL}/v2/positions/margined", headers=headers, timeout=10)
+            resp = self.session.get(f"{BASE_URL}/v2/positions/margined", headers=headers, timeout=10)
             if resp.status_code == 401:
                 ctx = resp.json().get("error", {}).get("context", {})
                 server_time = ctx.get("server_time")
@@ -231,7 +240,7 @@ class DeltaExchangeTrader:
     def _load_products(self):
         """Caches perpetual futures metadata for rapid resolution."""
         try:
-            resp = requests.get(f"{BASE_URL}/v2/products", timeout=10)
+            resp = self.session.get(f"{BASE_URL}/v2/products", timeout=10)
             if resp.status_code == 200:
                 data = resp.json().get("result", [])
                 for p in data:
@@ -290,15 +299,13 @@ class DeltaExchangeTrader:
         base = getattr(self, "base_url", BASE_URL)
         url = base + path + query_str
         method_upper = method.upper()
-        if method_upper == 'GET':
-            req_func = requests.get
-        elif method_upper == 'PUT':
-            req_func = requests.put
-        elif method_upper == 'DELETE':
-            req_func = requests.delete
-        else:
-            req_func = requests.post
-        resp = req_func(url, headers=headers, data=body_str if body_str else None, timeout=10)
+        resp = self.session.request(
+            method=method_upper,
+            url=url,
+            headers=headers,
+            data=body_str if body_str else None,
+            timeout=10
+        )
 
         # PATCH D1: bounded to ONE resync+retry. A persistently-drifting clock or a
         # revoked key previously recursed infinitely — an unbounded request storm
@@ -650,6 +657,23 @@ class DeltaExchangeTrader:
         dir_mult = 1.0 if pos_direction == "BUY" else -1.0
         size = int(tp_order.get("size", 1))
 
+        # Check for catastrophic adverse slippage beyond stop loss
+        directional_stop_dist = (fill_price - sl_price) * dir_mult
+        if directional_stop_dist <= 0:
+            logger.error(
+                f"[{symbol}] INVERTED STOP LOSS DETECTED: fill {fill_price} breached planned SL {sl_price} "
+                f"for {pos_direction} position (dist={directional_stop_dist}). Closing immediately fail-closed."
+            )
+            close_res = self.close_position(symbol)
+            _cancel_brackets()
+            return {
+                "ok": False,
+                "status": "INVERTED_STOP_LOSS",
+                "reason": f"Fill price {fill_price} slipped past SL {sl_price} in direction {pos_direction}",
+                "position_closed": True,
+                "close_res": close_res
+            }
+
         # Actual risk distance from fill
         actual_risk = abs(fill_price - sl_price)
         from Terminal.risk_envelope import MAX_RISK_USD
@@ -816,7 +840,7 @@ class DeltaExchangeTrader:
             except Exception as e:
                 logger.warning(f"Error auditing paper positions: {e}")
 
-        with FileMutex(str(DB_DIR / ".locks" / "delta_position_management.lock"), timeout=5.0) as mgmt_lock:
+        with FileMutex(str(DELTA_MGMT_LOCK_FILE), timeout=5.0) as mgmt_lock:
             if not mgmt_lock.acquired:
                 logger.info("Another process is actively auditing Delta positions. Yielding.")
                 return reports
@@ -1080,7 +1104,8 @@ class DeltaExchangeTrader:
             target_tier = cur_tier
             tier_tag = None
 
-            if r_gain >= 3.0 and cur_tier < 3:
+            # Pre-emptive ratchet triggers at +2.8R / +1.8R to widen TP before Delta's resting limit fills
+            if r_gain >= 2.8 and cur_tier < 3:
                 target_sl = entry_price + (dir_mult * 2.0 * r0)
                 target_tier = 3
                 tier_tag = "TIER_3_PLUS_2R_LOCK"
@@ -1093,7 +1118,7 @@ class DeltaExchangeTrader:
                             size=abs(size),
                             stop_price=widen_tp
                         )
-            elif r_gain >= 2.0 and cur_tier < 2:
+            elif r_gain >= 1.8 and cur_tier < 2:
                 target_sl = entry_price + (dir_mult * 1.0 * r0)
                 target_tier = 2
                 tier_tag = "TIER_2_PLUS_1R_LOCK"
@@ -1106,12 +1131,20 @@ class DeltaExchangeTrader:
                             size=abs(size),
                             stop_price=widen_tp
                         )
+            elif r_gain >= 1.5 and cur_tier == 1:
+                # Intermediate Tier 1.5: Lock +0.5R0 profit once price reaches +1.5R0 (prevents giveback to BE)
+                half_r_sl = entry_price + (dir_mult * 0.5 * r0)
+                is_advancing = (half_r_sl > cur_sl_price + tick_size * 0.5) if direction == "BUY" else (half_r_sl < cur_sl_price - tick_size * 0.5)
+                if is_advancing:
+                    target_sl = half_r_sl
+                    target_tier = 1
+                    tier_tag = "TIER_1_5_PLUS_HALF_R_LOCK"
             elif r_gain >= 1.0 and cur_tier < 1:
                 target_sl = entry_price + (dir_mult * 1.0 * tick_size)
                 target_tier = 1
                 tier_tag = "TIER_1_BREAKEVEN"
 
-            if target_sl is not None and target_tier > cur_tier:
+            if target_sl is not None and (target_tier > cur_tier or (target_tier == cur_tier and tier_tag == "TIER_1_5_PLUS_HALF_R_LOCK")):
                 is_better = (target_sl > cur_sl_price + tick_size * 0.5) if direction == "BUY" else (target_sl < cur_sl_price - tick_size * 0.5)
                 is_valid_trigger = (target_sl < mark_price - tick_size) if direction == "BUY" else (target_sl > mark_price + tick_size)
 
@@ -1244,7 +1277,7 @@ class DeltaExchangeTrader:
         if not prod:
             return {"ok": False, "status": "REJECTED", "reason": f"SYMBOL_NOT_ON_DELTA_INDIA: {sym}"}
 
-        with FileMutex(str(DB_DIR / ".locks" / "delta_position_management.lock"), timeout=10.0) as mgmt_lock:
+        with FileMutex(str(DELTA_MGMT_LOCK_FILE), timeout=10.0) as mgmt_lock:
             if not mgmt_lock.acquired:
                 logger.warning(f"[{sym}] Live dispatch lock contention on position management mutex. Yielding.")
                 return {"ok": False, "status": "REJECTED", "reason": "POSITION_MANAGEMENT_MUTEX_CONTENTION"}

@@ -157,7 +157,7 @@ class PaperTradingEngine:
             taker_fee_rate=TAKER_FEE_RATE,
             cap_usd=MAX_RISK_USD
         )
-        contracts = grid_res.get("contracts", 1)
+        contracts = int(grid_res.get("size", grid_res.get("contracts", 1)))
         if contracts <= 0:
             contracts = 1
 

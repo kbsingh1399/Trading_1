@@ -71,7 +71,11 @@ class OlapEngine:
                 return {'data_valid': True, 'feed_status': 'FAIL_SOFT_UNTRACKED', 'tight_bid_walls_usd': 0.0,
                         'tight_ask_walls_usd': 0.0, 'whale_imbalance_bid_ratio': 0.5, 'total_bids_usd': 0.0,
                         'total_asks_usd': 0.0, 'age_seconds': 0.0}
-            frame = pd.read_parquet(whale_path)
+            whale_cols = ['snapshot_time_utc', 'price', 'remaining_usd', 'from_price_pct', 'side', 'duration_seconds']
+            try:
+                frame = pd.read_parquet(whale_path, columns=whale_cols)
+            except Exception:
+                frame = pd.read_parquet(whale_path)
             frame = self._latest_snapshot(frame)
             age = (datetime.now(timezone.utc) - pd.to_datetime(frame.snapshot_time_utc.iloc[0], utc=True)).total_seconds()
             if not 0 <= age <= 7200:
@@ -117,7 +121,11 @@ class OlapEngine:
             hist_path = HISTORY_ORDERS_DIR / f'{symbol}_whale_history_orders.parquet'
             if not hist_path.exists():
                 return res
-            df = pd.read_parquet(hist_path)
+            hist_cols = ['time_ms', 'filled_usd', 'side']
+            try:
+                df = pd.read_parquet(hist_path, columns=hist_cols)
+            except Exception:
+                df = pd.read_parquet(hist_path)
             if df.empty:
                 return res
             now_ms = time.time() * 1000
@@ -357,7 +365,11 @@ class OlapEngine:
         if not target_file.exists():
             return pd.DataFrame()
         try:
-            raw_df = pd.read_parquet(target_file)
+            forecast_cols = ['open_time_ms', 'close_time_ms', 'close', 'cumulative_delta', 'total_volume', 'delta', 'poc_price']
+            try:
+                raw_df = pd.read_parquet(target_file, columns=forecast_cols)
+            except Exception:
+                raw_df = pd.read_parquet(target_file)
             if raw_df.empty:
                 return pd.DataFrame()
             frame = completed_candles(raw_df).tail(limit)

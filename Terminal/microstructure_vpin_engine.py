@@ -184,7 +184,7 @@ def compute_vpin_and_toxicity(
         tail_df = df.tail(lookback_bars).copy()
         
         # Resolve volume and delta
-        vol_col = "volume" if "volume" in tail_df.columns else "tick_volume" if "tick_volume" in tail_df.columns else None
+        vol_col = "total_volume" if "total_volume" in tail_df.columns else "volume" if "volume" in tail_df.columns else "tick_volume" if "tick_volume" in tail_df.columns else None
         delta_col = "delta" if "delta" in tail_df.columns else None
 
         if not vol_col or tail_df[vol_col].sum() <= 0:

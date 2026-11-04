@@ -124,8 +124,8 @@ When a footprint candle closes, all 5 pillars are simultaneously queried via the
 | **Pillar 1: Footprint & Cluster Signals** | `1_coinglass_footprint_scraper.py` | Order flow delta, absorption, trapped shorts/longs, delta divergence. | **Base Confluence: +20 to +40 pts**.<br/>Dual Unanimous Cluster: **+15 pts**.<br/>Triple Unanimous Cluster: **+20 pts**.<br/>Opposing Discordant Conflict: **-20 pts & VETO**. |
 | **Pillar 2: Auction Profile & Value Areas** | `Database/Auction_Levels/*.parquet` | Day VWAP, Day VAH, Day VAL, Day POC, Fib-Prime EMAs [55, 89, 233]. | **Model 0 (Filtered Boundary): +10 to +25 pts** (VWAP/Fib ribbon confirmation, HTF directional congruence, boundary defense).<br/>**Model 1 (Mean Reversion): +15 to +25 pts** (fading VAH/VAL back to VWAP).<br/>**Model 2 (Trend Pullback): +15 to +40 pts** (EMA 55-89 pocket bounce with HTF alignment). |
 | **Pillar 3: Live TV Liquidations & Reversals** | `4_coinglass_tv_scraper.py` & `Database/Live_Liquidations/` | 15m real-time liquidation spike (USD volume & exhaustion score). | **Capitulation Reversal: +15 to +20 pts** (e.g. $100k+ long flush bottom).<br/>**Adverse Blow-off Trap: -15 pts** (buying top of short squeeze). |
-| **Pillar 4: Liquidation Heatmap & Strike Magnets** | `3_coinglass_liquidation_levels.py` & `Database/Liquidation_Data/` | Cumulative Liquidation Levels (CLLD), near-field shorts %, overhead/underlying strike magnets, key liquidation barriers. | **Whale Liquidation Targets: +8 pts**.<br/>**Near-Field Density Dominance: +5 pts** (0-1% or 1-2% band net delta).<br/>**Cascade Fuel: +5 to +10 pts** (near-field imbalance > 52%).<br/>**CLLD Turn: +5 pts** (bullish/bearish shift confluence).<br/>**Strike Target Magnet: +10 pts** (overhead short liqs for BUY, underlying long liqs for SELL).<br/>**Key Strike Barriers: +5 pts** (nearest short/long strike barrier). |
-| **Pillar 5: Whales & Hyperdash Intel** | `2_coinglass_whales.py` & `Terminal/hyperdash_intel_engine.py` | Order book whale bid/ask imbalance, aggressive swept volume, Hyperdash Smart Money & Crowd Bias. | **Whale Book Imbalance: +15 pts** (>= 55% bids for BUY, <= 45% for SELL).<br/>**Whale Sweeps: +5 pts**.<br/>**Hyperdash Smart Money: +10 pts** (penalty -15 pts if opposing).<br/>**Hyperdash Squeeze Fuel: +10 pts**.<br/>**Whale Sweep Magnet: +8 pts** (penalty -8 pts if within stop-out danger zone). |
+| **Pillar 4: Liquidation Heatmap & Strike Magnets** | `3_coinglass_liquidation_levels.py` & `Database/Liquidation_Data/` | Cumulative Liquidation Levels (CLLD), near-field shorts %, overhead/underlying strike magnets, key liquidation barriers. | **Whale Liquidation Targets: +8 pts**.<br/>**Near-Field Density Dominance: +5 pts** (0-1% or 1-2% band net delta).<br/>**Cascade Fuel: +5 to +10 pts** (near-field imbalance > 52%).<br/>**CLLD Turn: +5 pts** (bullish/bearish shift confluence).<br/>**Strike Target Magnet: +10 pts** (overhead short liqs for BUY, underlying long liqs for SELL).<br/>**Squeeze Ignition Sweet-Spot: +6 pts** (dist <= 2.0%, score >= 35, near-field >= 55%).<br/>**Key Strike Barriers: +5 pts** (nearest short/long strike barrier). |
+| **Pillar 5: Whales & Hyperdash Intel** | `2_coinglass_whales.py` & `Terminal/hyperdash_intel_engine.py` | Order book whale bid/ask imbalance, aggressive swept volume, Hyperdash Smart Money, Crowd Bias, Underwater Pockets. | **Whale Book Imbalance: +15 pts** (>= 55% bids for BUY, <= 45% for SELL).<br/>**Whale Fortress Wall: +5 pts** (>= 75% bids for BUY, <= 25% for SELL).<br/>**Whale Sweeps: +5 pts**.<br/>**Hyperdash Smart Money: +10 pts** (penalty -15 pts if opposing).<br/>**Hyperdash Squeeze Fuel: +10 pts**.<br/>**Whale Sweep Magnet: +8 pts** (penalty -8 pts if within stop-out danger zone).<br/>**Underwater Pocket Defense: +8 pts** (Support floor defense for BUY, Overhead supply ceiling for SELL).<br/>**Wyckoff Spring / Upthrust: +6 pts** (CVD divergence absorbed at Value Area boundary). |
 
 ---
 
@@ -177,10 +177,14 @@ All real-time signal evaluations query microstructural indicators through [`Term
 
 Once a setup achieves a composite score $\ge 75.0/100$, it passes through the institutional execution gate.
 
-### 4.1 Strict Risk Cap ($25 USD)
+### 4.1 Strict Risk Cap ($25 USD) & Confluence-Weighted Kelly Sizing
 The position size $S$ (contracts) is solved mathematically via `solve_fee_aware_grid`:
-$$\text{Max Risk USD} = (\text{SL Distance} \times S \times \text{Contract Value}) + \text{Taker Commission} \le \$25.00$$
-If free available margin buffer is $< 20.0\%$, the order fails closed (`FAIL_CLOSED_MARGIN_REJECTED`).
+$$\text{Max Risk USD} = (\text{SL Distance} \times S \times \text{Contract Value}) + \text{Taker Commission} \le \text{Effective Cap}$$
+- **Confluence-Weighted Risk Envelope:**
+  - **Marginal Setups (75.0 - 79.9 pts):** $60\%$ of cap ($\approx \$15.00$). Protects capital during noisy regimes while preserving opportunity flow.
+  - **Strong Setups (80.0 - 84.9 pts):** $80\%$ of cap ($\approx \$20.00$). Standard institutional sizing.
+  - **Elite Conviction ($\ge 85.0$ pts):** $100\%$ full envelope ($\$25.00$). Maximizes dollar extraction when win probability exceeds $>75\%$.
+- **Universal Margin Floor:** If free available margin buffer is $< 20.0\%$, the order fails closed (`FAIL_CLOSED_MARGIN_REJECTED`).
 
 ### 4.2 Minimum 1:2 Risk-Reward ($R:R \ge 2.0$) Fill-Anchored Invariant
 - Brackets are anchored not to theoretical signal price, but to the **actual filled execution price** ($P_{\text{fill}}$):
@@ -188,11 +192,18 @@ If free available margin buffer is $< 20.0\%$, the order fails closed (`FAIL_CLO
   $$P_{\text{TP1}} \ge P_{\text{fill}} \pm (2.0 \times R_0)$$
 - **Dynamic Target Extension:** If the structural target (e.g., VWAP) offers less than 2.0R, target extension automatically extends TP1 to the opposite Value Area (VAH/VAL) or dynamic liquidity strike level to guarantee $R:R \ge 2.0$.
 
-### 4.3 Monotonic 3-Tier Trailing Stop Ratchet
+### 4.3 Adaptive Bps-Bounded IOC Buffer
+To guarantee high-speed fill execution on fast breakouts without suffering adverse slippage:
+$$\text{buffer} = \min\left(\max(5 \times \text{tick\_size},\ P_{\text{ref}} \times 0.0005),\ 0.10 \times R_0,\ P_{\text{ref}} \times 0.0015\right)$$
+- On high-nominal assets (e.g. BTC at $80,000), buffer expands from $2.50 (0.31 bps) to $40.00 (5 bps), ensuring immediate fill without cancellation.
+- Strict 10% $R_0$ cap guarantees bracket geometry and $R:R \ge 2.0$ invariant are never impaired.
+
+### 4.4 Monotonic Dynamic Trailing Stop Ratchet
 As the trade progresses in profit:
 - **Tier 1 ($+1.0R_0$ profit):** SL moves to **Breakeven (+1 tick buffer)**. Capital risk eliminated ($R_{\text{open}} = 0$).
+- **Tier 1.5 ($+1.5R_0$ profit):** SL moves to **lock $+0.50R_0$ guaranteed profit**. Completely eliminates giving back open profits on $+1.9R_0$ pullbacks.
 - **Tier 2 ($+2.0R_0$ profit):** SL moves to **lock $+1.0R_0$ guaranteed profit**, and TP is widened to $+3.0R_0$.
-- **Tier 3 ($+3.0R_0$ profit):** SL moves to **lock $+2.0R_0$ guaranteed profit**.
+- **Tier 3 ($+3.0R_0$ profit):** SL moves to **lock $+2.0R_0$ guaranteed profit**, and TP is widened to $+4.0R_0$.
 
 ---
 
@@ -207,4 +218,4 @@ As the trade progresses in profit:
    - All 5 background daemons are actively cycling 31 instruments every 15 minutes.
    - Parquet dumps in `Database/Candle_Data/`, `Database/Live_Liquidations/`, `Database/Whale_Orders/`, and `Database/Hyperdash_Data/` are completely up-to-date and lock-free.
 3. **Automated Test Suite Status:**
-   - **86 / 86 automated regression & unit tests passing green** in 25.39s.
+   - **183 / 183 automated regression & unit tests passing green** in 32.82s.
