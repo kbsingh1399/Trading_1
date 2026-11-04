@@ -38,6 +38,7 @@ CONFIG_ENV_PATH = Path.home() / ".delta-exchange-mcp" / "config.env"
 BASE_URL = "https://api.india.delta.exchange"
 MAX_DELTA_CONCURRENT_POSITIONS = MAX_OPEN_POSITIONS  # Strict SSOT from risk_envelope (2)
 LIVE_DISPATCH_ENABLED = os.environ.get("DELTA_LIVE_DISPATCH", "false").lower() in ("true", "1", "yes")
+PAPER_TRADING_ENABLED = os.environ.get("DELTA_PAPER_TRADING", "true").lower() in ("true", "1", "yes")
 
 
 def set_live_dispatch(enabled: bool):
@@ -45,6 +46,13 @@ def set_live_dispatch(enabled: bool):
     global LIVE_DISPATCH_ENABLED
     LIVE_DISPATCH_ENABLED = enabled
     logger.info(f"Delta Live Dispatch state set to: {LIVE_DISPATCH_ENABLED}")
+
+
+def set_paper_trading(enabled: bool):
+    """Dynamically enables or disables shadow paper trading."""
+    global PAPER_TRADING_ENABLED
+    PAPER_TRADING_ENABLED = enabled
+    logger.info(f"Delta Paper Trading state set to: {PAPER_TRADING_ENABLED}")
 
 
 # Taker rate used when product metadata lacks an explicit fee schedule.
@@ -727,11 +735,21 @@ class DeltaExchangeTrader:
         and cancels orphaned ghost orders with cross-process mutual exclusion.
         """
         reports = []
+        if PAPER_TRADING_ENABLED:
+            try:
+                from Terminal.paper_trading_engine import paper_engine
+                paper_reports = paper_engine.audit_and_trail_positions(self)
+                reports.extend(paper_reports)
+            except Exception as e:
+                logger.warning(f"Error auditing paper positions: {e}")
+
         with FileMutex(str(DB_DIR / ".locks" / "delta_position_management.lock"), timeout=5.0) as mgmt_lock:
             if not mgmt_lock.acquired:
                 logger.info("Another process is actively auditing Delta positions. Yielding.")
                 return reports
-            return self._audit_and_trail_positions_guarded()
+            real_reports = self._audit_and_trail_positions_guarded()
+            reports.extend(real_reports)
+            return reports
 
     def _audit_and_trail_positions_guarded(self) -> List[Dict[str, Any]]:
         reports = []
@@ -1133,6 +1151,14 @@ class DeltaExchangeTrader:
         with attached bracket Stop-Loss and Take-Profit.
         """
         if not LIVE_DISPATCH_ENABLED:
+            if PAPER_TRADING_ENABLED:
+                logger.info("Delta Paper Trading active: routing order to Shadow Paper Trading Engine (Option 1)...")
+                try:
+                    from Terminal.paper_trading_engine import paper_engine
+                    return paper_engine.execute_paper_order(signal, self)
+                except Exception as e:
+                    logger.error(f"Paper trading execution failed: {e}")
+                    return {"ok": False, "status": "PAPER_EXECUTION_ERROR", "reason": str(e)}
             logger.warning("Delta live dispatch blocked: LIVE_DISPATCH_ENABLED is False (fail-closed operator safety gate).")
             return {"ok": False, "status": "BLOCKED_BY_SAFETY_GATE", "reason": "LIVE_DISPATCH_ENABLED_IS_FALSE"}
 
