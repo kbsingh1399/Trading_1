@@ -115,77 +115,83 @@ def fetch_telemetry(sig: Dict[str, Any]) -> Dict[str, Any]:
 
     return telemetry
 
-def wait_for_signal(timeout_sec: float = 600.0) -> Optional[Dict[str, Any]]:
-    """Polls footprint_signals.jsonl for newly appended signals."""
+def listen_for_high_confluence_signal(min_confluence: float = 70.0, timeout_sec: float = 600.0) -> Optional[Dict[str, Any]]:
+    """
+    High-speed tiered sentinel:
+    1. Reads newly arrived signals from footprint_signals.jsonl (Time 15m, Range, Volume).
+    2. Runs quantitative 5-pillar evaluation in Python (<20ms).
+    3. Discards sub-threshold noise without waking up the LLM agent.
+    4. Returns immediately when a signal meets or exceeds the confluence hurdle!
+    """
     if not FOOTPRINT_SIGNALS_JSONL.exists():
         print(f"Waiting for {FOOTPRINT_SIGNALS_JSONL} to exist...", file=sys.stderr)
         time.sleep(2)
 
     offset = load_offset()
     current_size = FOOTPRINT_SIGNALS_JSONL.stat().st_size if FOOTPRINT_SIGNALS_JSONL.exists() else 0
-    
-    # If file was truncated/recreated, reset offset
     if current_size < offset:
         offset = 0
 
     start_t = time.time()
+    evaluated_count = 0
     while time.time() - start_t < timeout_sec:
         if FOOTPRINT_SIGNALS_JSONL.exists():
             current_size = FOOTPRINT_SIGNALS_JSONL.stat().st_size
             if current_size > offset:
-                # Read new signals
                 with open(FOOTPRINT_SIGNALS_JSONL, "r", encoding="utf-8") as f:
                     f.seek(offset)
                     lines = f.readlines()
-                    new_offset = f.tell()
+                    offset = f.tell()
+                save_offset(offset)
 
-                save_offset(new_offset)
-                
-                # Parse the last valid signal from the newly arrived lines
-                for line in reversed(lines):
+                for line in lines:
                     line_str = line.strip()
-                    if line_str:
-                        try:
-                            sig = json.loads(line_str)
-                            return sig
-                        except Exception:
-                            continue
+                    if not line_str:
+                        continue
+                    try:
+                        sig = json.loads(line_str)
+                    except Exception:
+                        continue
+
+                    evaluated_count += 1
+                    t0 = time.time()
+                    telemetry = fetch_telemetry(sig)
+                    dt_ms = (time.time() - t0) * 1000.0
+
+                    eval_res = telemetry.get("confluence_evaluation", {})
+                    score = float(eval_res.get("confluence_score", 0.0))
+                    is_actionable = bool(eval_res.get("is_actionable", False))
+                    sym = telemetry.get("symbol", "N/A")
+                    direction = telemetry.get("direction", "N/A")
+                    b_type = telemetry.get("bar_type", "time")
+                    b_lbl = telemetry.get("bar_label", "15m")
+
+                    if score >= min_confluence or is_actionable:
+                        print(f"🎯 [HIGH CONFLUENCE TRIGGER] {sym} {direction} ({b_type} {b_lbl}) -> Score: {score:.1f}/100 >= {min_confluence}! Evaluated in {dt_ms:.1f}ms.")
+                        return telemetry
+                    else:
+                        print(f"⏳ [SUB-THRESHOLD NOISE] {sym} {direction} ({b_type} {b_lbl}) -> Score: {score:.1f}/100 < {min_confluence} | Discarded in {dt_ms:.1f}ms.")
+
         time.sleep(0.5)
     return None
 
 def main():
-    offset = load_offset()
-    # Check if there's already an unread signal waiting
-    current_size = FOOTPRINT_SIGNALS_JSONL.stat().st_size if FOOTPRINT_SIGNALS_JSONL.exists() else 0
+    print("=" * 80)
+    print("🛡️ [AGENT SIGNAL SENTINEL] Monitoring live footprint signals (Time 15m, Range, Volume)...")
+    print("Threshold: Confluence >= 70.0/100 or Actionable setup")
+    print("=" * 80)
     
-    sig = None
-    if current_size > offset:
-        with open(FOOTPRINT_SIGNALS_JSONL, "r", encoding="utf-8") as f:
-            f.seek(offset)
-            lines = f.readlines()
-            new_offset = f.tell()
-        save_offset(new_offset)
-        for line in reversed(lines):
-            line_str = line.strip()
-            if line_str:
-                try:
-                    sig = json.loads(line_str)
-                    break
-                except Exception:
-                    continue
-    
-    if not sig:
-        print("[AGENT_SENTINEL] Listening for next live market signal...", file=sys.stderr)
-        sig = wait_for_signal(timeout_sec=300.0)
+    telemetry = listen_for_high_confluence_signal(min_confluence=70.0, timeout_sec=600.0)
 
-    if not sig:
-        print("[AGENT_SENTINEL] No signal received within timeout window (300s). Exiting for cycle.")
+    if not telemetry:
+        print("[AGENT_SENTINEL] Timeout (600s) reached without confluence >= 70.0. Market is ranging/quiet.")
         sys.exit(0)
 
-    # Telemetry enrichment
-    telemetry = fetch_telemetry(sig)
+    sig = telemetry.get("signal", {})
+    eval_res = telemetry.get("confluence_evaluation", {})
+    ticker = telemetry.get("delta_ticker", {})
 
-    print("=" * 80)
+    print("\n" + "=" * 80)
     print("🚀 [AGENTIC SIGNAL WAKE-UP PACKET DELIVERED]")
     print("=" * 80)
     print(f"Asset:          {telemetry.get('symbol')} ({telemetry.get('direction')})")
@@ -195,11 +201,9 @@ def main():
     print(f"Headline:       {sig.get('title')} - {sig.get('description')}")
     print(f"Delta Listed:   {telemetry.get('is_listed_on_delta')} (Product: {telemetry.get('delta_product')})")
     
-    ticker = telemetry.get("delta_ticker", {})
     if ticker:
         print(f"Live Mark Px:   ${ticker.get('mark_price')} | Spread: {ticker.get('spread_bps')} bps (Gate <= 45 bps: {ticker.get('spread_gate_pass')})")
     
-    eval_res = telemetry.get("confluence_evaluation", {})
     if eval_res:
         print(f"Confluence:     {eval_res.get('confluence_score')}/100 | Hurdle: {eval_res.get('execution_hurdle')} | Actionable: {eval_res.get('is_actionable')}")
         print(f"Exec Model:     {eval_res.get('execution_model')}")
