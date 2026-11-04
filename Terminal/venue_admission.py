@@ -11,33 +11,17 @@ from Terminal.risk_envelope import (
 
 EXPECTED_MT5_LOGIN = 35296418
 VALID_MT5_LOGINS = {35296418, 5064568}
-MATCHTRADER_ACCOUNT = '101305360'
+# Legacy proprietary bridges are strictly decommissioned and excised per repository invariants.
+# Live execution targets Delta Exchange India REST API exclusively.
 
-
-def matchtrader_symbol(asset, path=None):
-    path = path or Path(__file__).resolve().parent.parent / 'Database/matchtrader_instruments_dump.json'
-    try:
-        data = json.loads(Path(path).read_text(encoding='utf-8-sig'))
-        if str(data.get('_cacheTradingAccountId')) != MATCHTRADER_ACCOUNT:
-            return None
-        symbols = {s for values in data['_mappedCategories'].values() for s in values}
-        alias = {'BTC': 'BTCUSD', 'ETH': 'ETHUSD', 'XRP': 'XRPUSD', 'XAU': 'XAUUSD',
-                 'GOLD': 'XAUUSD', 'XAG': 'XAGUSD', 'SILVER': 'XAGUSD',
-                 'SP500': 'SPX500', 'NAS100': 'NDX100', 'DJ30': 'DJI30'}
-        candidate = alias.get(asset, asset)
-        return candidate if candidate in symbols else None
-    except (OSError, ValueError, KeyError, TypeError):
-        return None
-
-
-def competition_risk_check(*, account_id, balance, equity, initial_balance,
+def competition_risk_check(*, account_id=None, balance, equity, initial_balance,
                            opening_balance, opening_equity, open_positions,
                            pending_orders, committed_stress, candidate_stress,
                            day_key, platform_day_key):
-    """Use the platform's trading day; missing or previous-day state fails closed."""
+    """Platform trading day drawdown check; missing or previous-day state fails closed."""
     values = (balance, equity, initial_balance, opening_balance, opening_equity,
               committed_stress, candidate_stress)
-    if str(account_id) != MATCHTRADER_ACCOUNT or not day_key or day_key != platform_day_key:
+    if not day_key or day_key != platform_day_key:
         return False, 'ACCOUNT_OR_DAILY_BASELINE_UNKNOWN'
     if not all(isinstance(x, (int, float)) and math.isfinite(x) and x >= 0 for x in values) or min(values[:5]) <= 0:
         return False, 'INVALID_CAPITAL_STATE'

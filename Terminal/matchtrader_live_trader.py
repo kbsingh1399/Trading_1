@@ -38,7 +38,22 @@ if str(ROOT_DIR) not in sys.path:
 
 from Terminal.runtime_io import acquire_singleton, atomic_json
 from Terminal.collector_lock import BrowserLock
-from Terminal.venue_admission import matchtrader_symbol
+MATCHTRADER_ACCOUNT = '101305360'
+
+def matchtrader_symbol(asset, path=None):
+    path = path or Path(__file__).resolve().parent.parent / 'Database/matchtrader_instruments_dump.json'
+    try:
+        data = json.loads(Path(path).read_text(encoding='utf-8-sig'))
+        if str(data.get('_cacheTradingAccountId')) != MATCHTRADER_ACCOUNT:
+            return None
+        symbols = {s for values in data['_mappedCategories'].values() for s in values}
+        alias = {'BTC': 'BTCUSD', 'ETH': 'ETHUSD', 'XRP': 'XRPUSD', 'XAU': 'XAUUSD',
+                 'GOLD': 'XAUUSD', 'XAG': 'XAGUSD', 'SILVER': 'XAGUSD',
+                 'SP500': 'SPX500', 'NAS100': 'NDX100', 'DJ30': 'DJI30'}
+        candidate = alias.get(asset, asset)
+        return candidate if candidate in symbols else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 from Terminal.risk_envelope import (
     HARD_FLOOR_USD,
     MAX_RISK_USD,

@@ -28,7 +28,8 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 DB_DIR = ROOT_DIR / "Database"
 LOCK_DIR = DB_DIR / ".locks"
 LOCK_DIR.mkdir(parents=True, exist_ok=True)
-BROWSER_LOCK_FILE = LOCK_DIR / "cdp_browser.lock"
+ENGINE_LOCK_FILE = LOCK_DIR / "engine_sync.lock"
+BROWSER_LOCK_FILE = ENGINE_LOCK_FILE  # Backwards compatibility alias
 WARP_CLI = Path(r"C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe")
 
 handler = logging.StreamHandler(sys.stdout)
@@ -195,13 +196,13 @@ def rotate_warp_ip(context: str = "Collector", reason: str = "SCHEDULED", force:
 # Global lock contention tracking (DeepSeek AUD-07)
 LOCK_CONTENTION_SKIPS = 0
 
-# Domain-Isolated Browser Lock Map:
+# Domain-Isolated Collector Engine Lock Map:
 # Eliminates starvation deadlocks between long sweeps (Footprint), fast sweeps (TV), and live order dispatch.
 COLLECTOR_LOCK_MAP = {
-    "TVLiquidationScraper": LOCK_DIR / "cdp_tv_scraper.lock",
-    "FootprintScraper": LOCK_DIR / "cdp_footprint.lock",
-    "WhaleScraper": LOCK_DIR / "cdp_whales.lock",
-    "LiquidationScraper": LOCK_DIR / "cdp_liquidation.lock",
+    "TVLiquidationScraper": LOCK_DIR / "api_tv_collector.lock",
+    "FootprintScraper": LOCK_DIR / "api_footprint.lock",
+    "WhaleScraper": LOCK_DIR / "api_whales.lock",
+    "LiquidationScraper": LOCK_DIR / "api_liquidation.lock",
     "DeltaLiveExecution": LOCK_DIR / "order_execution_inflight.lock",
 }
 

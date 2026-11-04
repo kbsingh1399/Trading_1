@@ -195,8 +195,8 @@ def format_confluence_card(alert: Dict[str, Any]) -> str:
         f"║  HTF Multi-TF:     {htf_str}".ljust(83) + "║",
         "╟" + "─" * 82 + "╢",
         f"║  DeepMind TimesFM: CVD Dir={tfm.get('cvd_direction', 'N/A')} ({tfm.get('cvd_confidence', 0.0):.0%}) | Price Dir={tfm.get('price_direction', 'N/A')}".ljust(83) + "║",
-        f"║  Microstructure:   Whale Bids={('UNTRACKED' if not order_flow.get('whale_tracked') else f'{order_flow.get("whale_imbalance_bid_ratio", 0.0):.1%}')} | Near Shorts={('UNTRACKED' if not order_flow.get('liq_tracked') else f'{order_flow.get("near_field_shorts_pct", 0.0):.1f}%')} | CVD={order_flow.get('cvd_slope', 'N/A')}".ljust(83) + "║",
-        f"║  Regime & Vector:  Regime={regime.get('regime', 'N/A')} (ATR: {regime.get('atr_pct', 0.0):.2f}%) | VM Analog Win-Rate={('N/A (Inconclusive)' if vm.get('verdict') == 'INCONCLUSIVE' else f'{vm.get("win_rate", 0.5):.0%}')}".ljust(83) + "║",
+        f"║  Microstructure:   Whale Bids={('UNTRACKED' if not order_flow.get('whale_tracked') else ('{:.1%}'.format(order_flow.get('whale_imbalance_bid_ratio', 0.0))))} | Near Shorts={('UNTRACKED' if not order_flow.get('liq_tracked') else ('{:.1f}%'.format(order_flow.get('near_field_shorts_pct', 0.0))))} | CVD={order_flow.get('cvd_slope', 'N/A')}".ljust(83) + "║",
+        f"║  Regime & Vector:  Regime={regime.get('regime', 'N/A')} (ATR: {regime.get('atr_pct', 0.0):.2f}%) | VM Analog Win-Rate={('N/A (Inconclusive)' if vm.get('verdict') == 'INCONCLUSIVE' else ('{:.0%}'.format(vm.get('win_rate', 0.5))))}".ljust(83) + "║",
         "╟" + "─" * 82 + "╢",
         f"║  Confluence Drivers:".ljust(83) + "║"
     ]
@@ -315,6 +315,23 @@ class FootprintSignalSentinel:
                         confluence_score=0.0,
                         action="DISCARDED_STALE",
                         sig_name=str(cluster[0].get("sig_name", "Stale")),
+                        direction=stale_dir
+                    )
+                    continue
+
+                # Strict Bar Type Invariant: 15m time candles only (t_ms % 900_000 == 0, bar_type == 'time')
+                bar_type = str(cluster[0].get("bar_type", "time")).lower()
+                if not is_mock and (bar_type != "time" or t_ms % 900_000 != 0):
+                    logger.info(f"🚫 [NON-TIME-BAR VETO] {sym} bar_type={bar_type}, t_ms={t_ms} not aligned to 15m time candle. Discarded.")
+                    sig_codes = [s.get("sig_code", "") for s in cluster]
+                    stale_dir = str(cluster[0].get("side", "N/A"))
+                    self.stack.ledger.mark_evaluated(
+                        symbol=sym,
+                        open_time_ms=open_ms,
+                        signal_id=generate_signal_id(sym, open_ms, stale_dir, sig_codes),
+                        confluence_score=0.0,
+                        action="DISCARDED_NON_TIME_BAR",
+                        sig_name=str(cluster[0].get("sig_name", "NonTimeBar")),
                         direction=stale_dir
                     )
                     continue

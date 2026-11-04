@@ -46,7 +46,9 @@ from Terminal.risk_envelope import MAX_OPEN_POSITIONS, MAX_RISK_USD
 logger = logging.getLogger("AssetSignalStack")
 logger.setLevel(logging.INFO)
 
-EVALUATED_LEDGER_FILE = SIGNALS_DIR / "evaluated_signals_ledger.json"
+EVALUATED_LEDGER_FILE_JSONL = SIGNALS_DIR / "evaluated_signals_ledger.jsonl"
+EVALUATED_LEDGER_FILE_JSON = SIGNALS_DIR / "evaluated_signals_ledger.json"
+EVALUATED_LEDGER_FILE = EVALUATED_LEDGER_FILE_JSONL
 PENDING_WICKS_FILE = SIGNALS_DIR / "pending_wick_signals.json"
 ACTIVE_STACK_PARQUET = SIGNALS_DIR / "active_signal_stack.parquet"
 CANDLE_M15_MS = 900_000
@@ -68,6 +70,7 @@ class EvaluatedSignalsLedger:
     """
     Durable ledger ensuring that once a candle signal has been evaluated,
     it is NEVER re-evaluated or re-alerted on subsequent sweeps.
+    Primary persistence is newline-delimited JSON (.jsonl) with .json sync.
     """
     def __init__(self, ledger_path: Path = EVALUATED_LEDGER_FILE):
         self.path = ledger_path
@@ -78,13 +81,32 @@ class EvaluatedSignalsLedger:
         return f"{symbol.upper()}:{open_time_ms}"
 
     def load(self):
-        if self.path.exists():
+        jsonl_path = self.path if str(self.path).endswith(".jsonl") else self.path.with_suffix(".jsonl")
+        json_path = self.path if str(self.path).endswith(".json") else self.path.with_suffix(".json")
+        loaded = False
+
+        if jsonl_path.exists():
             try:
-                data = json.loads(self.path.read_text(encoding="utf-8"))
+                recs = {}
+                with open(jsonl_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            rec = json.loads(line)
+                            k = self._key(rec.get("symbol", ""), rec.get("open_time_ms", 0))
+                            recs[k] = rec
+                self._evaluated = recs
+                loaded = True
+            except Exception as e:
+                logger.warning(f"Error loading evaluated signals jsonl ledger: {e}")
+
+        if not loaded and json_path.exists():
+            try:
+                data = json.loads(json_path.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
                     self._evaluated = data
             except Exception as e:
-                logger.warning(f"Error loading evaluated signals ledger: {e}")
+                logger.warning(f"Error loading evaluated signals json ledger: {e}")
                 self._evaluated = {}
 
     def is_evaluated(self, symbol: str, open_time_ms: int) -> bool:
@@ -122,10 +144,24 @@ class EvaluatedSignalsLedger:
             for k in keys_to_remove:
                 del self._evaluated[k]
 
+        jsonl_path = self.path if str(self.path).endswith(".jsonl") else self.path.with_suffix(".jsonl")
+        json_path = self.path if str(self.path).endswith(".json") else self.path.with_suffix(".json")
+
+        # Persist to .jsonl
         try:
-            atomic_json(self.path, self._evaluated)
+            tmp_jsonl = jsonl_path.with_suffix(".jsonl.tmp")
+            with open(tmp_jsonl, "w", encoding="utf-8") as f:
+                for rec in self._evaluated.values():
+                    f.write(json.dumps(rec) + "\n")
+            os.replace(str(tmp_jsonl), str(jsonl_path))
         except Exception as e:
-            logger.error(f"Error saving evaluated signals ledger: {e}")
+            logger.error(f"Error saving evaluated signals jsonl ledger: {e}")
+
+        # Also sync to .json
+        try:
+            atomic_json(json_path, self._evaluated)
+        except Exception as e:
+            logger.error(f"Error saving evaluated signals json ledger: {e}")
 
     def get_antecedent_history(self, symbol: str, current_open_ms: int, lookback_ms: int = 10_800_000) -> List[Dict[str, Any]]:
         """

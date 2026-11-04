@@ -78,7 +78,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from Terminal.runtime_io import writer_lock, atomic_parquet
 
-from Terminal.venue_admission import native_size
+# native_size excised per Delta Exchange India exclusivity
 
 from Terminal.olap_engine import OlapEngine
 
@@ -842,9 +842,15 @@ class RealtimeSignalEvaluator:
 
 
 
-        # Strict Bar Completion Invariant (AGENTS.md & Goldfish Finding 2)
+        # Strict Bar Completion and Time Bar Invariant (AGENTS.md Policy 3 & Arena Finding 6)
+        bar_type = str(sig.get("bar_type", "time")).lower()
+        if bar_type != "time":
+            validation_errors.append('NON_TIME_BAR_DISCARDED')
 
         sig_time_ms = int(sig.get("time_ms") or 0)
+        if sig_time_ms > 0 and (sig_time_ms % 900_000 != 0):
+            validation_errors.append('MISALIGNED_TIMESTAMP_DISCARDED')
+
         now_ms = time.time() * 1000
         is_bar_closed = (sig_time_ms > 0 and (sig_time_ms + 900_000) <= now_ms) or sig.get("bar_closed") is True
         if not is_bar_closed:
@@ -995,7 +1001,7 @@ class RealtimeSignalEvaluator:
                              and not validation_errors and not forecast_veto)
 
         deepseek_critic = {}
-        if is_actionable and self.dsh_bridge:
+        if is_actionable and getattr(self, "dsh_bridge", None):
             try:
                 candidate_summary = {
                     "symbol": sym,
@@ -1012,16 +1018,21 @@ class RealtimeSignalEvaluator:
                 }
                 dsh_audit = self.dsh_bridge.evaluate_signal_confluence(candidate_summary)
                 deepseek_critic = dsh_audit
-                if not dsh_audit.get("approved", True):
+                if not dsh_audit.get("approved", False):
                     veto_msg = f"DEEPSEEK_CRITIC_VETO: {dsh_audit.get('reason')}"
                     validation_errors.append(veto_msg)
                     reasons.append(f"Validation Veto: {veto_msg}")
                     is_actionable = False
             except Exception as dsh_err:
-                logger.warning(f"[{sym}] DeepSeek critic evaluation error: {dsh_err}")
+                logger.warning(f"[{sym}] DeepSeek critic evaluation error: {dsh_err}. Failing closed.")
+                veto_msg = f"DEEPSEEK_CRITIC_ERROR_FAIL_CLOSED: {dsh_err}"
+                validation_errors.append(veto_msg)
+                reasons.append(f"Validation Veto: {veto_msg}")
+                is_actionable = False
 
         delta_authorized = bool(is_actionable and delta_prod is not None)
-        mt5_authorized = bool(is_actionable and vol_status == 'OK')
+        # MetaTrader5 strictly decommissioned per AGENTS.md policy
+        mt5_authorized = False
 
 
 
@@ -1477,23 +1488,14 @@ class RealtimeSignalEvaluator:
 
     def _broker_sizing(symbol, direction, entry, sl, tp, cap):
 
-        import MetaTrader5 as mt5
-
-        owned = mt5.terminal_info() is None
-
-        if owned and not mt5.initialize(timeout=2000):
-
-            raise ValueError('MT5_UNAVAILABLE')
-
-        try:
-
-            return native_size(mt5, symbol, direction, entry, sl, tp, cap)
-
-        finally:
-
-            if owned:
-
-                mt5.shutdown()
+        # Pure offline discrete sizing (MetaTrader5 decommissioned per AGENTS.md policy)
+        risk_dist = abs(entry - sl) if entry and sl else 1.0
+        lots = max(1, int(cap / max(1e-6, risk_dist)))
+        return {
+            "lots": lots,
+            "risk_usd": round(lots * risk_dist, 2),
+            "cap_usd": cap
+        }
 
 
 

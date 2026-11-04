@@ -247,10 +247,11 @@ class DeltaExchangeTrader:
 
     def has_open_position(self, symbol: str) -> bool:
         """Checks if a position is currently open for the given symbol."""
-        clean = symbol.upper().replace(".PI", "").replace("USDT", "").replace("USD", "")
+        clean = symbol.upper().replace(".PI", "").replace("USDT", "").replace("USD", "").strip()
         for p in self.get_active_positions():
             p_sym = p.get("product_symbol", "")
-            if clean in p_sym:
+            p_clean = p_sym.upper().replace(".PI", "").replace("USDT", "").replace("USD", "").strip()
+            if clean == p_clean or p_sym.upper() == symbol.upper():
                 return True
         return False
 
@@ -381,8 +382,13 @@ class DeltaExchangeTrader:
                 break
             time.sleep(0.25)
 
-        if not tp_order:
-            return {"ok": False, "status": "NOT_FOUND", "reason": "TP_ORDER_NOT_LOCATED"}
+        if not tp_order or not sl_order:
+            missing = []
+            if not tp_order:
+                missing.append("TP")
+            if not sl_order:
+                missing.append("SL")
+            return {"ok": False, "status": "NOT_FOUND", "reason": f"BRACKET_ORDERS_NOT_LOCATED: missing {','.join(missing)}"}
 
         # Determine position direction from TP side (TP side is opposing)
         pos_direction = "BUY" if tp_order.get("side", "").lower() == "sell" else "SELL"
@@ -442,6 +448,15 @@ class DeltaExchangeTrader:
                 size=size,
                 stop_price=calibrated_tp
             )
+            is_success = bool(edit_res.get("success", False) or edit_res.get("result") or edit_res.get("id"))
+            if not is_success:
+                logger.error(f"[{symbol}] Failed to re-anchor TP to {calibrated_tp}: {edit_res}")
+                return {
+                    "ok": False,
+                    "status": "EDIT_FAILED",
+                    "reason": f"Failed to edit TP order: {edit_res.get('error', 'UNKNOWN')}",
+                    "edit_res": edit_res
+                }
             logger.info(f"[{symbol}] Re-anchored TP from {current_tp} to {calibrated_tp} (R:R calibrated from {current_rr:.2f}:1 to {min_rr:.1f}:1 relative to fill {fill_price})")
             return {
                 "ok": True,
@@ -452,6 +467,8 @@ class DeltaExchangeTrader:
                 "edit_res": edit_res
             }
         return {"ok": True, "status": "ALREADY_COMPLIANT", "current_rr": current_rr}
+
+    reanchor_bracket_upon_fill = reanchor_brackets_to_fill
 
     def audit_and_trail_positions(self) -> List[Dict[str, Any]]:
         """
@@ -642,6 +659,29 @@ class DeltaExchangeTrader:
             cur_sl_price = float(sl_order.get("stop_price", 0.0) or 0.0)
             cur_tp_price = float(tp_order.get("stop_price", 0.0) or 0.0) if tp_order else None
 
+            # Immediate Stop Penetration Emergency Close Invariant (Arena Finding 5)
+            # If mark price has already penetrated the existing SL, immediately emergency close
+            is_stop_penetrated = (
+                (direction == "BUY" and cur_sl_price > 0 and mark_price <= cur_sl_price) or
+                (direction == "SELL" and cur_sl_price > 0 and mark_price >= cur_sl_price)
+            )
+            if is_stop_penetrated:
+                logger.error(
+                    f"🚨 [{p_sym}] Immediate Stop Penetration detected! "
+                    f"Mark price {mark_price} has breached existing SL {cur_sl_price} ({direction}). "
+                    f"Executing immediate emergency market close to truncate loss."
+                )
+                close_res = self.close_position(p_sym)
+                reports.append({
+                    "symbol": p_sym,
+                    "action": "EMERGENCY_CLOSE_STOP_PENETRATED",
+                    "mark_price": mark_price,
+                    "sl_price": cur_sl_price,
+                    "direction": direction,
+                    "close_result": close_res
+                })
+                continue
+
             anchor = get_or_recover_anchor(
                 symbol=p_sym,
                 product_id=prod_id,
@@ -766,10 +806,11 @@ class DeltaExchangeTrader:
         """
         Market closes any active open position for the given symbol (reduce-only).
         """
-        clean = symbol.upper().replace(".PI", "").replace("USDT", "").replace("USD", "")
+        clean = symbol.upper().replace(".PI", "").replace("USDT", "").replace("USD", "").strip()
         for p in self.get_active_positions():
             p_sym = p.get("product_symbol", "")
-            if clean in p_sym:
+            p_clean = p_sym.upper().replace(".PI", "").replace("USDT", "").replace("USD", "").strip()
+            if clean == p_clean or p_sym.upper() == symbol.upper():
                 prod = self.resolve_product(p_sym)
                 if not prod:
                     continue
@@ -863,26 +904,54 @@ class DeltaExchangeTrader:
 
         # Capital & Margin Preservation Invariant: available free margin buffer >= 20% universal floor (Fail-Closed)
         wb = self.get_wallet_balances()
-        collateral_item = next(
-            (b for b in wb if b.get("asset_symbol") in ("USD", "USDT", "INR")),
-            {}
-        ) if isinstance(wb, list) else {}
-        total_balance = float(collateral_item.get("balance", 0.0) or 0.0)
-        collateral_asset = collateral_item.get("asset_symbol", "USD")
-        if total_balance <= 0 or not isinstance(wb, list):
-            logger.warning(f"Live dispatch blocked: unable to verify account balance from Delta API (balance=${total_balance:.4f} {collateral_asset}).")
+        if not isinstance(wb, list) or len(wb) == 0:
+            logger.warning("Live dispatch blocked: unable to verify account balance from Delta API (empty wallet balances).")
             return {
                 "ok": False,
                 "status": "REJECTED",
                 "reason": "UNABLE_TO_VERIFY_MARGIN_BUFFER: account balance unavailable or zero"
             }
-        margin_buffer_pct = (avail_margin / total_balance) * 100.0
-        if margin_buffer_pct < 20.0:
-            logger.warning(f"Live dispatch blocked: free margin buffer {margin_buffer_pct:.1f}% is below 20.0% minimum guardrail ({avail_margin:.4f} of {total_balance:.4f} {collateral_asset}).")
+
+        # Multi-collateral universal floor: Every active collateral currency (USD, USDT, INR) MUST maintain >= 20% buffer
+        collateral_found = False
+        total_balance_agg = 0.0
+        total_avail_agg = 0.0
+        for b in wb:
+            asset = b.get("asset_symbol")
+            if asset in ("USD", "USDT", "INR"):
+                bal = float(b.get("balance", 0.0) or 0.0)
+                avail = float(b.get("available_balance", 0.0) or 0.0)
+                if bal > 0:
+                    collateral_found = True
+                    total_balance_agg += bal
+                    total_avail_agg += avail
+                    buf_pct = (avail / bal) * 100.0
+                    if buf_pct < 20.0:
+                        logger.warning(
+                            f"Live dispatch blocked: {asset} free margin buffer {buf_pct:.1f}% is below 20.0% minimum guardrail "
+                            f"({avail:.4f} of {bal:.4f} {asset})."
+                        )
+                        return {
+                            "ok": False,
+                            "status": "REJECTED",
+                            "reason": f"INSUFFICIENT_MARGIN_BUFFER: {asset} free margin buffer {buf_pct:.1f}% < 20.0% floor ({avail:.4f} of {bal:.4f} {asset})"
+                        }
+
+        if not collateral_found or total_balance_agg <= 0:
+            logger.warning("Live dispatch blocked: zero collateral balance found in active wallets.")
             return {
                 "ok": False,
                 "status": "REJECTED",
-                "reason": f"INSUFFICIENT_MARGIN_BUFFER: {margin_buffer_pct:.1f}% < 20.0% floor (available={avail_margin:.4f} of {total_balance:.4f} {collateral_asset})"
+                "reason": "UNABLE_TO_VERIFY_MARGIN_BUFFER: zero collateral balance"
+            }
+
+        agg_buf_pct = (total_avail_agg / total_balance_agg) * 100.0
+        if agg_buf_pct < 20.0:
+            logger.warning(f"Live dispatch blocked: aggregate collateral free margin {agg_buf_pct:.1f}% < 20.0% floor.")
+            return {
+                "ok": False,
+                "status": "REJECTED",
+                "reason": f"INSUFFICIENT_MARGIN_BUFFER: aggregate collateral margin {agg_buf_pct:.1f}% < 20.0% floor"
             }
 
         # Strict Single Source of Truth for Max Open Positions (AGENTS.md Rule 3: Max 2 positions including in-flight)
@@ -972,14 +1041,33 @@ class DeltaExchangeTrader:
                 fill_price_raw = order_info.get("average_fill_price")
                 fill_price = float(fill_price_raw) if fill_price_raw and float(fill_price_raw) > 0 else entry
                 try:
-                    self.reanchor_brackets_to_fill(
+                    reanchor_res = self.reanchor_brackets_to_fill(
                         symbol=prod["symbol"],
                         fill_price=fill_price,
                         sl_price=sl,
                         min_rr=2.0
                     )
+                    if not reanchor_res.get("ok", False):
+                        logger.error(f"[{prod['symbol']}] Post-fill bracket re-anchoring failed: {reanchor_res}. Closing position immediately to prevent uncalibrated risk exposure.")
+                        self.close_position(prod["symbol"])
+                        return {
+                            "ok": False,
+                            "status": "REJECTED_FAILED_BRACKET_ANCHOR",
+                            "reason": f"BRACKET_ANCHOR_FAILURE: {reanchor_res.get('reason', 'UNKNOWN')}",
+                            "venue": "DeltaExchangeIndia",
+                            "symbol": prod["symbol"],
+                            "details": reanchor_res
+                        }
                 except Exception as e:
-                    logger.warning(f"[{prod['symbol']}] Post-fill bracket re-anchoring error: {e}")
+                    logger.error(f"[{prod['symbol']}] Post-fill bracket re-anchoring error: {e}. Closing position immediately.")
+                    self.close_position(prod["symbol"])
+                    return {
+                        "ok": False,
+                        "status": "REJECTED_FAILED_BRACKET_ANCHOR",
+                        "reason": f"BRACKET_ANCHOR_EXCEPTION: {str(e)}",
+                        "venue": "DeltaExchangeIndia",
+                        "symbol": prod["symbol"]
+                    }
 
             return {
                 "ok": ok,

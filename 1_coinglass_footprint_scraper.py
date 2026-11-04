@@ -403,7 +403,7 @@ def dump_signals(signals: List[dict], candles: Optional[List[dict]] = None) -> L
     for s in enriched:
         t_ms = int(s.get("time_ms") or 0)
         close_ms = t_ms + 900_000
-        if s.get("bar_type") != "time" or (t_ms % 900_000 != 0):
+        if s.get("bar_type", "time") != "time" or (t_ms % 900_000 != 0):
             continue
         if t_ms <= 0 or close_ms > now_ms or now_ms - close_ms > 1_800_000:  # Freshness invariant: immediate closed 15m candle only
             continue

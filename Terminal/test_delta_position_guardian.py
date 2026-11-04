@@ -344,3 +344,136 @@ def test_short_position_trailing_ratchet(trader):
                     rep = next(r for r in reports if r.get("action") == "RATCHET_SL")
                     assert rep["tier"] == "TIER_1_BREAKEVEN"
                     assert round(rep["new_sl"], 4) == 3.1320
+
+
+def test_exact_symbol_match_prevents_substring_collision(trader):
+    """
+    Verifies that 'AR' does NOT match 'NEARUSD' in has_open_position or close_position.
+    """
+    pos = {
+        "product_symbol": "NEARUSD",
+        "size": 10,
+        "entry_price": "5.50",
+        "mark_price": "5.60"
+    }
+    with patch.object(trader, "get_active_positions", return_value=[pos]):
+        # "AR" must return False because only NEAR is open
+        assert trader.has_open_position("AR") is False
+        assert trader.has_open_position("ARUSD") is False
+        # "NEAR" must return True
+        assert trader.has_open_position("NEAR") is True
+        assert trader.has_open_position("NEARUSD") is True
+
+        # Closing "AR" must fail closed with NOT_FOUND and not touch NEARUSD
+        with patch.object(trader, "request") as mock_req:
+            res = trader.close_position("AR")
+            assert res.get("status") == "NOT_FOUND"
+            mock_req.assert_not_called()
+
+
+def test_multi_collateral_margin_floor_rejection(trader):
+    """
+    Verifies that execute_delta_signal fails closed when available balance / balance < 20%.
+    """
+    signal = {
+        "symbol": "BTCUSD",
+        "direction": "BUY",
+        "confluence_score": 85.0,
+        "trade_parameters": {
+            "entry_price": 80000.0,
+            "stop_loss": 79000.0,
+            "take_profit_1": 82000.0
+        }
+    }
+    trader.products_cache["BTCUSD"] = {"id": 1, "symbol": "BTCUSD", "tick_size": "0.1", "contract_value": "0.001"}
+    # Mock wallet with 10% available buffer (< 20% universal floor)
+    depleted_wallets = [
+        {"asset_symbol": "USD", "balance": "100.0", "available_balance": "10.0"},
+        {"asset_symbol": "INR", "balance": "1000.0", "available_balance": "800.0"}
+    ]
+    with patch("Terminal.delta_exchange_live_trader.LIVE_DISPATCH_ENABLED", True), patch.object(trader, "get_wallet_balances", return_value=depleted_wallets):
+        with patch.object(trader, "get_active_positions", return_value=[]):
+            res = trader.execute_delta_signal(signal)
+            assert res.get("ok") is False
+            assert res.get("status") == "REJECTED"
+            assert "insufficient_margin_buffer" in res.get("reason", "").lower()
+
+
+def test_immediate_stop_penetration_triggers_emergency_close(trader):
+    """
+    Verifies that if mark price breaches existing SL, an immediate emergency close is issued.
+    """
+    pos = {
+        "product_symbol": "BTCUSD",
+        "size": 1,
+        "entry_price": "80000.0",
+        "mark_price": "78500.0"  # Breached below SL of 79000.0 for BUY
+    }
+    trader.products_cache["BTCUSD"] = {"id": 1, "symbol": "BTCUSD", "tick_size": "0.1", "contract_value": "0.001"}
+    sl_order = {
+        "id": 101,
+        "product_id": 1,
+        "stop_order_type": "stop_loss_order",
+        "side": "sell",
+        "size": 1,
+        "stop_price": "79000.0"
+    }
+    tp_order = {
+        "id": 102,
+        "product_id": 1,
+        "stop_order_type": "take_profit_order",
+        "side": "sell",
+        "size": 1,
+        "stop_price": "82000.0"
+    }
+
+    with patch.object(trader, "get_active_positions", return_value=[pos]):
+        with patch.object(trader, "get_open_orders", return_value=[sl_order, tp_order]):
+            with patch.object(trader, "request", return_value={"result": [{"symbol": "BTCUSD", "mark_price": "78500.0"}]}):
+                with patch.object(trader, "close_position", return_value={"ok": True, "result": {"id": 999}}) as mock_close:
+                    reports = trader.audit_and_trail_positions()
+                    assert len(reports) >= 1
+                    rep = next(r for r in reports if r.get("action") == "EMERGENCY_CLOSE_STOP_PENETRATED")
+                    assert rep["symbol"] == "BTCUSD"
+                    assert rep["mark_price"] == 78500.0
+                    mock_close.assert_called_once_with("BTCUSD")
+
+
+def test_failed_reanchor_triggers_emergency_close(trader):
+    """
+    Verifies that if post-fill bracket reanchoring fails, the position is immediately closed.
+    """
+    signal = {
+        "symbol": "BTCUSD",
+        "direction": "BUY",
+        "confluence_score": 85.0,
+        "trade_parameters": {
+            "entry_price": 80000.0,
+            "stop_loss": 79000.0,
+            "take_profit_1": 82000.0
+        }
+    }
+    healthy_wallets = [
+        {"asset_symbol": "USD", "balance": "100.0", "available_balance": "80.0"}
+    ]
+    trader.products_cache["BTCUSD"] = {"id": 1, "symbol": "BTCUSD", "tick_size": "0.1", "contract_value": "0.001"}
+
+    order_success_response = {
+        "success": True,
+        "result": {
+            "id": 12345,
+            "product_id": 1,
+            "average_fill_price": "80050.0"
+        }
+    }
+
+    with patch("Terminal.delta_exchange_live_trader.LIVE_DISPATCH_ENABLED", True), patch.object(trader, "get_wallet_balances", return_value=healthy_wallets):
+        with patch.object(trader, "get_active_positions", return_value=[]):
+            with patch.object(trader, "place_order", return_value=order_success_response):
+                # Re-anchor fails because bracket orders could not be located
+                with patch.object(trader, "reanchor_brackets_to_fill", return_value={"ok": False, "status": "NOT_FOUND", "reason": "TP_ORDER_NOT_LOCATED"}):
+                    with patch.object(trader, "close_position") as mock_close:
+                        res = trader.execute_delta_signal(signal)
+                        assert res.get("ok") is False
+                        assert res.get("status") == "REJECTED_FAILED_BRACKET_ANCHOR"
+                        mock_close.assert_called_once_with("BTCUSD")
