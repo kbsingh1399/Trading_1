@@ -22,7 +22,11 @@ import numpy as np
 
 import lancedb
 import pyarrow as pa
-from fastembed import TextEmbedding
+try:
+    from fastembed import TextEmbedding
+except (ImportError, Exception):
+    TextEmbedding = None
+from Terminal.trade_critic_engine import DeterministicOfflineEmbedder
 from Terminal.runtime_io import completed_candles
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -58,8 +62,15 @@ class VectorMemory:
 
     def _init_embedder(self):
         if VectorMemory._embedder is None:
-            logger.info(f"Initializing FastEmbed model: {MODEL_NAME}")
-            VectorMemory._embedder = TextEmbedding(model_name=MODEL_NAME)
+            if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("OFFLINE_MODE", "").lower() in ("true", "1") or TextEmbedding is None:
+                VectorMemory._embedder = DeterministicOfflineEmbedder()
+            else:
+                try:
+                    logger.info(f"Initializing FastEmbed model: {MODEL_NAME}")
+                    VectorMemory._embedder = TextEmbedding(model_name=MODEL_NAME)
+                except Exception as e:
+                    logger.warning(f"FastEmbed TextEmbedding unavailable ({e}). Falling back to deterministic offline embedder.")
+                    VectorMemory._embedder = DeterministicOfflineEmbedder()
         self.embedder = VectorMemory._embedder
 
     def _embed_text(self, text: str) -> List[float]:

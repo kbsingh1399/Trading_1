@@ -220,6 +220,8 @@ class TradeCriticEngine:
         if TradeCriticEngine._embedder is None:
             if hasattr(self, "_custom_embedder") and self._custom_embedder is not None:
                 TradeCriticEngine._embedder = self._custom_embedder
+            elif os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("OFFLINE_MODE", "").lower() in ("true", "1"):
+                TradeCriticEngine._embedder = DeterministicOfflineEmbedder()
             else:
                 try:
                     if TextEmbedding is None:
