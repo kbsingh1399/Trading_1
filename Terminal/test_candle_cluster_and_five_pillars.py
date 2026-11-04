@@ -386,6 +386,92 @@ class TestCandleClusterAndFivePillars(unittest.TestCase):
             self.assertNotIn(unq_park_key, sentinel.pending_signals)
             self.assertFalse(sentinel.stack.ledger.is_evaluated("ETHUSD", future_ms, bar_type="time"))
 
+    def test_forming_bar_drain_upon_close_and_degradation_unpark(self):
+        """Verifies parked forming bars drain upon close, do NOT re-park, and unpark on degradation."""
+        sentinel = FootprintSignalSentinel(from_current_end=True)
+        if hasattr(sentinel, 'stack') and hasattr(sentinel.stack, 'ledger'):
+            sentinel.stack.ledger._evaluated = {}
+        sentinel.pending_signals.clear()
+
+        # 1. Park an actionable signal with close_ms in the past (already closed)
+        past_ms = int(time.time() * 1000) - 1_800_000
+        open_ms = (past_ms // 900_000) * 900_000
+        close_ms = open_ms + 900_000
+        park_key = ("SOLUSD", open_ms, "time", "")
+        cluster = [{
+            "symbol": "SOLUSD",
+            "sig_name": "Absorption",
+            "side": "bullish",
+            "price": 150.0,
+            "time_ms": open_ms,
+            "bar_type": "time",
+            "is_mock": False,
+            "bar_closed": False
+        }]
+        sentinel.pending_signals[park_key] = {
+            "cluster": cluster,
+            "close_ms": close_ms,
+            "bar_type": "time",
+            "bar_variant": "",
+            "open_ms": open_ms,
+            "parked_at_ms": past_ms - 300_000,
+        }
+
+        # Mock evaluate_signal to return actionable closed result
+        sentinel.evaluator.evaluate_signal = MagicMock(return_value={
+            "symbol": "SOLUSD",
+            "direction": "BUY",
+            "confluence_score": 88.0,
+            "is_actionable": True,
+            "validation_errors": [],
+            "deepmind_timesfm": {"required_threshold": 75.0, "adverse_veto": False}
+        })
+
+        with patch("Terminal.delta_exchange_live_trader.delta_client.execute_delta_signal", return_value={"ok": True}):
+            with patch.dict(os.environ, {"MOCK_TEST_MODE": "0"}, clear=False):
+                asyncio.run(sentinel._drain_pending_forming_bars())
+
+                # The cluster should be drained and NOT re-parked
+                self.assertNotIn(park_key, sentinel.pending_signals)
+                # The candle should be recorded in the ledger
+                self.assertTrue(sentinel.stack.ledger.is_evaluated("SOLUSD", open_ms, bar_type="time"))
+
+        # 2. Test degradation unparking: parked signal that subsequently degrades is unparked
+        future_ms = int((int(time.time() * 1000) // 900_000) * 900_000)
+        park_key_deg = ("ADAUSD", future_ms, "time", "")
+        sentinel.pending_signals[park_key_deg] = {
+            "cluster": [],
+            "close_ms": future_ms + 900_000,
+            "bar_type": "time",
+            "bar_variant": "",
+            "open_ms": future_ms,
+            "parked_at_ms": future_ms,
+        }
+        # Later in-flight tick shows degraded score < 75.0
+        sentinel.evaluator.evaluate_signal = MagicMock(return_value={
+            "symbol": "ADAUSD",
+            "direction": "BUY",
+            "confluence_score": 55.0,
+            "is_actionable": False,
+            "validation_errors": ["BAR_NOT_CLOSED_INTRA_BAR_WICK"],
+            "deepmind_timesfm": {"required_threshold": 75.0, "adverse_veto": False}
+        })
+        degraded_signal = [{
+            "symbol": "ADAUSD",
+            "sig_name": "Absorption",
+            "side": "bullish",
+            "price": 0.50,
+            "time_ms": future_ms,
+            "bar_type": "time",
+            "is_mock": False,
+            "bar_closed": False
+        }]
+        with patch.dict(os.environ, {"MOCK_TEST_MODE": "0"}, clear=False):
+            asyncio.run(sentinel.evaluate_and_dispatch(degraded_signal))
+            # Must be popped from pending_signals
+            self.assertNotIn(park_key_deg, sentinel.pending_signals)
+
 
 if __name__ == "__main__":
     unittest.main()
+

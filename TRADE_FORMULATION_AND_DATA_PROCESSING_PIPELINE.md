@@ -168,7 +168,7 @@ The pipeline integrates Google DeepMind's TimesFM zero-shot foundation model for
 
 ### 3.3 Zero-Latency Query Engine (`Terminal/olap_engine.py`)
 
-All real-time signal evaluations query microstructural indicators through [`Terminal/olap_engine.py`](file:///c:/Users/SIGMA/Documents/_Trading_1/Terminal/olap_engine.py) (formerly `fast_olap_engine.py`).
+All real-time signal evaluations query microstructural indicators through [`Terminal/olap_engine.py`](file:///c:/Users/SIGMA/Documents/_Trading_1/Terminal/olap_engine.py).
 - **DuckDB / Polars In-Memory Architecture:** Avoids blocking synchronous network requests during signal dispatch. Background scrapers keep parquet tables hot on disk, and the OLAP engine serves sub-millisecond point-in-time snapshots for auction profiles, CVD trends, whale walls, and liquidation matrices.
 
 ---

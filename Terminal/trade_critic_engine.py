@@ -544,13 +544,14 @@ class TradeCriticEngine:
                     unmet_reason = "No active long liquidation cascade or dumping CVD flow"
 
             elif matched_mode == FAILURE_HTF_MOMENTUM_RUNOVER:
+                htf_clean = str(htf_bias or "NEUTRAL").upper()
                 is_opposing_4h = (
-                    (dir_clean in ("BUY", "LONG") and "BEAR" in htf_bias.upper()) or
-                    (dir_clean in ("SELL", "SHORT") and "BULL" in htf_bias.upper())
+                    (dir_clean in ("BUY", "LONG") and "BEAR" in htf_clean) or
+                    (dir_clean in ("SELL", "SHORT") and "BULL" in htf_clean)
                 )
                 if not is_opposing_4h:
                     is_causally_grounded = False
-                    unmet_reason = f"Trade direction ({dir_clean}) is not directly opposing 4H macro trend ({htf_bias})"
+                    unmet_reason = f"Trade direction ({dir_clean}) is not directly opposing 4H macro trend ({htf_clean})"
                 elif confluence_score >= 85.0:
                     is_causally_grounded = False
                     unmet_reason = f"Confluence score ({confluence_score:.1f}) meets or exceeds counter-trend mitigation hurdle (>= 85.0)"

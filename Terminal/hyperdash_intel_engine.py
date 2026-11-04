@@ -784,7 +784,7 @@ class HyperdashIntelEngine:
 
 
         features_map = {}
-        all_coins = set(global_mkts.keys()) | set(coin_smart.keys())
+        all_coins = set(global_mkts.keys()) | set(coin_smart.keys()) | set(coin_crowd.keys())
 
 
         for coin in all_coins:

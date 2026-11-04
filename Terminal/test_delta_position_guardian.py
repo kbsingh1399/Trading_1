@@ -144,11 +144,14 @@ def test_reanchor_fails_closed_when_min_lot_exceeds_cap(trader):
     mock_sl = {"id": 202, "product_id": 18288, "stop_order_type": "stop_loss_order", "side": "sell", "size": 1, "stop_price": "5.0"}
 
     with patch.object(trader, "get_open_orders", return_value=[mock_tp, mock_sl]):
-        with patch.object(trader, "close_position") as mock_close:
+        with patch.object(trader, "close_position") as mock_close, patch.object(trader, "cancel_order") as mock_cancel:
             res = trader.reanchor_brackets_to_fill(symbol, fill_price, initial_sl, min_rr=2.0)
             assert res["ok"] is False
             assert res["status"] == "SLIPPAGE_EXCEEDS_SINGLE_CONTRACT_CAP"
+            assert res.get("position_closed") is True
             mock_close.assert_called_once_with(symbol)
+            mock_cancel.assert_any_call(202, 18288)
+            mock_cancel.assert_any_call(201, 18288)
 
 
 def test_audit_and_trail_positions_progression(trader):
@@ -510,6 +513,47 @@ def test_failed_reanchor_triggers_emergency_close(trader):
                         assert res.get("ok") is False
                         assert res.get("status") == "REJECTED_FAILED_BRACKET_ANCHOR"
                         mock_close.assert_called_once_with("BTCUSD")
+
+
+def test_execute_delta_signal_handles_pre_closed_position_without_duplicate_close(trader):
+    """
+    Verifies that when reanchor_brackets_to_fill already closed the position (position_closed=True),
+    execute_delta_signal does not invoke close_position a second time and confirms flattening.
+    """
+    signal = {
+        "symbol": "BTCUSD",
+        "direction": "BUY",
+        "confluence_score": 85.0,
+        "trade_parameters": {
+            "entry_price": 80000.0,
+            "stop_loss": 79000.0,
+            "take_profit_1": 82000.0
+        }
+    }
+    healthy_wallets = [{"asset_symbol": "USD", "balance": "5000.0", "available_balance": "4800.0"}]
+    trader.products_cache["BTCUSD"] = {"id": 1, "symbol": "BTCUSD", "tick_size": "0.1", "contract_value": "0.001"}
+    order_success = {"success": True, "result": {"id": 12345, "product_id": 1, "average_fill_price": "80050.0"}}
+    live_ticker = {"success": True, "result": {"mark_price": "80000.0", "best_bid": "79990.0", "best_ask": "80010.0"}}
+
+    with patch("Terminal.delta_exchange_live_trader.LIVE_DISPATCH_ENABLED", True), \
+         patch.object(trader, "get_wallet_balances", return_value=healthy_wallets), \
+         patch.object(trader, "request", return_value=live_ticker), \
+         patch.object(trader, "get_active_positions", return_value=[]), \
+         patch.object(trader, "place_order", return_value=order_success):
+        # reanchor_brackets_to_fill already emergency-closed position on single contract cap breach
+        with patch.object(trader, "reanchor_brackets_to_fill", return_value={
+            "ok": False,
+            "status": "SLIPPAGE_EXCEEDS_SINGLE_CONTRACT_CAP",
+            "position_closed": True,
+            "close_res": {"ok": True, "result": {"id": 999}}
+        }):
+            with patch.object(trader, "close_position") as mock_close:
+                res = trader.execute_delta_signal(signal)
+                assert res.get("ok") is False
+                assert res.get("status") == "REJECTED_FAILED_BRACKET_ANCHOR"
+                assert res.get("flatten_confirmed") is True
+                # Redundant second close must NOT have been called
+                mock_close.assert_not_called()
 
 
 def test_sl_edit_failure_returns_false_and_does_not_claim_reanchored(trader):

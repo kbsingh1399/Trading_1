@@ -649,6 +649,18 @@ class DeltaExchangeTrader:
             allowed_size = math.floor(round(max_allowed_risk_usd / max(1e-9, loss_per_contract), 8))
             shed_contracts = size - allowed_size
 
+            def _cancel_brackets():
+                if sl_order and sl_order.get("id"):
+                    try:
+                        self.cancel_order(sl_order["id"], prod_id)
+                    except Exception as ce:
+                        logger.debug(f"[{symbol}] Failed to cancel SL bracket #{sl_order.get('id')}: {ce}")
+                if tp_order and tp_order.get("id"):
+                    try:
+                        self.cancel_order(tp_order["id"], prod_id)
+                    except Exception as ce:
+                        logger.debug(f"[{symbol}] Failed to cancel TP bracket #{tp_order.get('id')}: {ce}")
+
             if allowed_size >= 1 and shed_contracts > 0:
                 shed_side = "sell" if pos_direction == "BUY" else "buy"
                 shed_body = {
@@ -667,12 +679,15 @@ class DeltaExchangeTrader:
                 shed_ok = bool(shed_res.get("success", False) or shed_res.get("result") or shed_res.get("id"))
                 if not shed_ok:
                     logger.error(f"[{symbol}] Failed to shed {shed_contracts} excess contracts: {shed_res}. Closing position immediately (fail-closed).")
-                    self.close_position(symbol)
+                    close_res = self.close_position(symbol)
+                    _cancel_brackets()
                     return {
                         "ok": False,
                         "status": "SHED_EXCESS_CONTRACTS_FAILED",
                         "reason": f"Failed to shed excess contracts on slippage: {shed_res.get('error', 'UNKNOWN')}",
-                        "shed_res": shed_res
+                        "shed_res": shed_res,
+                        "position_closed": True,
+                        "close_res": close_res
                     }
                 size = int(allowed_size)
                 realized_risk_usd = actual_risk * size * contract_val
@@ -697,11 +712,14 @@ class DeltaExchangeTrader:
                     f"[{symbol}] SLIPPAGE EXCEEDS MIN LOT RISK: 1 contract risk ${loss_per_contract:.2f} > ${max_allowed_risk_usd:.2f} cap. "
                     f"Cannot shed to fit cap. Triggering close_position fail-closed."
                 )
-                self.close_position(symbol)
+                close_res = self.close_position(symbol)
+                _cancel_brackets()
                 return {
                     "ok": False,
                     "status": "SLIPPAGE_EXCEEDS_SINGLE_CONTRACT_CAP",
-                    "reason": f"1 contract risk ${loss_per_contract:.2f} exceeds ${max_allowed_risk_usd:.2f} cap; position closed fail-closed."
+                    "reason": f"1 contract risk ${loss_per_contract:.2f} exceeds ${max_allowed_risk_usd:.2f} cap; position closed fail-closed.",
+                    "position_closed": True,
+                    "close_res": close_res
                 }
 
         # PATCH D4: guarantee at least min_rr:1 with a WIDEN-ONLY ratchet.
@@ -1520,8 +1538,12 @@ class DeltaExchangeTrader:
                     )
                     if not reanchor_res.get("ok", False):
                         logger.error(f"[{prod['symbol']}] Post-fill bracket re-anchoring failed: {reanchor_res}. Closing position immediately to prevent uncalibrated risk exposure.")
-                        close_res = self.close_position(prod["symbol"])
-                        is_flattened = bool(close_res.get("success", False) or close_res.get("result") or close_res.get("id"))
+                        if reanchor_res.get("position_closed"):
+                            close_res = reanchor_res.get("close_res", {})
+                            is_flattened = True
+                        else:
+                            close_res = self.close_position(prod["symbol"])
+                            is_flattened = bool(close_res.get("success", False) or close_res.get("result") or close_res.get("id"))
                         if not is_flattened:
                             logger.critical(f"🚨 CRITICAL INCIDENT: EMERGENCY FLATTENING FAILED FOR {prod['symbol']}: {close_res}")
                         return {

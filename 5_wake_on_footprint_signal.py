@@ -361,10 +361,10 @@ class FootprintSignalSentinel:
                     itv_ms = 300_000 if str(cluster[0].get("bar_label", "")).startswith("5m") else 900_000
                     open_ms = canonical_bar_epoch(t_ms) if itv_ms == 900_000 else ((t_ms // 300_000) * 300_000)
                     close_ms = open_ms + itv_ms
-                    if any(s.get("bar_closed") is False for s in cluster):
-                        is_bar_closed = False
-                    elif any(s.get("bar_closed") is True for s in cluster):
+                    if any(s.get("bar_closed") is True for s in cluster):
                         is_bar_closed = True
+                    elif any(s.get("bar_closed") is False for s in cluster):
+                        is_bar_closed = bool(open_ms > 0 and close_ms <= now_ms)
                     else:
                         is_bar_closed = is_mock or (open_ms > 0 and close_ms <= now_ms)
 
@@ -540,7 +540,7 @@ class FootprintSignalSentinel:
 
                 # Phase 4: Actionable Trade Dispatch (Direct Delta Exchange India Auto-Wake Execution)
                 val_errors = eval_res.get("validation_errors", [])
-                remaining_vetoes = set(val_errors) - {"BAR_NOT_CLOSED_INTRA_BAR_WICK"}
+                remaining_vetoes = {v for v in val_errors if "BAR_NOT_CLOSED_INTRA_BAR_WICK" not in str(v)}
                 tfm_req = float(eval_res.get("deepmind_timesfm", {}).get("required_threshold", 75.0) or 75.0)
                 is_actionable_upon_close = (
                     score >= tfm_req
@@ -566,6 +566,7 @@ class FootprintSignalSentinel:
                         )
                         final_action = "PARKED_IN_FLIGHT_FORMING"
                     else:
+                        self.pending_signals.pop(park_key, None)
                         logger.info(
                             f"⏳ [IN-FLIGHT FORMING BAR] {sym} {bar_type}{('/' + bar_variant) if bar_variant else ''} "
                             f"unqualified cluster ignored (score {score:.1f}); leaving unburned for close evaluation."
@@ -781,6 +782,8 @@ class FootprintSignalSentinel:
                 continue
             logger.info(f"🔔 [BAR CLOSED] Re-evaluating parked cluster {park_key} for confirmed-close dispatch.")
             self.pending_signals.pop(park_key, None)
+            for s in cluster:
+                s["bar_closed"] = True
             try:
                 await self.evaluate_and_dispatch(cluster)
             except Exception as e:
