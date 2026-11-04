@@ -108,19 +108,47 @@ def test_reanchor_brackets_to_fill_min_rr(trader):
 def test_reanchor_caps_dollar_risk(trader):
     """
     Verifies that if slippage inflates dollar risk beyond $25.00,
-    the guardian ratchets SL inward towards fill to preserve MAX_RISK_USD.
+    the guardian does NOT inward-compress SL into noise, but sheds excess contracts
+    via reduce-only market order to fit MAX_RISK_USD.
     """
     symbol = "HBARUSD"
     fill_price = 0.07000
-    initial_sl = 0.06500  # 0.00500 risk distance
+    initial_sl = 0.06500  # 0.00500 risk distance -> $50 risk for 10000 contracts
     mock_tp = {"id": 201, "product_id": 18288, "stop_order_type": "take_profit_order", "side": "sell", "size": 10000, "stop_price": "0.08000"}
     mock_sl = {"id": 202, "product_id": 18288, "stop_order_type": "stop_loss_order", "side": "sell", "size": 10000, "stop_price": "0.06500"}
 
     with patch.object(trader, "get_open_orders", return_value=[mock_tp, mock_sl]):
-        with patch.object(trader, "edit_order", return_value={"success": True}) as mock_edit:
+        with patch.object(trader, "request", return_value={"success": True, "result": {"id": 777}}) as mock_req:
+            with patch.object(trader, "edit_order", return_value={"success": True}) as mock_edit:
+                res = trader.reanchor_brackets_to_fill(symbol, fill_price, initial_sl, min_rr=2.0)
+                assert res["ok"] is True
+                # SL remains uncompressed at 0.06500
+                assert round(res["calibrated_sl"], 5) == 0.06500
+                # Excess 5000 contracts shed to fit $25 cap (10000 -> 5000)
+                assert res["size"] == 5000
+                mock_req.assert_called_once()
+                _, req_kwargs = mock_req.call_args
+                assert req_kwargs["body"]["size"] == 5000
+                assert req_kwargs["body"]["reduce_only"] is True
+
+
+def test_reanchor_fails_closed_when_min_lot_exceeds_cap(trader):
+    """
+    Verifies that if slippage causes even 1 contract to exceed the $25 cap,
+    the guardian triggers close_position fail-closed rather than holding unhedged/fragile risk.
+    """
+    symbol = "HBARUSD"
+    fill_price = 35.0
+    initial_sl = 5.0  # 30.00 risk distance -> 1 contract = $30 risk > $25 cap
+    mock_tp = {"id": 201, "product_id": 18288, "stop_order_type": "take_profit_order", "side": "sell", "size": 1, "stop_price": "95.0"}
+    mock_sl = {"id": 202, "product_id": 18288, "stop_order_type": "stop_loss_order", "side": "sell", "size": 1, "stop_price": "5.0"}
+
+    with patch.object(trader, "get_open_orders", return_value=[mock_tp, mock_sl]):
+        with patch.object(trader, "close_position") as mock_close:
             res = trader.reanchor_brackets_to_fill(symbol, fill_price, initial_sl, min_rr=2.0)
-            assert res["ok"] is True
-            assert round(res["calibrated_sl"], 5) == 0.06750
+            assert res["ok"] is False
+            assert res["status"] == "SLIPPAGE_EXCEEDS_SINGLE_CONTRACT_CAP"
+            mock_close.assert_called_once_with(symbol)
 
 
 def test_audit_and_trail_positions_progression(trader):
@@ -454,7 +482,11 @@ def test_failed_reanchor_triggers_emergency_close(trader):
         }
     }
     healthy_wallets = [
-        {"asset_symbol": "USD", "balance": "100.0", "available_balance": "80.0"}
+        # PATCH P2 wallet upgraded to institutional scale: the dynamic survival
+        # budget (hard floor $4,775) now correctly REJECTS a $100 mock account.
+        # This test exercises the reanchor/emergency-close path, so the wallet
+        # must be an admissible one ($5,000 balance, $4,800 available).
+        {"asset_symbol": "USD", "balance": "5000.0", "available_balance": "4800.0"}
     ]
     trader.products_cache["BTCUSD"] = {"id": 1, "symbol": "BTCUSD", "tick_size": "0.1", "contract_value": "0.001"}
 
@@ -491,17 +523,18 @@ def test_sl_edit_failure_returns_false_and_does_not_claim_reanchored(trader):
         {"id": 102, "product_id": 1, "stop_order_type": "stop_loss_order", "side": "sell", "size": 10, "stop_price": "70000.0"},
     ]
     with patch.object(trader, "get_open_orders", return_value=open_orders):
-        # Mock edit_order on SL to fail
-        with patch.object(trader, "edit_order", return_value={"success": False, "error": "ORDER_LOCKED"}):
-            res = trader.reanchor_brackets_to_fill(
-                symbol="BTCUSD",
-                fill_price=80000.0,
-                sl_price=70000.0,
-                min_rr=2.0
-            )
-            assert res.get("ok") is False
-            assert res.get("status") == "SL_EDIT_FAILED"
-            assert res.get("status") != "REANCHORED"
+        with patch.object(trader, "request", return_value={"success": True, "result": {"id": 888}}):
+            # Mock edit_order on SL to fail
+            with patch.object(trader, "edit_order", return_value={"success": False, "error": "ORDER_LOCKED"}):
+                res = trader.reanchor_brackets_to_fill(
+                    symbol="BTCUSD",
+                    fill_price=80000.0,
+                    sl_price=70000.0,
+                    min_rr=2.0
+                )
+                assert res.get("ok") is False
+                assert res.get("status") == "SL_EDIT_FAILED"
+                assert res.get("status") != "REANCHORED"
 
 
 def test_fx_normalized_collateral_margin(trader):

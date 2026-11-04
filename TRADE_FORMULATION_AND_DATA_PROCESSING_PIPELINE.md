@@ -25,37 +25,38 @@ flowchart TD
         D1["Database/Candle_Data/<SYMBOL>.parquet (300-bar rolling)"]
         D2["Database/Whale_Orders/ (Whale wall imbalance & sweeps)"]
         D3["Database/Auction_Levels/ (VWAP, VAH/VAL, Fib-Prime)"]
+        D3_LIQ["Database/Liquidation_Data/ (CLLD, Heatmap, Key Levels, Magnet Zones)"]
         D4["Database/Live_Liquidations/ (Realtime flush spikes)"]
         D5["Database/Hyperdash_Data/hyperdash_features.parquet"]
         D6["Database/Signals/footprint_signals.jsonl"]
     end
 
-    subgraph Evaluation ["Quantitative Realtime Evaluator (realtime_signal_evaluator.py)"]
+    subgraph Evaluation ["Quantitative Realtime Evaluator (realtime_signal_evaluator.py & olap_engine.py)"]
         E1["5-Pillar Confluence Scoring Engine (0 - 100 pts)"]
         E2["Intra-Bar Candle Cluster Evaluator (+15 / +20 pts boost)"]
         E3["Squeeze Hazard Index (VETO >= 50.0)"]
-        E4["Dual-Model Selector (Model 1 Mean Reversion vs Model 2 Trend Pullback)"]
-        E5["TimesFM AI Flow Forecast & Vector Memory Analogs"]
+        E4["Tri-Model Selector (Model 0 Filtered Boundary, Model 1 Mean Reversion, Model 2 Trend Pullback)"]
+        E5["TimesFM AI Flow Forecast & Dynamic Confluence Hurdle (+0 to +10 pts)"]
     end
 
     subgraph Execution ["Institutional Execution & Risk Guardrails (Terminal/)"]
-        G1{"Confluence >= 75.0 & Bar Closed?"}
+        G1{"Confluence >= Threshold & Bar Closed?"}
         G2["solve_fee_aware_grid (Max $25 Risk, Universal Margin >= 20%)"]
-        G3["Delta Exchange India REST Client (Market Order Dispatch)"]
-        G4["Fill-Anchored Dynamic Bracket TP/SL (R:R >= 2.0:1 Guaranteed)"]
+        G3["Delta Exchange India REST Client (Aggressive Limit / IOC Dispatch)"]
+        G4["Fill-Anchored Dynamic Bracket TP/SL (R:R >= 2.0:1 Guaranteed, Zero Inward Compression)"]
         G5["3-Tier Trailing Stop Ratchet (+1.0R0 -> BE+1 tick, +2.0R0 -> +1.0R0, +3.0R0 -> +2.0R0)"]
     end
 
     P1 --> D1 & D6
     P2 --> D2
-    P3 --> D3
+    P3 --> D3_LIQ
     P4 --> D4
     HD --> D5
 
-    D1 & D2 & D3 & D4 & D5 & D6 --> E1
+    D1 & D2 & D3 & D3_LIQ & D4 & D5 & D6 --> E1
     E1 --> E2 --> E3 --> E4 --> E5 --> G1
-    G1 -- "Yes (>= 75.0)" --> G2 --> G3 --> G4 --> G5
-    G1 -- "No (< 75.0)" --> S_DROP["Log to evaluated_signals_ledger.jsonl (Suppressed)"]
+    G1 -- "Yes (>= Threshold)" --> G2 --> G3 --> G4 --> G5
+    G1 -- "No (< Threshold)" --> S_DROP["Log to evaluated_signals_ledger.jsonl (Suppressed)"]
 ```
 
 ---
@@ -116,15 +117,59 @@ $$\text{SweepScore} = \text{NotionalUSD} \cdot \exp\left(-\frac{|\text{dist\_pct
 
 ## 3. The 5 Quantitative Pillars: How Every Data Point Formulates a Trade
 
-When a footprint candle closes, all 5 pillars are simultaneously queried to construct the quantitative confluence score (0 to 100).
+When a footprint candle closes, all 5 pillars are simultaneously queried via the zero-latency OLAP layer ([`Terminal/olap_engine.py`](file:///c:/Users/SIGMA/Documents/_Trading_1/Terminal/olap_engine.py)) to construct the quantitative confluence score (0 to 100).
 
 | Pillar | Data Source | Key Metric Ingested | Quantitative Confluence Contribution |
 | :--- | :--- | :--- | :--- |
 | **Pillar 1: Footprint & Cluster Signals** | `1_coinglass_footprint_scraper.py` | Order flow delta, absorption, trapped shorts/longs, delta divergence. | **Base Confluence: +20 to +40 pts**.<br/>Dual Unanimous Cluster: **+15 pts**.<br/>Triple Unanimous Cluster: **+20 pts**.<br/>Opposing Discordant Conflict: **-20 pts & VETO**. |
-| **Pillar 2: Auction Profile & Value Areas** | `Database/Auction_Levels/*.parquet` | Day VWAP, Day VAH, Day VAL, Day POC, Fib-Prime EMAs [55, 89, 233]. | **Model 1 (Mean Reversion): +15 to +25 pts** (fading VAH/VAL back to VWAP).<br/>**Model 2 (Trend Pullback): +15 to +40 pts** (EMA 55-89 pocket bounce with HTF alignment). |
+| **Pillar 2: Auction Profile & Value Areas** | `Database/Auction_Levels/*.parquet` | Day VWAP, Day VAH, Day VAL, Day POC, Fib-Prime EMAs [55, 89, 233]. | **Model 0 (Filtered Boundary): +10 to +25 pts** (VWAP/Fib ribbon confirmation, HTF directional congruence, boundary defense).<br/>**Model 1 (Mean Reversion): +15 to +25 pts** (fading VAH/VAL back to VWAP).<br/>**Model 2 (Trend Pullback): +15 to +40 pts** (EMA 55-89 pocket bounce with HTF alignment). |
 | **Pillar 3: Live TV Liquidations & Reversals** | `4_coinglass_tv_scraper.py` & `Database/Live_Liquidations/` | 15m real-time liquidation spike (USD volume & exhaustion score). | **Capitulation Reversal: +15 to +20 pts** (e.g. $100k+ long flush bottom).<br/>**Adverse Blow-off Trap: -15 pts** (buying top of short squeeze). |
-| **Pillar 4: Liquidation Heatmap & Strike Magnets** | `3_coinglass_liquidation_levels.py` & `Database/Auction_Levels/` | Cumulative Liquidation Levels (CLLD), near-field shorts %, overhead/underlying strike magnets. | **Cascade Fuel: +5 to +10 pts** (near-field imbalance > 55%).<br/>**Strike Target Magnet: +10 pts** (overhead short liqs for BUY, underlying long liqs for SELL). |
-| **Pillar 5: Whales & Hyperdash Intel** | `2_coinglass_whales.py` & `Terminal/hyperdash_intel_engine.py` | Order book whale bid/ask imbalance, aggressive swept volume, Hyperdash Smart Money & Crowd Bias. | **Book Imbalance: +5 pts**.<br/>**Whale Sweeps: +5 pts**.<br/>**Hyperdash Smart Money: +10 pts**.<br/>**Hyperdash Squeeze Fuel: +10 pts**.<br/>**Whale Sweep Magnet: +8 pts**. |
+| **Pillar 4: Liquidation Heatmap & Strike Magnets** | `3_coinglass_liquidation_levels.py` & `Database/Liquidation_Data/` | Cumulative Liquidation Levels (CLLD), near-field shorts %, overhead/underlying strike magnets, key liquidation barriers. | **Whale Liquidation Targets: +8 pts**.<br/>**Near-Field Density Dominance: +5 pts** (0-1% or 1-2% band net delta).<br/>**Cascade Fuel: +5 to +10 pts** (near-field imbalance > 52%).<br/>**CLLD Turn: +5 pts** (bullish/bearish shift confluence).<br/>**Strike Target Magnet: +10 pts** (overhead short liqs for BUY, underlying long liqs for SELL).<br/>**Key Strike Barriers: +5 pts** (nearest short/long strike barrier). |
+| **Pillar 5: Whales & Hyperdash Intel** | `2_coinglass_whales.py` & `Terminal/hyperdash_intel_engine.py` | Order book whale bid/ask imbalance, aggressive swept volume, Hyperdash Smart Money & Crowd Bias. | **Whale Book Imbalance: +15 pts** (>= 55% bids for BUY, <= 45% for SELL).<br/>**Whale Sweeps: +5 pts**.<br/>**Hyperdash Smart Money: +10 pts** (penalty -15 pts if opposing).<br/>**Hyperdash Squeeze Fuel: +10 pts**.<br/>**Whale Sweep Magnet: +8 pts** (penalty -8 pts if within stop-out danger zone). |
+
+---
+
+### 3.1 The Three Execution Models (Model 0, Model 1, Model 2)
+
+Trade setup formulation evaluates market structure to select one of three dedicated execution models:
+
+1. **Model 2: Dynamic Fib-Prime Trend Pullback (Highest Priority)**
+   - **Trigger Condition:** Fired when candidate direction aligns with macro Higher Timeframe trend (1H & 4H both Bullish for BUY, or both Bearish for SELL).
+   - **Geometry:** Enters pullbacks toward the dynamic Fib-Prime ribbon pocket [EMA 55, 59] (+15 pts) and directional close defending EMA 59 (+10 pts).
+   - **Stop-Loss Anchor:** Stop loss is anchored behind the structural base **EMA 89**.
+   - **Take-Profit Target:** Anchored to nearest liquidation magnet zone $\ge 2.0R$ away, or projected at $+2.0R_0$ / $+3.0R_0$.
+
+2. **Model 1: Value Area Mean Reversion (Second Priority)**
+   - **Trigger Condition:** Fired when macro trend is neutral/divergent and market is in consolidation (`MEAN_REVERTING_RANGE`, `CHOP`, or `HIGH_VOLATILITY_COMPRESSION`), with price testing Value Area boundaries (VAL/VAH or VWAP $\pm 1\sigma$).
+   - **Geometry:** Fades oversold/overbought discount back toward Day VWAP (+15 to +25 pts).
+   - **Stop-Loss Anchor:** Stop loss is anchored behind the extreme Value Area boundary (VAL for long, VAH for short).
+   - **Take-Profit Target:** Day VWAP (extended to opposite boundary if VWAP distance $< 2.0R$).
+
+3. **Model 0: Filtered Boundary (Default Fallback)**
+   - **Trigger Condition:** Active when neither macro trend (Model 2) nor clear range boundary fade (Model 1) triggers.
+   - **Geometry:** Validates setups with Price vs Day VWAP confirmation (+10 pts), Fib-Prime ribbon alignment (+10 pts), HTF directional congruence (+15 pts), or HTF divergence penalty (-10 pts).
+   - **Stop-Loss Anchor:** Anchored to dynamic volatility envelope: $\text{SL Distance} = \text{clip}(1.5 \times \text{ATR}_{15m}, 0.5\%, 2.5\%)$.
+   - **Take-Profit Target:** Calibrated to at least $2.0 \times \text{SL Distance}$ or nearest overhead/underlying strike magnet.
+
+---
+
+### 3.2 Dynamic TimesFM AI Flow Forecasting & Uncertainty Hurdle Adjustment
+
+The pipeline integrates Google DeepMind's TimesFM zero-shot foundation model for time-series forecasting:
+- **Input:** Volume-normalized Cumulative Volume Delta ratio series ($r_t = \frac{\Delta \text{CVD}_t}{\text{Volume}_t} \in [-1.0, 1.0]$) over a context of up to 128 completed bars.
+- **Horizon & Quantiles:** Projects normalized order flow across a 24-step forecast horizon, outputting point predictions and quantile bands ($q_{10}, q_{50}, q_{90}$).
+- **Adverse-Flow Veto:** If the 80% forecast interval directly opposes candidate trade direction across the entire horizon (e.g. all $q_{90} < 0.0$ for BUY, or all $q_{10} > 0.0$ for SELL), the signal is vetoed (`adverse_veto = True`).
+- **Dynamic Confluence Hurdle Adjustment:** When predictive interval uncertainty widens ($\text{mean\_interval\_width} > 0.40$), an uncertainty penalty dynamically scales the required execution hurdle:
+  $$\text{Hurdle} = \text{clip}((\text{mean\_interval\_width} - 0.40) \times 15.0, 0.0, 10.0)$$
+  $$\text{Required Confluence Threshold} = 75.0 + \text{Hurdle}$$
+  This raises the qualification bar from 75.0 up to 85.0 in volatile, low-predictability regimes.
+
+---
+
+### 3.3 Zero-Latency Query Engine (`Terminal/olap_engine.py`)
+
+All real-time signal evaluations query microstructural indicators through [`Terminal/olap_engine.py`](file:///c:/Users/SIGMA/Documents/_Trading_1/Terminal/olap_engine.py) (formerly `fast_olap_engine.py`).
+- **DuckDB / Polars In-Memory Architecture:** Avoids blocking synchronous network requests during signal dispatch. Background scrapers keep parquet tables hot on disk, and the OLAP engine serves sub-millisecond point-in-time snapshots for auction profiles, CVD trends, whale walls, and liquidation matrices.
 
 ---
 

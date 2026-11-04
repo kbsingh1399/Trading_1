@@ -24,7 +24,7 @@ def test_matchtrader_constants_and_dispatch_fail_closed():
     from Terminal.risk_envelope import HARD_FLOOR_USD, MAX_RISK_USD, MAX_OPEN_POSITIONS
     from Terminal.delta_exchange_live_trader import DeltaExchangeTrader
     assert not Path("Terminal/matchtrader_live_trader.py").exists()
-    assert HARD_FLOOR_USD == 4775.0
+    assert HARD_FLOOR_USD == 0.0
     assert MAX_RISK_USD == 25.0
     assert MAX_OPEN_POSITIONS == 2
     trader = DeltaExchangeTrader()

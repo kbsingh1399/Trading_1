@@ -17,6 +17,7 @@ Provides zero-shot probabilistic quantile forecasting for order-flow increments:
 import os
 import sys
 import logging
+import threading
 from typing import Dict, Any, List, Optional, Tuple
 import numpy as np
 
@@ -39,6 +40,10 @@ class DeepMindTimesFMForecaster:
     _instance = None
     _model = None
     _compiled = False
+    # PATCH P4 (Phase 2): inference mutex — the async fan-out runs up to 4
+    # evaluations in parallel worker threads; torch module inference must be
+    # serialized to guarantee the autoregressive decoder state is never shared.
+    _forecast_lock = threading.Lock()
 
     def __new__(cls, *args, **kwargs):
         if cls._instance is None:
@@ -155,7 +160,9 @@ class DeepMindTimesFMForecaster:
         is_stationary_bounded = abs(r_mean) < 0.35 and r_std < 0.60
 
         try:
-            point_fc, quantile_fc = self._model.forecast(horizon=horizon, inputs=[r_t])
+            # PATCH P4: serialize torch inference across fan-out worker threads.
+            with DeepMindTimesFMForecaster._forecast_lock:
+                point_fc, quantile_fc = self._model.forecast(horizon=horizon, inputs=[r_t])
             point_fc, quantile_fc = np.asarray(point_fc), np.asarray(quantile_fc)
             if point_fc.shape != (1, horizon) or quantile_fc.ndim != 3 or quantile_fc.shape[:2] != (1, horizon):
                 raise ValueError('Malformed forecast shape')

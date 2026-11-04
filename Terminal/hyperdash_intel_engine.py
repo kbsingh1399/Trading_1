@@ -81,6 +81,19 @@ SWEEP_MAX_PER_SIDE = 3           # top clusters kept per side
 SWEEP_MIN_NOTIONAL_USD = 250_000.0   # cluster smaller than this is noise at top-10 depth
 TAKER_FEE_DEFAULT = 0.00075      # 0.075% default taker rate (used by sizing consumers)
 
+# ---------------------------------------------------------------------------
+# PATCH P2 (Phase 2): Underwater Entry Pockets & Inter-Refresh Whale Flow
+# ---------------------------------------------------------------------------
+POCKET_NEAR_PCT = 0.10            # pockets within 0.1% of mark are already defended/attacked
+POCKET_FAR_PCT = 8.0              # pockets further than this are unreachable trapped supply
+POCKET_CLUSTER_TOL_PCT = 0.50     # single-linkage clustering tolerance on entry prices (% of mark)
+POCKET_MAX_PER_SIDE = 3           # top pockets kept per side
+POCKET_MIN_NOTIONAL_USD = 250_000.0  # trapped notional below this is noise at top-10 depth
+WHALE_FLOW_SCALE_USD = 2_000_000.0  # signed notional delta saturating flow_score ~ 76 (tanh)
+WHALE_FLOW_MIN_MOVE_PCT = 0.10    # >=10% notional move per whale counts as accumulate/derisk
+WHALE_FLOW_MIN_GAP_SEC = 30.0    # <30s between snapshots: same-tick noise, invalid delta
+WHALE_FLOW_MAX_GAP_SEC = 900.0   # >15min between snapshots: stale baseline, low confidence
+
 
 Q_PARTICIPATION = """query GetPerpsMarketParticipation {
   analytics {
@@ -192,11 +205,23 @@ def compute_net_bias(long_usd: float, short_usd: float) -> float:
 
 
 def compute_net_bias_count(long_n: float, short_n: float) -> float:
-    """Signed skew percentage by TRADER COUNT (herding headcount)."""
-    gross = float(long_n) + float(short_n)
+    """
+    Signed skew percentage by TRADER COUNT (herding headcount).
+    Requires total headcount (long_n + short_n) >= 10 before applying full crowd bias,
+    or applies Laplace smoothing ((long_n + 1) / (long_n + short_n + 2)) to avoid wild
+    swings on small altcoin sample sizes.
+    """
+    l_n = float(long_n)
+    s_n = float(short_n)
+    gross = l_n + s_n
     if gross <= 0.0:
         return 0.0
-    return max(-100.0, min(100.0, 100.0 * (float(long_n) - float(short_n)) / gross))
+    if gross >= 10.0:
+        bias = 100.0 * (l_n - s_n) / gross
+    else:
+        # Laplace smoothing: (l_n + 1) / (gross + 2) -> signed bias in [-100, 100]
+        bias = 100.0 * (l_n - s_n) / (gross + 2.0)
+    return max(-100.0, min(100.0, bias))
 
 
 
@@ -334,6 +359,274 @@ def compute_sweep_targets(
     return kept
 
 
+def compute_underwater_entry_pockets(
+    positions: List[Dict[str, Any]],
+    mark_price: float,
+    near_pct: float = POCKET_NEAR_PCT,
+    far_pct: float = POCKET_FAR_PCT,
+    cluster_tol_pct: float = POCKET_CLUSTER_TOL_PCT,
+    max_per_side: int = POCKET_MAX_PER_SIDE,
+    min_pocket_notional_usd: float = POCKET_MIN_NOTIONAL_USD
+) -> List[Dict[str, Any]]:
+    """
+    PATCH P2 — UNDERWATER WHALE ENTRY POCKET ENGINE
+    ----------------------------------------------------------------------------
+    Clusters the ENTRY PRICES of whale positions currently in NEGATIVE unrealized
+    PnL ("underwater") into notional-weighted pockets of trapped capital:
+
+      - Underwater LONG whales  (entry ABOVE mark): their breakeven-exit zone is
+        OVERHEAD SUPPLY — a rally cap. As price recovers toward their entries,
+        trapped longs sell into strength.
+      - Underwater SHORT whales (entry BELOW mark): their breakeven-buyback zone
+        is a SUPPORT FLOOR — price finds demand there as trapped shorts close.
+
+    Each pocket returns:
+      pocket_type          'OVERHEAD_SUPPLY' (trapped longs above) or 'SUPPORT_FLOOR' (trapped shorts below)
+      side                 side of the trapped whales ('LONG'/'SHORT')
+      pocket_price         notional-weighted mean entry of the trapped cluster
+      dist_pct             signed distance from mark in percent
+      trapped_notional_usd total whale notional trapped in this pocket
+      trapped_musd        same in millions
+      whale_count          whales in the pocket
+      avg_underwater_pnl_pct  notional-weighted mean underwater depth (% of notional)
+      pocket_score         trapped_notional * exp(-|dist_pct| / 3.0) — proximity-decayed cap/floor strength
+
+    Pockets closer than near_pct are already resolved (price is at their entry);
+    pockets beyond far_pct are unreachable trapped supply for trade horizon.
+    """
+    if not positions or mark_price <= 0:
+        return []
+
+    by_side: Dict[str, List[Dict[str, Any]]] = {"LONG": [], "SHORT": []}
+    for p in positions:
+        try:
+            sz = float(p.get("size") or 0.0)
+            notion = abs(float(p.get("notional_usd") or 0.0))
+            entry = float(p.get("entry_price") or 0.0)
+            upnl = float(p.get("unrealized_pnl") or 0.0)
+        except (ValueError, TypeError):
+            continue
+        if sz == 0.0 or notion <= 0.0 or entry <= 0.0 or upnl >= 0.0:
+            continue   # only UNDERWATER positions
+        side = "LONG" if sz > 0 else "SHORT"
+        dist_pct = (entry - mark_price) / mark_price * 100.0  # signed, entry-relative
+        # Underwater LONG -> entry must sit ABOVE mark; underwater SHORT -> below.
+        if side == "LONG" and not (near_pct < dist_pct <= far_pct):
+            continue
+        if side == "SHORT" and not (-far_pct <= dist_pct < -near_pct):
+            continue
+        underwater_pnl_pct = (upnl / notion) * 100.0 if notion > 0 else 0.0
+        by_side[side].append({
+            "entry": entry, "dist_pct": dist_pct, "notional": notion,
+            "upnl_pct": underwater_pnl_pct,
+        })
+
+    pockets: List[Dict[str, Any]] = []
+    for side, items in by_side.items():
+        if not items:
+            continue
+        # Single-linkage clustering by entry-price proximity
+        items.sort(key=lambda x: x["entry"])
+        clusters: List[List[Dict[str, Any]]] = []
+        cur: List[Dict[str, Any]] = []
+        for it in items:
+            if cur and (abs(it["entry"] - cur[-1]["entry"]) / mark_price * 100.0) > cluster_tol_pct:
+                clusters.append(cur)
+                cur = [it]
+            else:
+                cur.append(it)
+        if cur:
+            clusters.append(cur)
+
+        for cl in clusters:
+            total_notional = sum(x["notional"] for x in cl)
+            if total_notional < min_pocket_notional_usd:
+                continue
+            wavg_entry = sum(x["entry"] * x["notional"] for x in cl) / max(total_notional, 1e-9)
+            wavg_upnl_pct = sum(x["upnl_pct"] * x["notional"] for x in cl) / max(total_notional, 1e-9)
+            dist_pct = (wavg_entry - mark_price) / mark_price * 100.0
+            pockets.append({
+                "pocket_type": "OVERHEAD_SUPPLY" if side == "LONG" else "SUPPORT_FLOOR",
+                "side": side,                                    # side of the TRAPPED whales
+                "pocket_price": round(wavg_entry, 8),
+                "dist_pct": round(dist_pct, 3),
+                "trapped_notional_usd": round(total_notional, 2),
+                "trapped_musd": round(total_notional / 1e6, 3),
+                "whale_count": len(cl),
+                "avg_underwater_pnl_pct": round(wavg_upnl_pct, 2),
+                "pocket_score": round(total_notional * math.exp(-abs(dist_pct) / 3.0), 2),
+            })
+
+    pockets.sort(key=lambda t: t["pocket_score"], reverse=True)
+    kept: List[Dict[str, Any]] = []
+    per_side: Dict[str, int] = {"LONG": 0, "SHORT": 0}
+    for t in pockets:
+        if per_side.get(t["side"], max_per_side) < max_per_side:
+            kept.append(t)
+            per_side[t["side"]] += 1
+    return kept
+
+
+def _empty_whale_flow() -> Dict[str, Any]:
+    """Canonical empty whale-flow feature block (no baseline snapshot yet)."""
+    return {
+        "data_valid": False,
+        "flow_state": "NO_BASELINE",
+        "flow_score": 0.0,
+        "flow_delta_usd": 0.0,
+        "window_sec": 0.0,
+        "flow_age_sec": None,
+        "accumulating": 0,
+        "derisking": 0,
+        "new_entries": 0,
+        "closed_exits": 0,
+        "flips": 0,
+        "low_confidence": False,
+        "whale_moves": [],
+    }
+
+
+def compute_whale_flow_delta(
+    prev_positions: List[Dict[str, Any]],
+    cur_positions: List[Dict[str, Any]],
+    prev_ts: float,
+    cur_ts: float,
+    flow_scale_usd: float = WHALE_FLOW_SCALE_USD,
+    min_move_pct: float = WHALE_FLOW_MIN_MOVE_PCT,
+    min_gap_sec: float = WHALE_FLOW_MIN_GAP_SEC,
+    max_gap_sec: float = WHALE_FLOW_MAX_GAP_SEC
+) -> Dict[str, Any]:
+    """
+    PATCH P2 — INTER-REFRESH WHALE DELTA TRACKING (90s-cache exploitation)
+    ----------------------------------------------------------------------------
+    Diffs two consecutive top-whale position-book snapshots for the same coin to
+    detect whether the largest wallets are actively ACCUMULATING, DERISKING, or
+    DUMPING into strength between refresh windows.
+
+    Per-whale classification (matched by address, label fallback):
+      NEW_ENTRY    whale appeared in the current snapshot
+      CLOSED_EXIT  whale vanished from the current snapshot
+      FLIPPED      whale reversed side between snapshots
+      ACCUMULATING |size| grew >= min_move_pct (same side)
+      DERISKING    |size| shrank >= min_move_pct (same side, not full exit)
+      HOLDING      sub-threshold churn
+
+    Aggregation:
+      flow_delta_usd  sum of signed notional moves: + = long capital added /
+                      short capital removed; - = short capital added / long
+                      capital removed. Wallet vanishing counts as full removal,
+                      wallet appearing as full addition.
+      flow_score      100 * tanh(flow_delta_usd / flow_scale_usd)  [-100, +100]
+      flow_state      ACCUMULATING (>= +25) / DISTRIBUTING (<= -25) /
+                      LEANING_LONG (+10..+25) / LEANING_SHORT (-25..-10) / STABLE
+
+    Gap guards: window < min_gap_sec -> invalid (same-tick noise);
+                window > max_gap_sec -> low_confidence (stale baseline).
+    """
+    flow = _empty_whale_flow()
+    flow["window_sec"] = round(max(0.0, float(cur_ts) - float(prev_ts)), 1)
+    flow["computed_at"] = float(cur_ts)
+
+    if not prev_positions and not cur_positions:
+        flow["flow_state"] = "NO_BOOK"
+        return flow
+    window = float(cur_ts) - float(prev_ts)
+    if window < min_gap_sec:
+        flow["flow_state"] = "INVALID_WINDOW_TOO_FAST"
+        return flow
+    if window > max_gap_sec:
+        flow["low_confidence"] = True
+
+    def _key(w: Dict[str, Any]) -> str:
+        addr = str(w.get("address") or "")
+        return addr if addr and not addr.startswith("...") else str(w.get("label") or addr or "")
+
+    def _signed_notional(w: Dict[str, Any]) -> float:
+        sz = float(w.get("size") or 0.0)
+        notion = abs(float(w.get("notional_usd") or 0.0))
+        return notion if sz > 0 else -notion
+
+    prev_map = {_key(w): w for w in prev_positions if isinstance(w, dict)}
+    cur_map = {_key(w): w for w in cur_positions if isinstance(w, dict)}
+
+    net_delta = 0.0
+    moves: List[Dict[str, Any]] = []
+    accum = derisk = new_n = closed_n = flips = 0
+
+    for key, prev_w in prev_map.items():
+        cur_w = cur_map.get(key)
+        prev_signed = _signed_notional(prev_w)
+        if cur_w is None:
+            # Whale vanished: full removal of its directional capital
+            net_delta -= prev_signed
+            closed_n += 1
+            moves.append({
+                "whale": str(prev_w.get("label") or key), "action": "CLOSED_EXIT",
+                "delta_usd": round(-prev_signed, 2),
+            })
+            continue
+        cur_signed = _signed_notional(cur_w)
+        delta = cur_signed - prev_signed
+        prev_sz = float(prev_w.get("size") or 0.0)
+        cur_sz = float(cur_w.get("size") or 0.0)
+        if (prev_sz > 0) != (cur_sz > 0) and cur_sz != 0:
+            flips += 1
+            net_delta += delta
+            moves.append({
+                "whale": str(cur_w.get("label") or key), "action": "FLIPPED",
+                "delta_usd": round(delta, 2),
+            })
+        elif abs(delta) >= min_move_pct * abs(prev_signed):
+            net_delta += delta
+            if delta > 0:
+                accum += 1
+                action = "ACCUMULATING"
+            else:
+                derisk += 1
+                action = "DERISKING"
+            moves.append({
+                "whale": str(cur_w.get("label") or key), "action": action,
+                "delta_usd": round(delta, 2),
+            })
+
+    for key, cur_w in cur_map.items():
+        if key not in prev_map:
+            cur_signed = _signed_notional(cur_w)
+            net_delta += cur_signed
+            new_n += 1
+            moves.append({
+                "whale": str(cur_w.get("label") or key), "action": "NEW_ENTRY",
+                "delta_usd": round(cur_signed, 2),
+            })
+
+    moves.sort(key=lambda m: abs(m.get("delta_usd") or 0.0), reverse=True)
+
+    flow_score = 100.0 * math.tanh(net_delta / max(flow_scale_usd, 1e-9))
+    if flow_score >= 25.0:
+        state = "ACCUMULATING"
+    elif flow_score <= -25.0:
+        state = "DISTRIBUTING"
+    elif flow_score >= 10.0:
+        state = "LEANING_LONG"
+    elif flow_score <= -10.0:
+        state = "LEANING_SHORT"
+    else:
+        state = "STABLE"
+
+    flow.update({
+        "data_valid": True,
+        "flow_state": state,
+        "flow_score": round(flow_score, 1),
+        "flow_delta_usd": round(net_delta, 2),
+        "accumulating": accum,
+        "derisking": derisk,
+        "new_entries": new_n,
+        "closed_exits": closed_n,
+        "flips": flips,
+        "whale_moves": moves[:10],
+    })
+    return flow
+
 
 
 class HyperdashIntelEngine:
@@ -346,22 +639,39 @@ class HyperdashIntelEngine:
         self._participation_cache: Dict[str, Any] = {}
         self._coin_features: Dict[str, Dict[str, Any]] = {}
         self._ticker_positions_cache: Dict[str, Tuple[float, List[Dict[str, Any]], bool]] = {}
-        self._refresh_lock = threading.Lock()
+        self._refresh_lock = threading.Lock()   # thread-safe: evaluate_signal fans out on worker threads
+        # PATCH P2: inter-refresh whale delta tracking state
+        self._whale_flow_snapshots: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
+        self._last_flow_features: Dict[str, Dict[str, Any]] = {}
+        # PATCH P4: per-coin fetch locks — prevent duplicate concurrent GraphQL
+        # fetches for the same coin when evaluations fan out in parallel.
+        self._whale_fetch_locks: Dict[str, threading.Lock] = {}
 
-        # Load disk cache if available
+        # Load cached features from parquet if available for 0.0ms warm start
         if FEATURES_CACHE_FILE.exists():
             try:
                 import pandas as pd
                 df = pd.read_parquet(FEATURES_CACHE_FILE)
                 for _, row in df.iterrows():
-                    d = row.to_dict()
-                    sigs = str(d.get('signals') or '').split(',')
-                    d['signals'] = [s.strip() for s in sigs if s.strip()]
-                    self._coin_features[d['coin']] = d
-                if not df.empty and 'updated_at' in df.columns:
-                    self._last_participation_ts = float(df['updated_at'].max())
+                    coin = str(row['coin'])
+                    sig_val = row.get('signals', '')
+                    sigs = sig_val.split(',') if isinstance(sig_val, str) and sig_val else []
+                    self._coin_features[coin] = {
+                        "coin": coin,
+                        "data_valid": bool(row.get('data_valid', True)),
+                        "smart_bias": float(row.get('smart_bias', 0.0)),
+                        "crowd_bias": float(row.get('crowd_bias', 0.0)),
+                        "net_divergence": float(row.get('net_divergence', 0.0)),
+                        "open_interest_usd": float(row.get('open_interest_usd', 0.0)),
+                        "intel_score": float(row.get('intel_score', 50.0)),
+                        "intel_direction": str(row.get('intel_direction', 'NEUTRAL')),
+                        "signals": sigs,
+                        "updated_at": float(row.get('updated_at', time.time()))
+                    }
+                self._last_participation_ts = max((f['updated_at'] for f in self._coin_features.values()), default=0.0)
+                logger.info(f"Loaded {len(self._coin_features)} warm features from {FEATURES_CACHE_FILE.name}")
             except Exception as e:
-                logger.debug(f'Could not load cached hyperdash features: {e}')   # thread-safe: evaluate_signal fans out on worker threads
+                logger.debug(f"Failed to load warm features from parquet: {e}")
 
 
     # ------------------------------------------------------------------ transport
@@ -584,6 +894,60 @@ class HyperdashIntelEngine:
             })
         return out, True
 
+    # ------------------------------------------------------------------ PATCH P2/P4
+    def _fetch_top_whales_cached(self, coin: str) -> Tuple[List[Dict[str, Any]], bool, Dict[str, Any]]:
+        """
+        Cache-coherent, per-coin lock-guarded whale book fetch.
+
+        PATCH P4: with bounded fan-out evaluation, several worker threads can
+        request the SAME coin within milliseconds. The per-coin lock +
+        double-checked cache guarantees exactly one upstream GraphQL fetch per
+        TTL window; the losers reuse the fresh cache.
+
+        PATCH P2: on every FRESH successful fetch, the current whale book is
+        diffed against the previous snapshot (90s cadence) to refresh the
+        inter-refresh whale-flow features for this coin.
+
+        Returns:
+            (whales, ok, flow_features)
+        """
+        now = time.time()
+        cached = self._ticker_positions_cache.get(coin)
+        if cached:
+            cached_ts, whale_data, was_ok = cached
+            ttl = WHALE_CACHE_TTL_SEC if was_ok else WHALE_NEG_CACHE_TTL_SEC
+            if (now - cached_ts) < ttl:
+                flow = dict(self._last_flow_features.get(coin) or _empty_whale_flow())
+                if flow.get("computed_at"):
+                    flow["flow_age_sec"] = round(max(0.0, now - float(flow["computed_at"])), 1)
+                return whale_data, was_ok, flow
+
+        lock = self._whale_fetch_locks.setdefault(coin, threading.Lock())
+        with lock:
+            # Double-check under lock: a parallel worker may have just refreshed.
+            cached = self._ticker_positions_cache.get(coin)
+            if cached:
+                cached_ts, whale_data, was_ok = cached
+                ttl = WHALE_CACHE_TTL_SEC if was_ok else WHALE_NEG_CACHE_TTL_SEC
+                if (time.time() - cached_ts) < ttl:
+                    flow = dict(self._last_flow_features.get(coin) or _empty_whale_flow())
+                    if flow.get("computed_at"):
+                        flow["flow_age_sec"] = round(max(0.0, time.time() - float(flow["computed_at"])), 1)
+                    return whale_data, was_ok, flow
+
+            whales, ok = self._fetch_top_whales(coin)
+            fetch_ts = time.time()
+            self._ticker_positions_cache[coin] = (fetch_ts, whales, ok)
+
+            flow = _empty_whale_flow()
+            if ok:
+                prev = self._whale_flow_snapshots.get(coin)
+                if prev and prev[1]:
+                    flow = compute_whale_flow_delta(prev[1], whales, prev[0], fetch_ts)
+                self._whale_flow_snapshots[coin] = (fetch_ts, whales)
+            self._last_flow_features[coin] = flow
+            return whales, ok, dict(flow)
+
 
     # ------------------------------------------------------------------ public API
     def get_asset_intel(self, symbol: str, mark_price_hint: Optional[float] = None) -> Dict[str, Any]:
@@ -616,6 +980,8 @@ class HyperdashIntelEngine:
                 "signals": [],
                 "top_whales": [],
                 "sweep_targets": [],
+                "entry_pockets": [],
+                "whale_flow": _empty_whale_flow(),
             }
 
 
@@ -631,21 +997,12 @@ class HyperdashIntelEngine:
 
 
         # Fetch live top whale position book for this coin (cached 90s, negative-cache 15s)
-        whale_cached = self._ticker_positions_cache.get(coin)
-        if whale_cached:
-            cached_ts, whale_data, was_ok = whale_cached
-            ttl = WHALE_CACHE_TTL_SEC if was_ok else WHALE_NEG_CACHE_TTL_SEC
-            if (now - cached_ts) < ttl:
-                whales = whale_data
-            else:
-                whales, ok = self._fetch_top_whales(coin)
-                self._ticker_positions_cache[coin] = (now, whales, ok)
-        else:
-            whales, ok = self._fetch_top_whales(coin)
-            self._ticker_positions_cache[coin] = (now, whales, ok)
+        # PATCH P2/P4: lock-guarded cache-coherent fetch + inter-refresh flow delta.
+        whales, _whale_ok, whale_flow = self._fetch_top_whales_cached(coin)
 
 
         res["top_whales"] = whales
+        res["whale_flow"] = whale_flow
 
 
         # WHALE LIQUIDATION SWEEP-TARGET ENGINE (new alpha)
@@ -653,10 +1010,20 @@ class HyperdashIntelEngine:
         if mark <= 0:
             mark = _estimate_mark_from_positions(whales)
         res["sweep_targets"] = compute_sweep_targets(whales, mark) if (whales and mark > 0) else []
+        # PATCH P2: UNDERWATER WHALE ENTRY POCKETS (overhead supply / support floors)
+        res["entry_pockets"] = compute_underwater_entry_pockets(whales, mark) if (whales and mark > 0) else []
         res["whale_mark_estimate"] = round(mark, 8) if mark > 0 else None
 
 
         return res
+
+
+    async def get_asset_intel_async(self, symbol: str, mark_price_hint: Optional[float] = None) -> Dict[str, Any]:
+        """Async wrapper — safe to await directly from an event loop (offloaded to a thread)."""
+        import asyncio
+        return await asyncio.to_thread(self.get_asset_intel, symbol, mark_price_hint)
+
+
 
 
     def start_background_updater(self, interval_sec: float = 60.0):
@@ -675,13 +1042,6 @@ class HyperdashIntelEngine:
 
         self._bg_thread = threading.Thread(target=_bg_loop, daemon=True, name="HyperdashBgUpdater")
         self._bg_thread.start()
-
-    async def get_asset_intel_async(self, symbol: str, mark_price_hint: Optional[float] = None) -> Dict[str, Any]:
-        """Async wrapper — safe to await directly from an event loop (offloaded to a thread)."""
-        import asyncio
-        return await asyncio.to_thread(self.get_asset_intel, symbol, mark_price_hint)
-
-
 
 
 # Global singleton engine
@@ -711,5 +1071,4 @@ if __name__ == "__main__":
         engine.refresh_participation(force=True)
         intel = engine.get_asset_intel(args.symbol)
         print(json.dumps(intel, indent=2, default=str))
-
 

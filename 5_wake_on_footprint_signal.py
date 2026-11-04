@@ -95,6 +95,12 @@ from Terminal.risk_envelope import (
     MAX_DAILY_LOSS_USD     # $250.00
 )
 
+# PATCH P4 (Phase 2): bounded fan-out — max simultaneous signal evaluations.
+# Burst signal volume across the 31 Delta India assets must never queue behind
+# the tick tape; 4 parallel workers saturate the OLAP / Hyperdash pipelines
+# without thrashing DuckDB or the TimesFM inference mutex.
+MAX_PARALLEL_EVALUATIONS = int(os.environ.get("WAKE_MAX_PARALLEL_EVALUATIONS", "4"))
+
 handler = logging.StreamHandler(sys.stdout)
 handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] [WAKE_SENTINEL] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
 logger = logging.getLogger("WakeOnFootprintSignal")
@@ -308,7 +314,22 @@ class FootprintSignalSentinel:
         return new_signals
 
     async def evaluate_and_dispatch(self, raw_signals: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Groups raw signals into candle clusters, evaluates each candle once, and auto-dispatches to Delta Exchange."""
+        """
+        Groups raw signals into candle clusters, evaluates each candle once, and
+        auto-dispatches to Delta Exchange India.
+
+        PATCH P4 (Phase 2) — Asynchronous Bounded Fan-Out:
+          Stage 1 (serial):   grouping + cheap invariants (ledger, venue,
+                              staleness, cluster formation). No I/O.
+          Stage 2 (parallel): up to MAX_PARALLEL_EVALUATIONS (default 4)
+                              concurrent evaluations via asyncio.to_thread, each
+                              pre-fetching Hyperdash intel with get_asset_intel_async
+                              so burst signal volume across the 31 Delta India
+                              assets never queues behind the real-time tick tape.
+          Stage 3 (serial):   confluence cards, stack updates, parking and Delta
+                              dispatch in the ORIGINAL deterministic cluster
+                              order (FileMutex-guarded).
+        """
         from collections import defaultdict
         evaluations = []
         now_ms = time.time() * 1000
@@ -327,6 +348,8 @@ class FootprintSignalSentinel:
             s_var = str(s.get("bar_label") or s.get("bar_variant") or "").strip() if s_bt != "time" else ""
             candle_clusters[(s_sym, s_bt, s_var, s_t)].append(s)
 
+        # ---------------- Stage 1: serial pre-filtering (no I/O) ----------------
+        work_items = []
         for (sym, bar_type, bar_variant, t_ms), cluster in candle_clusters.items():
             try:
                 is_mock = os.environ.get("MOCK_TEST_MODE") == "1" or "PYTEST_CURRENT_TEST" in os.environ or any(s.get("is_mock") for s in cluster)
@@ -338,7 +361,12 @@ class FootprintSignalSentinel:
                     itv_ms = 300_000 if str(cluster[0].get("bar_label", "")).startswith("5m") else 900_000
                     open_ms = canonical_bar_epoch(t_ms) if itv_ms == 900_000 else ((t_ms // 300_000) * 300_000)
                     close_ms = open_ms + itv_ms
-                    is_bar_closed = is_mock or (open_ms > 0 and close_ms <= now_ms) or any(s.get("bar_closed") for s in cluster)
+                    if any(s.get("bar_closed") is False for s in cluster):
+                        is_bar_closed = False
+                    elif any(s.get("bar_closed") is True for s in cluster):
+                        is_bar_closed = True
+                    else:
+                        is_bar_closed = is_mock or (open_ms > 0 and close_ms <= now_ms)
 
                 # Single Evaluation Invariant: Once reviewed, never evaluate again
                 if self.stack.ledger.is_evaluated(sym, open_ms, bar_type=bar_type, bar_variant=bar_variant):
@@ -406,9 +434,6 @@ class FootprintSignalSentinel:
                     raw = cluster[0]
                     raw["is_cluster"] = False
 
-                sig_name = raw.get("sig_name", raw.get("title", "Signal"))
-                side = raw.get("side", raw.get("sig_side", "N/A"))
-
                 # Antecedent Context Traversal: query preceding evaluated signals for multi-bar structural confirmation
                 raw["antecedent_signals"] = self.stack.ledger.get_antecedent_history(sym, open_ms)
 
@@ -416,12 +441,80 @@ class FootprintSignalSentinel:
                 desc = str(raw.get("description") or raw.get("desc") or "")
                 price_val = float(raw.get("price", 0.0)) if raw.get("price") else 0.0
                 c_ist = str(raw.get("candle_ist") or "")
+                side = raw.get("side", raw.get("sig_side", "N/A"))
+                sig_name = raw.get("sig_name", raw.get("title", "Signal"))
 
                 # Phase 1: Immediate Ingest Log
                 logger.info(f"⚡ [WAKE EVENT] {sym} {sig_name} ({side}) @ ${price_val:,.4f} | Candle: {c_ist} | Detail: '{desc}'")
 
-                # Phase 2: Multi-factor quantitative evaluation offloaded to thread
-                eval_res = await asyncio.to_thread(self.evaluator.evaluate_signal, raw)
+                work_items.append({
+                    "sym": sym,
+                    "bar_type": bar_type,
+                    "bar_variant": bar_variant,
+                    "open_ms": open_ms,
+                    "close_ms": close_ms,
+                    "t_ms": t_ms,
+                    "is_bar_closed": is_bar_closed,
+                    "cluster": cluster,
+                    "raw": raw,
+                    "is_mock": is_mock,
+                    "now_ms": now_ms,
+                    "sig_name": sig_name,
+                })
+            except Exception as e:
+                logger.error(f"Error pre-processing signal cluster for {sym}: {e}", exc_info=True)
+
+        if not work_items:
+            return evaluations
+
+        # ------- Stage 2: bounded parallel evaluation (max 4 concurrent workers) -------
+        sem = asyncio.Semaphore(max(1, MAX_PARALLEL_EVALUATIONS))
+
+        async def _eval_worker(item: Dict[str, Any]):
+            async with sem:
+                raw = item["raw"]
+                # PATCH P4: pre-fetch Hyperdash intel asynchronously — the
+                # highest-latency feature (GraphQL whale book, 90s cached) is
+                # fetched concurrently on the event loop instead of blocking the
+                # serial chain inside evaluate_signal. Mock/test signals skip
+                # the network entirely.
+                if not item["is_mock"]:
+                    try:
+                        from Terminal.hyperdash_intel_engine import hyperdash_engine
+                        if getattr(hyperdash_engine, "get_asset_intel_async", None) is not None:
+                            _hint = float(raw.get("price") or 0.0)
+                            raw["prefetched_hyperdash_intel"] = await hyperdash_engine.get_asset_intel_async(
+                                item["sym"], mark_price_hint=(_hint if _hint > 0 else None)
+                            )
+                    except Exception as exc:
+                        logger.debug(f"Hyperdash async pre-fetch failed for {item['sym']}: {exc}")
+                        raw.pop("prefetched_hyperdash_intel", None)
+                return await asyncio.to_thread(self.evaluator.evaluate_signal, raw)
+
+        results = await asyncio.gather(
+            *(_eval_worker(it) for it in work_items),
+            return_exceptions=True
+        )
+
+        # ------- Stage 3: serial dispatch in original deterministic cluster order -------
+        for item, eval_res in zip(work_items, results):
+            sym = item["sym"]
+            try:
+                if isinstance(eval_res, BaseException):
+                    raise eval_res
+                if not isinstance(eval_res, dict):
+                    raise TypeError(f"evaluate_signal returned non-dict result: {type(eval_res).__name__}")
+
+                bar_type = item["bar_type"]
+                bar_variant = item["bar_variant"]
+                open_ms = item["open_ms"]
+                close_ms = item["close_ms"]
+                is_bar_closed = item["is_bar_closed"]
+                cluster = item["cluster"]
+                raw = item["raw"]
+                now_ms = item["now_ms"]
+                sig_name = item["sig_name"]
+
                 evaluations.append(eval_res)
 
                 score = eval_res.get("confluence_score", 0.0)
@@ -446,14 +539,19 @@ class FootprintSignalSentinel:
                 self.stack.persist_stack()
 
                 # Phase 4: Actionable Trade Dispatch (Direct Delta Exchange India Auto-Wake Execution)
-                final_action = action_str
-                if is_actionable and direction in ("BUY", "SELL"):
-                    if not is_bar_closed:
-                        # PATCH W2: PARK the actionable forming-bar cluster instead of
-                        # consuming it. Previously it was ledger-marked here, so the
-                        # Single-Evaluation invariant suppressed it at bar close —
-                        # actionable intra-bar signals NEVER executed.
-                        park_key = (sym, open_ms, bar_type, bar_variant)
+                val_errors = eval_res.get("validation_errors", [])
+                remaining_vetoes = set(val_errors) - {"BAR_NOT_CLOSED_INTRA_BAR_WICK"}
+                tfm_req = float(eval_res.get("deepmind_timesfm", {}).get("required_threshold", 75.0) or 75.0)
+                is_actionable_upon_close = (
+                    score >= tfm_req
+                    and direction in ("BUY", "SELL")
+                    and not remaining_vetoes
+                    and not eval_res.get("deepmind_timesfm", {}).get("adverse_veto", False)
+                )
+
+                if not is_bar_closed:
+                    park_key = (sym, open_ms, bar_type, bar_variant)
+                    if is_actionable_upon_close:
                         self.pending_signals[park_key] = {
                             "cluster": cluster,
                             "close_ms": close_ms,
@@ -468,6 +566,13 @@ class FootprintSignalSentinel:
                         )
                         final_action = "PARKED_IN_FLIGHT_FORMING"
                     else:
+                        logger.info(
+                            f"⏳ [IN-FLIGHT FORMING BAR] {sym} {bar_type}{('/' + bar_variant) if bar_variant else ''} "
+                            f"unqualified cluster ignored (score {score:.1f}); leaving unburned for close evaluation."
+                        )
+                        final_action = "FORMING_BAR_UNQUALIFIED"
+                else:
+                    if is_actionable and direction in ("BUY", "SELL"):
                         if winsound is not None:
                             try:
                                 winsound.Beep(1200, 450)
@@ -496,13 +601,13 @@ class FootprintSignalSentinel:
                         else:
                             logger.warning(f"No Delta Exchange product resolved for {sym}; cannot execute.")
                             final_action = "REJECTED_UNLISTED_ON_DELTA"
-                else:
-                    logger.info(f"[EVALUATOR] {sym} {direction} Confluence Score: {score:.1f}/100 -> Filtered (Required >= 75.0)")
-                    final_action = "FILTERED_SUB_THRESHOLD"
+                    else:
+                        logger.info(f"[EVALUATOR] {sym} {direction} Confluence Score: {score:.1f}/100 -> Filtered (Required >= 75.0)")
+                        final_action = "FILTERED_SUB_THRESHOLD"
 
                 # Record in Evaluated Ledger ONLY after dispatch outcome is finalized
-                # (and skip marking parked forming-bars so they can be re-evaluated at close)
-                if final_action != "PARKED_IN_FLIGHT_FORMING":
+                # (and skip marking forming-bars so they can be re-evaluated at close)
+                if is_bar_closed and final_action not in ("PARKED_IN_FLIGHT_FORMING", "FORMING_BAR_UNQUALIFIED"):
                     self.stack.ledger.mark_evaluated(
                         symbol=sym,
                         open_time_ms=open_ms,

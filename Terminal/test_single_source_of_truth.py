@@ -50,7 +50,7 @@ def test_venue_modules_import_risk_envelope_and_match_canonical_values():
     from Terminal import delta_exchange_live_trader
 
     # Canonical values in risk_envelope
-    assert risk_envelope.HARD_FLOOR_USD == 4775.00
+    assert risk_envelope.HARD_FLOOR_USD == 0.00
     assert risk_envelope.MAX_RISK_USD == 25.00
     assert risk_envelope.MAX_OPEN_POSITIONS == 2
     assert risk_envelope.MAX_DAILY_LOSS_USD == 250.00

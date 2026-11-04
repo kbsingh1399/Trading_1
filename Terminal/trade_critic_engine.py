@@ -474,7 +474,7 @@ class TradeCriticEngine:
         try:
             query_vec = self.embed_text(narrative)
             # Search top 2 most similar historical failure modes
-            df_matches = self.table.search(query_vec).metric('cosine').limit(2).to_pandas()
+            df_matches = self.table.search(query_vec).metric('cosine').limit(5).to_pandas()
 
             if df_matches.empty:
                 return {
@@ -542,6 +542,39 @@ class TradeCriticEngine:
                 if liq_regime not in ("BEARISH_REVERSAL", "LONG_LIQ_DOMINANT") and cvd_slope >= 0.0:
                     is_causally_grounded = False
                     unmet_reason = "No active long liquidation cascade or dumping CVD flow"
+
+            elif matched_mode == FAILURE_HTF_MOMENTUM_RUNOVER:
+                is_opposing_4h = (
+                    (dir_clean in ("BUY", "LONG") and "BEAR" in htf_bias.upper()) or
+                    (dir_clean in ("SELL", "SHORT") and "BULL" in htf_bias.upper())
+                )
+                if not is_opposing_4h:
+                    is_causally_grounded = False
+                    unmet_reason = f"Trade direction ({dir_clean}) is not directly opposing 4H macro trend ({htf_bias})"
+                elif confluence_score >= 85.0:
+                    is_causally_grounded = False
+                    unmet_reason = f"Confluence score ({confluence_score:.1f}) meets or exceeds counter-trend mitigation hurdle (>= 85.0)"
+
+            elif matched_mode == FAILURE_PREMATURE_REVERSAL:
+                # Reversal failure occurs when fading a trend without order flow absorption / exhaustion
+                if cvd_slope != 0.0:
+                    is_aligned_reversal = (
+                        (dir_clean in ("BUY", "LONG") and cvd_slope > 0.0) or
+                        (dir_clean in ("SELL", "SHORT") and cvd_slope < 0.0)
+                    )
+                    if is_aligned_reversal:
+                        is_causally_grounded = False
+                        unmet_reason = f"CVD slope ({cvd_slope:+.2f}) confirms active volume absorption in trade direction"
+                if confluence_score >= 85.0:
+                    is_causally_grounded = False
+                    unmet_reason = f"High confluence score ({confluence_score:.1f} >= 85.0) confirms multi-pillar absorption"
+
+            # Universal High Confluence Protection (Critic 3 Blocker Fix):
+            # If candidate confluence score is >= 85.0 and the matched failure mode is not a physical hard veto,
+            # semantic similarity alone from vector search must not trigger a false-positive HARD_VETO.
+            if confluence_score >= 85.0 and is_causally_grounded and max_sim < 0.95:
+                is_causally_grounded = False
+                unmet_reason = f"High confluence score ({confluence_score:.1f} >= 85.0) provides multi-pillar validation overriding semantic similarity ({max_sim*100:.1f}%)"
 
             # Decision Gates
             if not is_causally_grounded:

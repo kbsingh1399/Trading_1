@@ -11,7 +11,7 @@ import json
 import math
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Set
+from typing import Dict, Any, Optional, List, Set, Tuple
 import requests
 
 from Terminal.risk_envelope import (
@@ -461,7 +461,8 @@ class DeltaExchangeTrader:
         limit_price: Optional[float] = None,
         stop_loss_price: Optional[float] = None,
         take_profit_price: Optional[float] = None,
-        leverage: int = 10
+        leverage: int = 10,
+        time_in_force: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Places a market or limit order with optional bracket Stop-Loss and Take-Profit.
@@ -491,6 +492,9 @@ class DeltaExchangeTrader:
 
         if order_type == "limit_order" and limit_price is not None:
             body["limit_price"] = self.quantize_price(limit_price, prod_id)
+
+        if time_in_force:
+            body["time_in_force"] = time_in_force
 
         if stop_loss_price is not None:
             body["bracket_stop_loss_price"] = self.quantize_price(stop_loss_price, prod_id)
@@ -639,34 +643,66 @@ class DeltaExchangeTrader:
         calibrated_sl = sl_price
         tick_size = float(prod.get("tick_size", 0.01) or 0.01)
         if realized_risk_usd > max_allowed_risk_usd:
-            # Capping SL inward towards fill to preserve MAX_RISK_USD
-            # Directional inward floor so realized risk <= max_allowed_risk_usd strictly
-            max_loss_ticks = math.floor(max_allowed_risk_usd / max(1e-9, (size * contract_val * tick_size)))
-            capped_dist = max_loss_ticks * tick_size
-            calibrated_sl = fill_price - (dir_mult * capped_dist)
-            actual_risk = capped_dist
-            if sl_order:
-                sl_edit_res = self.edit_order(
-                    order_id=sl_order["id"],
-                    product_id=prod_id,
-                    size=size,
-                    stop_price=calibrated_sl
+            # DO NOT tighten stop loss distance closer to entry (never compress SL into market noise).
+            # Instead, shed excess contracts via a reduce-only market order to fit the $25 cap.
+            loss_per_contract = actual_risk * contract_val
+            allowed_size = math.floor(round(max_allowed_risk_usd / max(1e-9, loss_per_contract), 8))
+            shed_contracts = size - allowed_size
+
+            if allowed_size >= 1 and shed_contracts > 0:
+                shed_side = "sell" if pos_direction == "BUY" else "buy"
+                shed_body = {
+                    "product_id": prod_id,
+                    "size": int(shed_contracts),
+                    "side": shed_side,
+                    "order_type": "market_order",
+                    "reduce_only": True
+                }
+                logger.warning(
+                    f"[{symbol}] SLIPPAGE RISK BREACH: fill {fill_price} vs planned SL {sl_price} inflated "
+                    f"risk to ${realized_risk_usd:.2f} > ${max_allowed_risk_usd:.2f} cap. Preserving structural SL distance "
+                    f"({actual_risk:.6f}) and shedding {shed_contracts} excess contracts (size {size} -> {allowed_size})."
                 )
-                sl_success = bool(sl_edit_res.get("success", False) or sl_edit_res.get("result") or sl_edit_res.get("id"))
-                if not sl_success:
-                    logger.error(f"[{symbol}] Failed to calibrate SL to {calibrated_sl}: {sl_edit_res}")
+                shed_res = self.request("POST", "/v2/orders", body=shed_body)
+                shed_ok = bool(shed_res.get("success", False) or shed_res.get("result") or shed_res.get("id"))
+                if not shed_ok:
+                    logger.error(f"[{symbol}] Failed to shed {shed_contracts} excess contracts: {shed_res}. Closing position immediately (fail-closed).")
+                    self.close_position(symbol)
                     return {
                         "ok": False,
-                        "status": "SL_EDIT_FAILED",
-                        "reason": f"Failed to edit SL order: {sl_edit_res.get('error', 'UNKNOWN')}",
-                        "edit_res": sl_edit_res
+                        "status": "SHED_EXCESS_CONTRACTS_FAILED",
+                        "reason": f"Failed to shed excess contracts on slippage: {shed_res.get('error', 'UNKNOWN')}",
+                        "shed_res": shed_res
                     }
-                logger.warning(
-                    f"[{symbol}] SLIPPAGE BREACH: fill {fill_price} vs planned SL {sl_price} inflated "
-                    f"risk to ${realized_risk_usd:.2f} > ${max_allowed_risk_usd:.2f} cap. SL tightened "
-                    f"inward to {calibrated_sl} (size={size}, contract_val={contract_val}). "
-                    f"Track opening slippage per product and tighten the D6 drift/spread gates if recurrent."
+                size = int(allowed_size)
+                realized_risk_usd = actual_risk * size * contract_val
+                if sl_order:
+                    sl_edit_res = self.edit_order(
+                        order_id=sl_order["id"],
+                        product_id=prod_id,
+                        size=size,
+                        stop_price=calibrated_sl
+                    )
+                    sl_success = bool(sl_edit_res.get("success", False) or sl_edit_res.get("result") or sl_edit_res.get("id"))
+                    if not sl_success:
+                        logger.error(f"[{symbol}] Failed to update SL order size to {size}: {sl_edit_res}")
+                        return {
+                            "ok": False,
+                            "status": "SL_EDIT_FAILED",
+                            "reason": f"Failed to edit SL order size: {sl_edit_res.get('error', 'UNKNOWN')}",
+                            "edit_res": sl_edit_res
+                        }
+            elif allowed_size < 1:
+                logger.error(
+                    f"[{symbol}] SLIPPAGE EXCEEDS MIN LOT RISK: 1 contract risk ${loss_per_contract:.2f} > ${max_allowed_risk_usd:.2f} cap. "
+                    f"Cannot shed to fit cap. Triggering close_position fail-closed."
                 )
+                self.close_position(symbol)
+                return {
+                    "ok": False,
+                    "status": "SLIPPAGE_EXCEEDS_SINGLE_CONTRACT_CAP",
+                    "reason": f"1 contract risk ${loss_per_contract:.2f} exceeds ${max_allowed_risk_usd:.2f} cap; position closed fail-closed."
+                }
 
         # PATCH D4: guarantee at least min_rr:1 with a WIDEN-ONLY ratchet.
         # The evaluator frequently extends TP1 to a liquidation magnet (2.4-3.0R+).
@@ -698,10 +734,11 @@ class DeltaExchangeTrader:
             initial_sl=calibrated_sl,
             initial_tp=effective_tp,
             size=size,
-            initial_risk_dist=actual_risk
+            initial_risk_dist=actual_risk,
+            contract_val=contract_val
         )
 
-        needs_edit = (current_rr < min_rr) or (abs(effective_tp - current_tp) > tick_size * 0.5)
+        needs_edit = (current_rr < min_rr) or (abs(effective_tp - current_tp) > tick_size * 0.5) or (int(tp_order.get("size", 1)) != size)
         if needs_edit:
             edit_res = self.edit_order(
                 order_id=tp_order["id"],
@@ -724,6 +761,7 @@ class DeltaExchangeTrader:
                 "status": "REANCHORED",
                 "calibrated_tp": effective_tp,
                 "calibrated_sl": calibrated_sl,
+                "size": size,
                 "rr": effective_rr,
                 "edit_res": edit_res
             }
@@ -732,7 +770,8 @@ class DeltaExchangeTrader:
             "status": "ALREADY_COMPLIANT",
             "current_rr": current_rr,
             "calibrated_sl": calibrated_sl,
-            "calibrated_tp": effective_tp
+            "calibrated_tp": effective_tp,
+            "size": size
         }
 
     reanchor_bracket_upon_fill = reanchor_brackets_to_fill
@@ -1344,13 +1383,34 @@ class DeltaExchangeTrader:
         if leverage < 1:
             leverage = 20
 
-        # PATCH D7: fee-aware Discrete Contract Grid sizing (SSOT helper
-        # solve_fee_aware_grid — same integer grid as risk_envelope.admissible_volume,
-        # k_max form). Round-trip taker commission is INSIDE the per-contract loss so
-        # the $25.00 cap covers stop-out + fees (previously fees were unbudgeted:
-        # ~15% of the cap leaked on a typical $2,500-notional / 1%-stop trade).
-        from Terminal.risk_envelope import MAX_RISK_USD
+                # PATCH P2 (Phase 2): DYNAMIC SURVIVAL RISK BUDGETING - replaces the static
+        # MAX_RISK_USD cap. Fail-closed: an inadmissible budget blocks dispatch BEFORE sizing.
+        # Walks live anchors, reserves committed risk under 1.25x stress, enforces
+        # the survival divisor (20), and clamps to available margin headroom above
+        # the universal 20% floor.
+        from Terminal.risk_envelope import (
+            MAX_RISK_USD,
+            DEFAULT_MARGIN_PER_RISK_USD,
+            MARGIN_BUFFER_FLOOR_PCT,
+            budget_per_trade_dynamic,
+        )
+        anchors_snapshot = load_position_anchors()
+        margin_per_risk = (entry / (r0_dist * float(leverage))) if (r0_dist > 0 and leverage > 0) else None
+        dyn_budget, budget_ok, budget_reason = budget_per_trade_dynamic(
+            portfolio_equity=total_balance_agg,
+            open_anchors=anchors_snapshot,
+            balance=total_balance_agg,
+            free_margin_usd=total_avail_agg,
+            margin_per_risk_usd=margin_per_risk if margin_per_risk else DEFAULT_MARGIN_PER_RISK_USD,
+        )
+        if not budget_ok:
+            return {
+                "ok": False,
+                "status": "REJECTED",
+                "reason": f"DYNAMIC_RISK_BUDGET_BLOCKED: {budget_reason}",
+            }
 
+        effective_cap_usd = min(MAX_RISK_USD, dyn_budget)
         contract_val = float(prod.get("contract_value", 1.0) or 1.0)
         taker_fee_rate = float(prod.get("taker_fee_rate", TAKER_FEE_DEFAULT) or TAKER_FEE_DEFAULT)
         grid = solve_fee_aware_grid(
@@ -1358,7 +1418,7 @@ class DeltaExchangeTrader:
             stop_loss=sl,
             contract_value=contract_val,
             taker_fee_rate=taker_fee_rate,
-            cap_usd=MAX_RISK_USD,
+            cap_usd=effective_cap_usd,
             max_contracts=100
         )
         if not grid["ok"]:
@@ -1367,35 +1427,64 @@ class DeltaExchangeTrader:
         realized_risk_at_size = float(grid["realized_risk_usd"])
         logger.info(
             f"[{sym}] Discrete Contract Grid Sizing: {size} contracts @ entry {entry} (SL {sl}) -> "
-            f"Realized risk ${realized_risk_at_size:.2f} <= ${MAX_RISK_USD:.2f} "
+            f"Realized risk ${realized_risk_at_size:.2f} <= ${effective_cap_usd:.2f} (budget ${dyn_budget:.2f}) "
             f"(Loss/contract: ${grid['loss_per_contract']:.4f} including fee ${grid['commission_per_contract']:.4f})"
         )
 
-        # Margin reservation: Ensure trade initial margin does not exceed available free cash
+        # PATCH P2: harmonized with the 20.0% universal free-margin floor - the
+        # sizedown target is now the headroom ABOVE the floor (avail - 20% of
+        # balance), not a flat 80% of available margin.
         if avail_margin > 0.02 and contract_val > 0:
             req_margin = (entry * contract_val * size) / float(leverage)
-            if req_margin > avail_margin:
-                sized_down = int((avail_margin * 0.80 * leverage) / (entry * contract_val))
+            margin_headroom = max(0.0, avail_margin - MARGIN_BUFFER_FLOOR_PCT * total_balance_agg)
+            if req_margin > margin_headroom:
+                sized_down = int((margin_headroom * float(leverage)) / (entry * contract_val))
                 if sized_down < 1:
                     return {
                         "ok": False,
                         "status": "REJECTED",
-                        "reason": f"INSUFFICIENT_MARGIN_FOR_MIN_LOT: required=${req_margin:.4f} > available=${avail_margin:.4f}"
+                        "reason": (
+                            f"INSUFFICIENT_MARGIN_ABOVE_FLOOR: required=${req_margin:.4f} > "
+                            f"headroom=${margin_headroom:.4f} (avail=${avail_margin:.4f} less "
+                            f"{MARGIN_BUFFER_FLOOR_PCT*100:.1f}% floor of ${total_balance_agg:.2f})"
+                        )
                     }
                 size = max(1, min(size, sized_down))
-                logger.info(f"Scaled size to {size} contracts to fit available margin (${avail_margin:.2f} USD)")
+                req_margin = (size * entry * contract_val) / float(leverage)
+                logger.info(f"Scaled size to {size} contracts to fit margin headroom above 20% floor (${margin_headroom:.2f} USD)")
 
         self._inflight_orders.add(prod["symbol"])
         try:
-            logger.info(f"Executing Delta Live Order: {prod['symbol']} {side} {size} contracts | Entry: {entry} | SL: {sl} | TP: {tp} | Leverage: {leverage}x | AvailMargin: ${avail_margin:.2f}")
+            tick_size = float(prod.get("tick_size", 0.01) or 0.01)
+            if live_mark_price > 0:
+                if dir_norm == "BUY":
+                    ref_px = best_ask if best_ask > 0 else live_mark_price
+                    limit_px = ref_px + (5.0 * tick_size)
+                else:
+                    ref_px = best_bid if best_bid > 0 else live_mark_price
+                    limit_px = ref_px - (5.0 * tick_size)
+                order_type = "limit_order"
+                time_in_force = "ioc"
+            else:
+                limit_px = None
+                order_type = "market_order"
+                time_in_force = None
+
+            logger.info(
+                f"Executing Delta Live Order: {prod['symbol']} {side} {size} contracts | "
+                f"Entry: {entry} | SL: {sl} | TP: {tp} | OrderType: {order_type} "
+                f"(LimitPx: {limit_px}, TIF: {time_in_force}) | Leverage: {leverage}x | AvailMargin: ${avail_margin:.2f}"
+            )
             res = self.place_order(
                 symbol=prod["symbol"],
                 side=side,
                 size=size,
-                order_type="market_order",
+                order_type=order_type,
+                limit_price=limit_px,
                 stop_loss_price=sl,
                 take_profit_price=tp,
-                leverage=leverage
+                leverage=leverage,
+                time_in_force=time_in_force
             )
 
             ok = res.get("success", False) or ("result" in res and "id" in res.get("result", {}))

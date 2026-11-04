@@ -77,12 +77,19 @@ def register_position_anchor(
     initial_tp: float,
     size: int,
     initial_risk_dist: Optional[float] = None,
-    current_tier: int = 0
+    current_tier: int = 0,
+    contract_val: float = 1.0
 ) -> Dict[str, Any]:
     """
     Registers an immutable initial risk anchor upon order execution fill.
     R0 = |entry_price - initial_sl| is permanently locked.
     Idempotent: will not reset an existing anchor at a higher tier.
+
+    PATCH P2 (Phase 2): persists contract_val + initial_risk_usd so the
+    committed-risk aggregator (risk_envelope.aggregate_committed_risk) can
+    compute exact outstanding stop-loss risk in USD without re-resolving
+    product metadata. Legacy anchors without these fields are handled
+    fail-closed by the aggregator.
     """
     anchors = load_position_anchors()
     clean_sym = symbol.upper().replace(".PI", "").replace("USDT", "").replace("USD", "") + "USD"
@@ -108,7 +115,10 @@ def register_position_anchor(
         "initial_risk_dist": float(r0),
         "current_tier": int(current_tier),
         "size": int(size),
-        "last_ratchet_price": float(initial_sl)
+        "last_ratchet_price": float(initial_sl),
+        # PATCH P2: committed-risk aggregation fields
+        "contract_val": float(contract_val),
+        "initial_risk_usd": round(float(r0) * abs(int(size)) * float(contract_val), 2)
     }
     anchors[clean_sym] = anchor
     save_position_anchors(anchors)
@@ -199,7 +209,8 @@ def get_or_recover_anchor(
         initial_tp=cur_tp_price if cur_tp_price else entry_price + (dir_mult * 2.0 * r0),
         size=size,
         initial_risk_dist=r0,
-        current_tier=recovered_tier
+        current_tier=recovered_tier,
+        contract_val=contract_val
     )
 
 

@@ -19,6 +19,8 @@ Validates:
 
 import asyncio
 import importlib
+import os
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -297,6 +299,92 @@ class TestCandleClusterAndFivePillars(unittest.TestCase):
         res = self.evaluator.evaluate_signal(signal)
         reasons = res.get("confluence_reasons", [])
         self.assertTrue(any("Hyperdash Opposing Smart Money Distribution" in r for r in reasons))
+
+    def test_laplace_headcount_smoothing(self):
+        """Verifies Laplace smoothing for Hyperdash crowd bias when headcount < 10."""
+        from Terminal.hyperdash_intel_engine import compute_net_bias_count
+        # Zero traders
+        self.assertEqual(compute_net_bias_count(0, 0), 0.0)
+        # 1 long trader, 0 short: smoothed = (1 - 0) / (1 + 2) * 100 = 33.33%
+        bias_1 = compute_net_bias_count(1, 0)
+        self.assertAlmostEqual(bias_1, 33.33, places=1)
+        # 0 long trader, 2 short: smoothed = (0 - 2) / (2 + 2) * 100 = -50.0%
+        bias_2 = compute_net_bias_count(0, 2)
+        self.assertAlmostEqual(bias_2, -50.0, places=1)
+        # 10 long traders, 0 short: headcount >= 10 -> full bias = 100.0%
+        bias_10 = compute_net_bias_count(10, 0)
+        self.assertEqual(bias_10, 100.0)
+        # Equal traders
+        self.assertEqual(compute_net_bias_count(4, 4), 0.0)
+
+    def test_forming_bar_parking_and_no_ledger_burn(self):
+        """Verifies forming bars are parked or marked unqualified without burning ledger entries."""
+        sentinel = FootprintSignalSentinel(from_current_end=True)
+        if hasattr(sentinel, 'stack') and hasattr(sentinel.stack, 'ledger'):
+            sentinel.stack.ledger._evaluated = {}
+        sentinel.pending_signals.clear()
+
+        # Mock evaluate_signal for actionable forming bar
+        # Note: realtime evaluator appends BAR_NOT_CLOSED_INTRA_BAR_WICK when bar is forming
+        sentinel.evaluator.evaluate_signal = MagicMock(return_value={
+            "symbol": "BTCUSD",
+            "direction": "BUY",
+            "confluence_score": 82.0,
+            "is_actionable": False,
+            "validation_errors": ["BAR_NOT_CLOSED_INTRA_BAR_WICK"],
+            "deepmind_timesfm": {"required_threshold": 75.0, "adverse_veto": False}
+        })
+
+        # Future time_ms -> bar is forming (not closed)
+        now_ms = time.time() * 1000
+        future_ms = int((now_ms // 900_000) * 900_000)
+        raw_signal = [{
+            "symbol": "BTCUSD",
+            "sig_name": "Absorption",
+            "side": "bullish",
+            "price": 85000.0,
+            "time_ms": future_ms,
+            "bar_type": "time",
+            "is_mock": False,
+            "bar_closed": False
+        }]
+
+        # Set environment to allow live logic evaluation
+        with patch.dict(os.environ, {"MOCK_TEST_MODE": "0"}, clear=False):
+            evals = asyncio.run(sentinel.evaluate_and_dispatch(raw_signal))
+            self.assertEqual(len(evals), 1)
+
+            # Signal must be parked, NOT burned in ledger
+            self.assertEqual(len(sentinel.pending_signals), 1)
+            park_key = ("BTCUSD", future_ms, "time", "")
+            self.assertIn(park_key, sentinel.pending_signals)
+            # Ledger must NOT have evaluated this open_ms
+            self.assertFalse(sentinel.stack.ledger.is_evaluated("BTCUSD", future_ms, bar_type="time"))
+
+            # Test forming bar that is unqualified (score < 75.0)
+            sentinel.evaluator.evaluate_signal = MagicMock(return_value={
+                "symbol": "ETHUSD",
+                "direction": "BUY",
+                "confluence_score": 60.0,
+                "is_actionable": False,
+                "validation_errors": ["BAR_NOT_CLOSED_INTRA_BAR_WICK"],
+                "deepmind_timesfm": {"required_threshold": 75.0, "adverse_veto": False}
+            })
+            unqualified_signal = [{
+                "symbol": "ETHUSD",
+                "sig_name": "Absorption",
+                "side": "bullish",
+                "price": 2500.0,
+                "time_ms": future_ms,
+                "bar_type": "time",
+                "is_mock": False,
+                "bar_closed": False
+            }]
+            evals_unq = asyncio.run(sentinel.evaluate_and_dispatch(unqualified_signal))
+            # Must NOT be in pending signals and NOT burned in ledger
+            unq_park_key = ("ETHUSD", future_ms, "time", "")
+            self.assertNotIn(unq_park_key, sentinel.pending_signals)
+            self.assertFalse(sentinel.stack.ledger.is_evaluated("ETHUSD", future_ms, bar_type="time"))
 
 
 if __name__ == "__main__":

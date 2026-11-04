@@ -196,3 +196,77 @@ def test_critic_learning_summary(critic):
     assert summary["total_losses_audited"] >= 1
     assert "failure_mode_counts" in summary
     assert FAILURE_FALLING_KNIFE_LONG in summary["failure_mode_counts"]
+
+
+def test_htf_momentum_runover_causal_grounding(critic):
+    from Terminal.trade_critic_engine import FAILURE_HTF_MOMENTUM_RUNOVER
+    ticket_id = f"TEST_HTF_{int(time.time())}"
+    # Record a synthetic loss classified as HTF_MOMENTUM_RUNOVER
+    # (BUY losing trade when 4H was BEARISH, normal CVD, normal whale, no liq spike)
+    res = critic.conduct_post_mortem_and_store(
+        ticket_id=ticket_id,
+        symbol="LINK",
+        direction="BUY",
+        entry_price=15.0,
+        exit_price=14.5,
+        realized_pnl_usd=-25.0,
+        market_snapshot={
+            "ema233": 15.1,
+            "cvd_slope": 0.05,
+            "htf_bias": "BEARISH",
+            "whale_imbalance": 0.0,
+            "has_liq_spike": False,
+            "liq_bias": "NEUTRAL",
+            "value_area_relation": "INSIDE_VALUE"
+        }
+    )
+    assert res["status"] in ("RECORDED", "ALREADY_RECORDED")
+    assert res["failure_mode"] == FAILURE_HTF_MOMENTUM_RUNOVER
+
+    # Case 1: Trade is NOT opposing 4H (BUY with BULLISH 4H) -> Causal risk absent -> CLEAR
+    audit_not_opposing = critic.audit_candidate_setup(
+        symbol="LINK",
+        direction="BUY",
+        price=15.0,
+        confluence_score=78.0,
+        htf_bias="BULLISH",
+        cvd_slope=0.05,
+        whale_imbalance=0.0,
+        liq_regime="NEUTRAL",
+        value_area_relation="INSIDE_VALUE",
+        rr_ratio=2.2
+    )
+    assert audit_not_opposing["critic_verdict"] == "CLEAR"
+    assert audit_not_opposing["penalty"] == 0.0
+
+    # Case 2: Trade opposes 4H (BUY with BEARISH 4H), BUT score >= 85.0 -> Mitigation hurdle satisfied -> CLEAR
+    audit_high_score = critic.audit_candidate_setup(
+        symbol="LINK",
+        direction="BUY",
+        price=15.0,
+        confluence_score=88.0,
+        htf_bias="BEARISH",
+        cvd_slope=0.05,
+        whale_imbalance=0.0,
+        liq_regime="NEUTRAL",
+        value_area_relation="INSIDE_VALUE",
+        rr_ratio=2.2
+    )
+    assert audit_high_score["critic_verdict"] == "CLEAR"
+    assert audit_high_score["penalty"] == 0.0
+
+    # Case 3: Trade opposes 4H AND score < 85.0 -> Causally grounded failure -> VETO / PENALTY
+    audit_grounded = critic.audit_candidate_setup(
+        symbol="LINK",
+        direction="BUY",
+        price=15.0,
+        confluence_score=78.0,
+        htf_bias="BEARISH",
+        cvd_slope=0.05,
+        whale_imbalance=0.0,
+        liq_regime="NEUTRAL",
+        value_area_relation="INSIDE_VALUE",
+        rr_ratio=2.2
+    )
+    assert audit_grounded["critic_verdict"] in ("HARD_VETO", "HIGH_PENALTY", "ADVISORY")
+    assert audit_grounded["penalty"] > 0.0

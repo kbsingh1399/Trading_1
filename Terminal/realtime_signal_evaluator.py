@@ -110,6 +110,152 @@ from Terminal.risk_envelope import (
 
 
 
+# ---------------------------------------------------------------------------
+# PATCH P3 (Phase 2): Independent Pillar-Minimum Gate — Confluence Hardening
+# ---------------------------------------------------------------------------
+# The Round 1 review (Section 4.5) showed the additive chain
+#   base 40 + model bonus 15 + vector memory 10 + Hyperdash 10 = 75
+# could soft-clear the threshold with NO independent market confirmation.
+# The gate below requires at least MIN_INDEPENDENT_MARKET_PILLARS distinct
+# market-derived pillars (out of P1 footprint-flow / P3 live liquidations /
+# P4 liquidation magnets / P5 whale sweeps) to contribute POSITIVELY before a
+# candidate may pass 75.0. Env kill-switch: PILLAR_MIN_MARKET_PILLARS=0
+# disables the gate entirely (legacy behavior).
+MIN_INDEPENDENT_MARKET_PILLARS = int(os.environ.get("PILLAR_MIN_MARKET_PILLARS", "2"))
+
+# Minimum positive contribution (points) for a pillar to count as "actively
+# contributing" for gate purposes.
+PILLAR_MIN_CONTRIBUTION_PTS = 5.0
+
+MARKET_PILLARS = (
+    "P1_FOOTPRINT_FLOW",
+    "P3_LIVE_LIQUIDATIONS",
+    "P4_LIQUIDATION_MAGNETS",
+    "P5_WHALE_SWEEP",
+)
+
+
+def detect_market_pillar_hits(
+    direction: str,
+    whale_imbalance: float = 0.5,
+    cvd_slope: str = "NEUTRAL",
+    cluster_agreement: str = "",
+    has_tv_liq_spike: bool = False,
+    tv_liq_bias: str = "NEUTRAL",
+    near_field_shorts: float = 50.0,
+    short_magnets: Optional[List[Dict[str, Any]]] = None,
+    long_magnets: Optional[List[Dict[str, Any]]] = None,
+    clld_turn: str = "",
+    strength_bands: Optional[List[Dict[str, Any]]] = None,
+    key_barriers: Optional[Dict[str, Any]] = None,
+    sweep_targets: Optional[List[Dict[str, Any]]] = None,
+    hd_signals: Optional[List[str]] = None,
+    hd_smart_bias: float = 0.0,
+    whale_history_sweep_bias: str = "NEUTRAL",
+    whale_flow_score: Optional[float] = None,
+    whale_flow_valid: bool = False,
+) -> Dict[str, float]:
+    """
+    Mirrors the POSITIVE contribution conditions of the 4 market-derived
+    pillars in evaluate_signal's scoring chain. Returns {pillar_key: points}
+    for every pillar actively contributing >= PILLAR_MIN_CONTRIBUTION_PTS in
+    the candidate's direction. Pure function — fully unit-testable.
+    """
+    hits: Dict[str, float] = {k: 0.0 for k in MARKET_PILLARS}
+    if direction not in ("BUY", "SELL"):
+        return {}
+    is_buy = direction == "BUY"
+    short_magnets = short_magnets or []
+    long_magnets = long_magnets or []
+    strength_bands = strength_bands or []
+    key_barriers = key_barriers or {}
+    sweep_targets = sweep_targets or []
+    hd_signals = hd_signals or []
+
+    # ---- P1: Footprint / order-flow microstructure -------------------------
+    p1 = 0.0
+    if is_buy and cvd_slope in ("BULLISH_DIVERGENCE", "BULLISH_FLOW"):
+        p1 = max(p1, 15.0)
+    if not is_buy and cvd_slope in ("BEARISH_DIVERGENCE", "BEARISH_FLOW"):
+        p1 = max(p1, 15.0)
+    if is_buy and cluster_agreement == "UNANIMOUS_BULLISH":
+        p1 = max(p1, 15.0)
+    if not is_buy and cluster_agreement == "UNANIMOUS_BEARISH":
+        p1 = max(p1, 15.0)
+    hits["P1_FOOTPRINT_FLOW"] = p1
+
+    # ---- P3: Live TV liquidation blow-off reversals -------------------------
+    p3 = 0.0
+    if is_buy and has_tv_liq_spike and tv_liq_bias == "BULLISH_REVERSAL":
+        p3 = max(p3, 15.0)
+    if not is_buy and has_tv_liq_spike and tv_liq_bias == "BEARISH_REVERSAL":
+        p3 = max(p3, 15.0)
+    hits["P3_LIVE_LIQUIDATIONS"] = p3
+
+    # ---- P4: Liquidation heatmap magnets & squeeze fuel ----------------------
+    p4 = 0.0
+    if is_buy and near_field_shorts >= 52.0:
+        p4 = max(p4, 10.0)
+    if not is_buy and near_field_shorts <= 48.0:
+        p4 = max(p4, 10.0)
+    if is_buy and short_magnets:
+        sm_dist = float(short_magnets[0].get("distance_pct", 0.0) or 0.0)
+        if 0.4 <= sm_dist <= 4.0:
+            p4 = max(p4, 10.0)
+    if not is_buy and long_magnets:
+        lm_dist = abs(float(long_magnets[0].get("distance_pct", 0.0) or 0.0))
+        if 0.4 <= lm_dist <= 4.0:
+            p4 = max(p4, 10.0)
+    if is_buy and "bullish" in str(clld_turn).lower():
+        p4 = max(p4, 5.0)
+    if not is_buy and "bearish" in str(clld_turn).lower():
+        p4 = max(p4, 5.0)
+    band_sign = 1 if is_buy else -1
+    if any(b.get("band") in ("0-1%", "1-2%") and (b.get("net_delta", 0) or 0) * band_sign > 0 for b in strength_bands):
+        p4 = max(p4, 5.0)
+    if is_buy and isinstance(key_barriers.get("nearest_overhead"), dict) and float(key_barriers["nearest_overhead"].get("price") or 0.0) > 0:
+        p4 = max(p4, 5.0)
+    if not is_buy and isinstance(key_barriers.get("nearest_underlying"), dict) and float(key_barriers["nearest_underlying"].get("price") or 0.0) > 0:
+        p4 = max(p4, 5.0)
+    if is_buy and ("CROWD_SQUEEZE_LONG" in hd_signals):
+        p4 = max(p4, 10.0)
+    if not is_buy and ("CROWD_SQUEEZE_SHORT" in hd_signals):
+        p4 = max(p4, 10.0)
+    if is_buy:
+        fwd = [t for t in sweep_targets if t.get("side") == "SHORT" and 0.3 <= float(t.get("dist_pct", 99)) <= 5.0]
+        if fwd:
+            p4 = max(p4, 8.0)
+    else:
+        fwd = [t for t in sweep_targets if t.get("side") == "LONG" and -5.0 <= float(t.get("dist_pct", -99)) <= -0.3]
+        if fwd:
+            p4 = max(p4, 8.0)
+    hits["P4_LIQUIDATION_MAGNETS"] = p4
+
+    # ---- P5: Whale book, sweeps & smart money -------------------------------
+    p5 = 0.0
+    if is_buy and whale_imbalance >= 0.55:
+        p5 = max(p5, 15.0)
+    if not is_buy and whale_imbalance <= 0.45:
+        p5 = max(p5, 15.0)
+    if is_buy and whale_history_sweep_bias == "BULLISH_SWEEP":
+        p5 = max(p5, 5.0)
+    if not is_buy and whale_history_sweep_bias == "BEARISH_SWEEP":
+        p5 = max(p5, 5.0)
+    if is_buy and hd_smart_bias >= 15.0:
+        p5 = max(p5, 10.0)
+    if not is_buy and hd_smart_bias <= -15.0:
+        p5 = max(p5, 10.0)
+    if whale_flow_valid and whale_flow_score is not None:
+        if is_buy and float(whale_flow_score) >= 25.0:
+            p5 = max(p5, 6.0)
+        if not is_buy and float(whale_flow_score) <= -25.0:
+            p5 = max(p5, 6.0)
+    hits["P5_WHALE_SWEEP"] = p5
+
+    return {k: v for k, v in hits.items() if v >= PILLAR_MIN_CONTRIBUTION_PTS}
+
+
+
 logger = logging.getLogger("RealtimeSignalEvaluator")
 
 DB_DIR = ROOT_DIR / "Database"
@@ -281,7 +427,13 @@ class RealtimeSignalEvaluator:
         lookup_sig_name = sig_name.split(" + ")[0].strip() if " + " in sig_name else sig_name
         emp_edge = self.empirical_learner.get_signal_expectancy(sym, lookup_sig_name) if getattr(self, 'empirical_learner', None) else {}
         hd_intel = {}
-        if getattr(self, "hyperdash", None):
+        # PATCH P4: accept intel pre-fetched asynchronously by the fan-out
+        # worker (bounded-concurrency get_asset_intel_async). Structural
+        # validation + staleness neutralization still apply below.
+        prefetched_hd = sig.get("prefetched_hyperdash_intel")
+        if isinstance(prefetched_hd, dict) and prefetched_hd:
+            hd_intel = prefetched_hd
+        if not hd_intel and getattr(self, "hyperdash", None):
             try:
                 # PATCH E2: mark_price_hint anchors whale-liq cluster distances to the
                 # live signal price instead of deriving the mark from whale UPnL.
@@ -742,6 +894,72 @@ class RealtimeSignalEvaluator:
                         f"Whale Short-Liq Magnet Above Entry: ${worst.get('liq_price'):,.2f} "
                         f"(+{worst.get('dist_pct'):.1f}%, ${worst.get('notional_musd', 0):.1f}M) — stop-out fuel (-8)"
                     )
+
+            # PATCH P2: UNDERWATER WHALE ENTRY POCKETS (trapped-capital structure)
+            # Overhead supply above price caps longs (trapped longs sell into
+            # strength at breakeven); support floors below absorb shorts
+            # (trapped shorts buy back at breakeven).
+            entry_pockets = hd_intel.get("entry_pockets") or []
+            if direction == "BUY":
+                overhead = [
+                    p for p in entry_pockets
+                    if p.get("pocket_type") == "OVERHEAD_SUPPLY" and 0.0 < float(p.get("dist_pct", 99.0)) <= 2.5
+                ]
+                if overhead:
+                    worst = max(overhead, key=lambda p: p.get("pocket_score", 0.0))
+                    pen = 8.0 if float(worst.get("dist_pct", 99.0)) <= 1.25 else 5.0
+                    confluence_score -= pen
+                    reasons.append(
+                        f"Underwater Long-Whale Overhead Supply Cap @ ${worst.get('pocket_price'):,.2f} "
+                        f"(+{worst.get('dist_pct'):.1f}%, ${worst.get('trapped_musd', 0):.1f}M trapped, "
+                        f"{worst.get('whale_count')} whales) (-{pen:.0f})"
+                    )
+            elif direction == "SELL":
+                support = [
+                    p for p in entry_pockets
+                    if p.get("pocket_type") == "SUPPORT_FLOOR" and -2.5 <= float(p.get("dist_pct", -99.0)) < 0.0
+                ]
+                if support:
+                    worst = max(support, key=lambda p: p.get("pocket_score", 0.0))
+                    pen = 8.0 if float(worst.get("dist_pct", -99.0)) >= -1.25 else 5.0
+                    confluence_score -= pen
+                    reasons.append(
+                        f"Underwater Short-Whale Support Floor @ ${worst.get('pocket_price'):,.2f} "
+                        f"({worst.get('dist_pct'):.1f}%, ${worst.get('trapped_musd', 0):.1f}M trapped, "
+                        f"{worst.get('whale_count')} whales) (-{pen:.0f})"
+                    )
+
+            # PATCH P2: INTER-REFRESH WHALE FLOW (accumulating / derisking / dumping)
+            whale_flow = hd_intel.get("whale_flow") or {}
+            if whale_flow.get("data_valid") and not whale_flow.get("low_confidence"):
+                wf_score = float(whale_flow.get("flow_score", 0.0) or 0.0)
+                wf_state = str(whale_flow.get("flow_state", "STABLE"))
+                if direction == "BUY":
+                    if wf_score >= 25.0:
+                        confluence_score += 6.0
+                        reasons.append(
+                            f"Whale Flow: {wf_state} (score {wf_score:+.1f}, "
+                            f"${whale_flow.get('flow_delta_usd', 0.0)/1e6:+.2f}M over {whale_flow.get('window_sec', 0):.0f}s) (+6)"
+                        )
+                    elif wf_score <= -25.0:
+                        confluence_score -= 6.0
+                        reasons.append(
+                            f"Whale Flow: {wf_state} — whales dumping into strength "
+                            f"(score {wf_score:+.1f}, ${whale_flow.get('flow_delta_usd', 0.0)/1e6:+.2f}M) (-6)"
+                        )
+                elif direction == "SELL":
+                    if wf_score <= -25.0:
+                        confluence_score += 6.0
+                        reasons.append(
+                            f"Whale Flow: {wf_state} (score {wf_score:+.1f}, "
+                            f"${whale_flow.get('flow_delta_usd', 0.0)/1e6:+.2f}M over {whale_flow.get('window_sec', 0):.0f}s) (+6)"
+                        )
+                    elif wf_score >= 25.0:
+                        confluence_score -= 6.0
+                        reasons.append(
+                            f"Whale Flow: {wf_state} — whales accumulating against the short "
+                            f"(score {wf_score:+.1f}, ${whale_flow.get('flow_delta_usd', 0.0)/1e6:+.2f}M) (-6)"
+                        )
         elif hd_intel and hd_intel.get("data_valid") is False and hd_intel_age is not None:
             reasons.append(
                 f"Hyperdash intel stale (age {hd_intel_age:.0f}s) — neutralized (no boost, no penalty)"
@@ -1122,11 +1340,55 @@ class RealtimeSignalEvaluator:
 
         confluence_score = max(0.0, min(100.0, confluence_score))
 
+        # PATCH P3: Independent Pillar-Minimum Gate — at least
+        # MIN_INDEPENDENT_MARKET_PILLARS distinct market-derived pillars must
+        # actively contribute before the 75.0 threshold may be cleared.
+        # Pillar 2 (auction/model routing), vector memory, TimesFM and the
+        # empirical learner are intentionally EXCLUDED: they can soft-clear
+        # 75 on their own without market confirmation.
+        _whale_flow = (hd_intel or {}).get("whale_flow") or {}
+        market_pillar_hits = detect_market_pillar_hits(
+            direction=direction,
+            whale_imbalance=whale_imbalance,
+            cvd_slope=str(cvd_slope),
+            cluster_agreement=str(cluster_agreement),
+            has_tv_liq_spike=has_tv_liq_spike,
+            tv_liq_bias=tv_liq_bias,
+            near_field_shorts=near_field_shorts,
+            short_magnets=short_magnets,
+            long_magnets=long_magnets,
+            clld_turn=clld_turn,
+            strength_bands=strength_bands,
+            key_barriers=key_barriers,
+            sweep_targets=(hd_intel or {}).get("sweep_targets") or [],
+            hd_signals=(hd_intel or {}).get("signals") or [],
+            hd_smart_bias=float((hd_intel or {}).get("smart_bias", 0.0) or 0.0) if (hd_intel or {}).get("data_valid") else 0.0,
+            whale_history_sweep_bias=str(whale_history.get("sweep_bias", "NEUTRAL")),
+            whale_flow_score=float(_whale_flow.get("flow_score") or 0.0) if _whale_flow.get("data_valid") else None,
+            whale_flow_valid=bool(_whale_flow.get("data_valid")) and not bool(_whale_flow.get("low_confidence")),
+        )
+        pillar_count = len(market_pillar_hits)
+        pillar_gate_passed = (MIN_INDEPENDENT_MARKET_PILLARS <= 0) or (pillar_count >= MIN_INDEPENDENT_MARKET_PILLARS)
+
         is_actionable = bool(confluence_score >= 75.0 + hurdle and direction in ('BUY', 'SELL')
 
                              and rr >= MIN_RR_RATIO and geom_valid and solved_lot is not None
 
-                             and not validation_errors and not forecast_veto)
+                             and not validation_errors and not forecast_veto
+
+                             and pillar_gate_passed)
+
+        if not pillar_gate_passed:
+            reasons.append(
+                f"PILLAR_MINIMUM_GATE_FAILED: {pillar_count} independent market pillar(s) "
+                f"{sorted(market_pillar_hits)} fired; {MIN_INDEPENDENT_MARKET_PILLARS} required. "
+                "Base+model+memory bonuses can no longer soft-clear 75.0 alone."
+            )
+            logger.info(
+                "[%s] %s confluence %.1f >= threshold but pillar gate failed (%d/%d market pillars: %s)",
+                sym, direction, confluence_score, pillar_count, MIN_INDEPENDENT_MARKET_PILLARS,
+                sorted(market_pillar_hits)
+            )
 
         deepseek_critic = {}
         dsh = getattr(self, "dsh_bridge", None)
@@ -1513,9 +1775,18 @@ class RealtimeSignalEvaluator:
                 "pillar_2_auction_value": f"Day VWAP: ${day_vwap:,.4f} ({p_vs_vwap}) | Value Area: VAH=${day_vah:,.4f}, VAL=${day_val:,.4f} ({val_status}) | Fib Pocket: {fib_align} (EMA55=${ema55:,.4f}, EMA233=${ema233:,.4f})",
                 "pillar_3_live_liquidations": f"TV Liq Spike: {has_tv_liq_spike} (Bias: {tv_liq_bias}, Exhaustion: {tv_liq_exhaustion:.0f}/100, LongLiq: ${tv_liq_long_usd:,.0f}, ShortLiq: ${tv_liq_short_usd:,.0f})" if has_tv_liq_spike else "No active live TV liquidation blow-off spike on 15m window (normal flow)",
                 "pillar_4_liquidation_heatmap": f"Near-Field Shorts: {near_field_shorts:.1f}% vs Longs: {100-near_field_shorts:.1f}% | Nearest Magnet: {short_magnets[0].get('zone_price') if direction=='BUY' and short_magnets else (long_magnets[0].get('zone_price') if direction=='SELL' and long_magnets else 'N/A')}" + (f" | Crowd Bias: {hd_intel.get('crowd_bias', 0.0):+.1f}%" if hd_intel.get("data_valid") else ""),
-                "pillar_5_whales_and_sweeps": f"Whale Book Imbalance: {whale_imbalance*100:.1f}% Bids vs {(1-whale_imbalance)*100:.1f}% Asks | Sweeps: {sweep_bias} (Net: ${net_whale_flow/1e6:+.2f}M filled)" + (f" | Hyperdash Smart Money: {hd_intel.get('smart_bias', 0.0):+.1f}%, Score: {hd_intel.get('intel_score', 50):.0f}/100" if hd_intel.get("data_valid") else "")
+                "pillar_5_whales_and_sweeps": f"Whale Book Imbalance: {whale_imbalance*100:.1f}% Bids vs {(1-whale_imbalance)*100:.1f}% Asks | Sweeps: {sweep_bias} (Net: ${net_whale_flow/1e6:+.2f}M filled)" + (f" | Hyperdash Smart Money: {hd_intel.get('smart_bias', 0.0):+.1f}%, Score: {hd_intel.get('intel_score', 50):.0f}/100" if hd_intel.get("data_valid") else "") + (f" | Whale Flow: {(hd_intel.get('whale_flow') or {}).get('flow_state', 'N/A')} ({(hd_intel.get('whale_flow') or {}).get('flow_score', 0.0):+.1f})" if (hd_intel.get("whale_flow") or {}).get("data_valid") else "")
             },
-            "hyperdash_intel": hd_intel
+            "hyperdash_intel": hd_intel,
+
+            # PATCH P3: pillar-gate observability — every alert records which
+            # independent market pillars fired and whether the gate passed.
+            "pillar_gate": {
+                "required_independent_pillars": MIN_INDEPENDENT_MARKET_PILLARS,
+                "independent_pillars_fired": pillar_count,
+                "pillar_hits": market_pillar_hits,
+                "gate_passed": pillar_gate_passed
+            }
 
         }
 
@@ -1729,6 +2000,17 @@ class RealtimeSignalEvaluator:
                 "hyperdash_crowd_bias": self._finite((alert.get("hyperdash_intel") or {}).get("crowd_bias"), 0.0),
 
                 "hyperdash_intel_score": self._finite((alert.get("hyperdash_intel") or {}).get("intel_score"), 50.0),
+
+                # PATCH P2/P3: whale-flow + pillar-gate observability in the flat stream
+                "hd_whale_flow_state": str(((alert.get("hyperdash_intel") or {}).get("whale_flow") or {}).get("flow_state") or "N/A"),
+
+                "hd_whale_flow_score": self._finite(((alert.get("hyperdash_intel") or {}).get("whale_flow") or {}).get("flow_score"), 0.0),
+
+                "hd_whale_flow_delta_usd": self._finite(((alert.get("hyperdash_intel") or {}).get("whale_flow") or {}).get("flow_delta_usd"), 0.0),
+
+                "pillar_gate_passed": bool((alert.get("pillar_gate") or {}).get("gate_passed", True)),
+
+                "pillar_gate_fired": self._finite((alert.get("pillar_gate") or {}).get("independent_pillars_fired"), 0.0),
 
                 "reasons": ", ".join(alert["confluence_reasons"])
 
