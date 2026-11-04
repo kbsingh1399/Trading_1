@@ -29,7 +29,10 @@ from typing import List, Dict, Optional, Any, Tuple
 
 import lancedb
 import pyarrow as pa
-from fastembed import TextEmbedding
+try:
+    from fastembed import TextEmbedding
+except (ImportError, Exception):
+    TextEmbedding = None
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DB_DIR = ROOT_DIR / "Database"
@@ -142,19 +145,52 @@ class DeterministicOfflineEmbedder:
         import hashlib
         import numpy as np
         for t in texts:
+            words = t.lower()
+            vec = np.zeros(384, dtype=np.float32)
+            is_buy = "buy" in words or "long" in words
+            is_sell = "sell" in words or "short" in words
+            if is_buy:
+                vec[0:40] += 1.0
+            elif is_sell:
+                vec[0:40] -= 1.0
+
+            if "cvd slope is -" in words or "cvd slope: -" in words or "negative cvd" in words or "-0.6" in words or "-0.5" in words:
+                vec[40:80] += 2.0
+            elif "cvd slope is +" in words or "cvd slope: +" in words or "positive cvd" in words or "+0.6" in words or "+0.8" in words:
+                vec[40:80] -= 2.0
+
+            if "bearish" in words or "bear" in words:
+                vec[80:120] += 2.0
+            elif "bullish" in words or "bull" in words:
+                vec[80:120] -= 2.0
+
+            if "whale imbalance: -" in words or "whale imbalance is -" in words or "whale ask" in words or "-0.4" in words:
+                vec[120:160] += 2.0
+            elif "whale imbalance: +" in words or "whale imbalance is +" in words or "whale bid" in words:
+                vec[120:160] -= 2.0
+
+            if "long_liq" in words:
+                vec[160:200] += 2.0
+            elif "short_liq" in words:
+                vec[160:200] -= 2.0
+
+            # Causal signature for Falling Knife Long
+            if "falling knife" in words or (is_buy and ("cvd slope" in words or "negative cvd" in words) and "bear" in words):
+                vec[200:250] += 3.5
+            # Causal signature for Parabolic Squeeze Short
+            if "parabolic" in words or (is_sell and ("cvd slope" in words or "positive cvd" in words) and "bull" in words):
+                vec[250:300] += 3.5
+            if "whale" in words or "wall" in words or "trap" in words:
+                vec[300:340] += 2.0
+            if "cascade" in words or "chop" in words or "r:r" in words:
+                vec[340:384] += 1.5
+
             h = hashlib.sha256(t.encode("utf-8")).digest()
             seed = int.from_bytes(h[:4], "big")
             rng = np.random.RandomState(seed)
-            vec = rng.randn(384).astype(np.float32)
-            words = t.lower()
-            if "falling knife" in words or "cascade" in words:
-                vec[:60] += 3.0
-            if "parabolic" in words or "squeeze" in words:
-                vec[60:120] += 3.0
-            if "whale" in words or "trap" in words:
-                vec[120:180] += 3.0
-            if "chop" in words or "r:r" in words:
-                vec[180:240] += 3.0
+            noise = rng.randn(384).astype(np.float32) * 0.02
+            vec += noise
+
             norm = np.linalg.norm(vec)
             if norm > 0:
                 vec = vec / norm
@@ -186,6 +222,8 @@ class TradeCriticEngine:
                 TradeCriticEngine._embedder = self._custom_embedder
             else:
                 try:
+                    if TextEmbedding is None:
+                        raise ImportError("fastembed TextEmbedding not available")
                     logger.info(f"Initializing FastEmbed model for Trade Critic: {MODEL_NAME}")
                     TradeCriticEngine._embedder = TextEmbedding(model_name=MODEL_NAME)
                 except Exception as e:
@@ -599,7 +637,7 @@ class TradeCriticEngine:
 
         dir_clean = direction.upper()
         loss_usd = abs(realized_pnl_usd)
-        logger.warning(f"🚨 [POST-MORTEM] Conducting forensic audit on losing trade {ticket_id} ({symbol} {dir_clean}, Loss: -${loss_usd:.2f})...")
+        logger.warning(f"[POST-MORTEM] Conducting forensic audit on losing trade {ticket_id} ({symbol} {dir_clean}, Loss: -${loss_usd:.2f})...")
 
         # Extract market snapshot features
         ema233 = float(market_snapshot.get("ema233", entry_price))

@@ -34,7 +34,7 @@ async def execute_market_order(*args, **kwargs) -> Dict[str, Any]:
     """Strictly rejects order dispatch: MatchTrader execution is permanently decommissioned."""
     return {
         "ok": False,
-        "status": "REJECTED",
+        "status": "REJECTED_DECOMMISSIONED_BRIDGE",
         "reason": "MATCHTRADER_STRICTLY_DECOMMISSIONED_AND_EXCISED",
         "venue": "MatchTrader"
     }
@@ -44,7 +44,7 @@ async def execute_signal(signal: Dict[str, Any] = None, *args, **kwargs) -> Dict
     """Strictly rejects signal dispatch: MatchTrader execution is permanently decommissioned."""
     return {
         "ok": False,
-        "status": "REJECTED",
+        "status": "REJECTED_DECOMMISSIONED_BRIDGE",
         "reason": "MATCHTRADER_STRICTLY_DECOMMISSIONED_AND_EXCISED",
         "venue": "MatchTrader"
     }

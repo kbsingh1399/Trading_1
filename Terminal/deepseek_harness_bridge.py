@@ -310,10 +310,25 @@ class DeepSeekHarnessBridge:
     def spawn_contained_process(self, args: list, **kwargs) -> subprocess.Popen:
         """
         Spawns child subprocess within Win32 Job Object (<= 150 MB RAM budget and kill-on-close).
+        Strictly fail-closed: terminates child and raises RuntimeError if containment fails.
         """
         proc = subprocess.Popen(args, **kwargs)
-        if self.job_handle and sys.platform == "win32":
-            assign_process_to_job(self.job_handle, proc.pid)
+        if sys.platform == "win32":
+            assigned = False
+            try:
+                if self.job_handle:
+                    assigned = bool(assign_process_to_job(self.job_handle, proc.pid))
+            except Exception as e:
+                logger.error(f"Failed to assign process {proc.pid} to Win32 Job Object: {e}")
+                assigned = False
+
+            if not assigned:
+                try:
+                    terminate_process_tree(proc.pid)
+                except Exception:
+                    pass
+                raise RuntimeError(f"Win32 Job Object containment failed for pid {proc.pid}; child terminated to prevent unconstrained execution.")
+
         self._active_children.append(proc)
         return proc
 

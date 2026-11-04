@@ -1122,13 +1122,17 @@ class DeltaExchangeTrader:
                         }
                 except Exception as e:
                     logger.error(f"[{prod['symbol']}] Post-fill bracket re-anchoring error: {e}. Closing position immediately.")
-                    self.close_position(prod["symbol"])
+                    close_res = self.close_position(prod["symbol"])
+                    is_flattened = bool(close_res.get("success", False) or close_res.get("result") or close_res.get("id"))
+                    if not is_flattened:
+                        logger.critical(f"🚨 CRITICAL INCIDENT: EMERGENCY FLATTENING FAILED FOR {prod['symbol']}: {close_res}")
                     return {
                         "ok": False,
                         "status": "REJECTED_FAILED_BRACKET_ANCHOR",
                         "reason": f"BRACKET_ANCHOR_EXCEPTION: {str(e)}",
                         "venue": "DeltaExchangeIndia",
-                        "symbol": prod["symbol"]
+                        "symbol": prod["symbol"],
+                        "flatten_confirmed": is_flattened
                     }
 
             return {

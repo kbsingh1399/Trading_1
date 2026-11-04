@@ -29,7 +29,7 @@ def test_matchtrader_constants_and_dispatch_fail_closed():
     assert mt.MAX_CONCURRENT_POSITIONS == MAX_OPEN_POSITIONS == 2
     assert mt.LIVE_DISPATCH_ENABLED is False
     res = asyncio.run(mt.execute_market_order(None, "BUY", 0.01, "BTCUSD", 1.0, 2.0))
-    assert res["ok"] is False and res["status"] == "REJECTED"
+    assert res["ok"] is False and res["status"] in ("REJECTED", "REJECTED_DECOMMISSIONED_BRIDGE")
 
 
 def test_risk_budget_rejects_nonfinite_and_cap_above_mandate():

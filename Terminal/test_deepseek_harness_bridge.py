@@ -171,3 +171,13 @@ def test_context_manager_cleanup():
         job = bridge.job_handle
     # On exit, job_handle should be cleared
     assert bridge.job_handle is None
+
+
+def test_spawn_contained_process_fails_closed_on_job_failure():
+    bridge = DeepSeekHarnessBridge(api_key="mock")
+    with patch("Terminal.deepseek_harness_bridge.sys.platform", "win32"):
+        with patch("Terminal.deepseek_harness_bridge.assign_process_to_job", return_value=False):
+            with pytest.raises(RuntimeError) as exc_info:
+                bridge.spawn_contained_process([sys.executable, "-c", "import time; time.sleep(1)"])
+            assert "Win32 Job Object containment failed" in str(exc_info.value)
+    bridge.close()
