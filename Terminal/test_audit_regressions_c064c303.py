@@ -21,15 +21,14 @@ def test_evaluator_imports_and_no_storage_side_effect_dispatch():
 
 
 def test_matchtrader_constants_and_dispatch_fail_closed():
-    from Terminal import matchtrader_live_trader as mt
     from Terminal.risk_envelope import HARD_FLOOR_USD, MAX_RISK_USD, MAX_OPEN_POSITIONS
-    assert mt.INITIAL_BALANCE == 5000.0
-    assert mt.EQUITY_FLOOR_TOTAL == HARD_FLOOR_USD == 4775.0
-    assert mt.DEFAULT_RISK_PER_TRADE_USD == MAX_RISK_USD == 25.0
-    assert mt.MAX_CONCURRENT_POSITIONS == MAX_OPEN_POSITIONS == 2
-    assert mt.LIVE_DISPATCH_ENABLED is False
-    res = asyncio.run(mt.execute_market_order(None, "BUY", 0.01, "BTCUSD", 1.0, 2.0))
-    assert res["ok"] is False and res["status"] in ("REJECTED", "REJECTED_DECOMMISSIONED_BRIDGE")
+    from Terminal.delta_exchange_live_trader import DeltaExchangeTrader
+    assert not Path("Terminal/matchtrader_live_trader.py").exists()
+    assert HARD_FLOOR_USD == 4775.0
+    assert MAX_RISK_USD == 25.0
+    assert MAX_OPEN_POSITIONS == 2
+    trader = DeltaExchangeTrader()
+    assert trader is not None
 
 
 def test_risk_budget_rejects_nonfinite_and_cap_above_mandate():

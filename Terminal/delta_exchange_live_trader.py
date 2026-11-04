@@ -47,6 +47,88 @@ def set_live_dispatch(enabled: bool):
     logger.info(f"Delta Live Dispatch state set to: {LIVE_DISPATCH_ENABLED}")
 
 
+# Taker rate used when product metadata lacks an explicit fee schedule.
+TAKER_FEE_DEFAULT = 0.00075
+
+
+def solve_fee_aware_grid(
+    entry: float,
+    stop_loss: float,
+    contract_value: float,
+    taker_fee_rate: float = TAKER_FEE_DEFAULT,
+    cap_usd: float = 25.0,
+    max_contracts: int = 100
+) -> Dict[str, Any]:
+    """
+    PATCH D7 (SSOT helper): Discrete Contract Grid solver — k_max form.
+
+    Solves the SAME integer grid as Terminal.risk_envelope.admissible_volume, but
+    returns the LARGEST admissible size under the risk cap (admissible_volume is
+    intentionally k_min / survival-minimal by Arena spec — wiring k_min into live
+    dispatch would size every trade at 1 contract). Loss per contract INCLUDES
+    round-trip taker commissions so the $25 cap covers stop-out + fees:
+
+        loss_per_contract = |entry - sl| * contract_value
+                           + 2 * taker_fee_rate * entry * contract_value
+
+    Returns dict with: ok, size, realized_risk_usd, loss_per_contract,
+    commission_per_contract, reason (on rejection).
+    """
+    from decimal import Decimal, ROUND_FLOOR
+
+    risk_dist = abs(float(entry) - float(stop_loss))
+    contract_value = float(contract_value)
+    taker_fee_rate = float(taker_fee_rate)
+    cap_usd = float(cap_usd)
+
+    if risk_dist <= 0 or contract_value <= 0 or cap_usd <= 0:
+        return {
+            "ok": False,
+            "size": 0,
+            "realized_risk_usd": 0.0,
+            "loss_per_contract": 0.0,
+            "reason": f"INVALID_RISK_INPUTS: dist={risk_dist}, cval={contract_value}, cap={cap_usd}"
+        }
+
+    # Directional round-trip taker commission per contract (entry + SL exit)
+    commission_per_contract = 2.0 * taker_fee_rate * float(entry) * contract_value
+    loss_per_contract = (risk_dist * contract_value) + commission_per_contract
+
+    if loss_per_contract <= 0:
+        return {"ok": False, "size": 0, "realized_risk_usd": 0.0, "reason": "NON_POSITIVE_LOSS_PER_CONTRACT"}
+
+    if loss_per_contract > cap_usd:
+        return {
+            "ok": False,
+            "size": 0,
+            "realized_risk_usd": 0.0,
+            "loss_per_contract": loss_per_contract,
+            "commission_per_contract": commission_per_contract,
+            "reason": (
+                f"SINGLE_CONTRACT_ALL_IN_RISK_EXCEEDS_CAP: "
+                f"${loss_per_contract:.4f} (stop ${risk_dist * contract_value:.4f} + fee ${commission_per_contract:.4f}) > ${cap_usd:.2f}"
+            )
+        }
+
+    # k_max form: largest integer k where k * loss_per_contract <= cap_usd
+    d_cap = Decimal(str(cap_usd))
+    d_loss = Decimal(str(loss_per_contract))
+    k_max = int((d_cap / d_loss).to_integral_value(rounding=ROUND_FLOOR))
+    size = max(1, min(k_max, int(max_contracts)))
+    realized_risk = size * loss_per_contract
+
+    return {
+        "ok": True,
+        "size": size,
+        "realized_risk_usd": round(realized_risk, 4),
+        "loss_per_contract": round(loss_per_contract, 4),
+        "commission_per_contract": round(commission_per_contract, 4),
+        "pure_risk_usd": round(size * risk_dist * contract_value, 4),
+        "fees_reserved_usd": round(size * commission_per_contract, 4),
+        "reason": "OK"
+    }
+
+
 def load_credentials() -> Dict[str, str]:
     """Loads API key and secret from environment or ~/.delta-exchange-mcp/config.env."""
     key = os.environ.get("DELTA_API_KEY")
@@ -165,7 +247,7 @@ class DeltaExchangeTrader:
                 return meta
         return None
 
-    def request(self, method: str, path: str, params: Optional[Dict] = None, body: Optional[Dict] = None) -> Dict[str, Any]:
+    def request(self, method: str, path: str, params: Optional[Dict] = None, body: Optional[Dict] = None, _retry_depth: int = 0) -> Dict[str, Any]:
         """Signs and executes authenticated HTTP request against Delta Exchange India."""
         ts = self.get_timestamp()
         query_str = ""
@@ -201,11 +283,15 @@ class DeltaExchangeTrader:
             req_func = requests.post
         resp = req_func(url, headers=headers, data=body_str if body_str else None, timeout=10)
 
-        # Re-sync server time if signature expired error occurs
-        if resp.status_code == 401 and "expired_signature" in resp.text:
-            logger.warning("Clock drift detected. Resyncing with Delta server...")
+        # PATCH D1: bounded to ONE resync+retry. A persistently-drifting clock or a
+        # revoked key previously recursed infinitely — an unbounded request storm
+        # while holding the position-management mutex (guardian starvation).
+        if resp.status_code == 401 and "expired_signature" in resp.text and _retry_depth < 1:
+            logger.warning("Clock drift detected. Resyncing with Delta server (single bounded retry)...")
             self._sync_server_time()
-            return self.request(method, path, params, body)
+            return self.request(method, path, params, body, _retry_depth=_retry_depth + 1)
+        if resp.status_code == 401 and "expired_signature" in resp.text:
+            logger.error("Signature still expired after one resync+retry. Failing closed — NOT retrying again.")
 
         try:
             data = resp.json()
@@ -280,22 +366,37 @@ class DeltaExchangeTrader:
             logger.warning(f"Error fetching normalized wallet available margin: {e}")
             return 0.0
 
-    def get_open_positions(self) -> List[Dict[str, Any]]:
-        """Returns all open margined positions (REST primary, CDP fallback)."""
+    def get_open_positions(self) -> Optional[List[Dict[str, Any]]]:
+        """
+        PATCH D2: returns None when the Delta API response cannot be verified.
+        None means UNKNOWN STATE and must be treated fail-closed by every caller —
+        it is NOT an empty book. Returning [] here previously caused the guardian
+        to prune all anchors and cancel live SL/TP brackets on a single API blip.
+        """
         res = self.request("GET", "/v2/positions/margined")
         if res.get("result") is not None:
             return res.get("result", [])
-        return []
+        return None
 
-    def get_active_positions(self) -> List[Dict[str, Any]]:
-        """Returns non-zero open positions."""
+    def get_active_positions(self) -> Optional[List[Dict[str, Any]]]:
+        """Returns non-zero open positions, or None when the book is unverifiable (fail-closed)."""
         raw = self.get_open_positions()
+        if raw is None:
+            return None
         return [p for p in raw if int(p.get("size", 0)) != 0]
 
     def has_open_position(self, symbol: str) -> bool:
-        """Checks if a position is currently open for the given symbol."""
+        """
+        Checks if a position is currently open for the given symbol.
+        PATCH D2: UNKNOWN book state fails CLOSED — assume in-position so an
+        unverifiable book can never authorize a fresh entry.
+        """
         clean = symbol.upper().replace(".PI", "").replace("USDT", "").replace("USD", "").strip()
-        for p in self.get_active_positions():
+        active = self.get_active_positions()
+        if active is None:
+            logger.warning(f"[{symbol}] Position book unavailable — treating symbol as IN-POSITION (fail-closed, entry blocked).")
+            return True
+        for p in active:
             p_sym = p.get("product_symbol", "")
             p_clean = p_sym.upper().replace(".PI", "").replace("USDT", "").replace("USD", "").strip()
             if clean == p_clean or p_sym.upper() == symbol.upper():
@@ -319,10 +420,15 @@ class DeltaExchangeTrader:
         """Cancels an existing order on Delta Exchange India."""
         return self.request("DELETE", "/v2/orders", body={"id": int(order_id), "product_id": int(product_id)})
 
-    def get_open_orders(self) -> List[Dict[str, Any]]:
-        """Returns all open and pending conditional orders (including bracket TP/SL)."""
+    def get_open_orders(self) -> Optional[List[Dict[str, Any]]]:
+        """
+        PATCH D2: returns None when the order book cannot be verified (fail-closed),
+        so orphan-cancellation can never run against a partially-fetched book.
+        """
         res = self.request("GET", "/v2/orders", params={"states": "open,pending"})
-        return res.get("result", [])
+        if res.get("result") is not None:
+            return res.get("result", [])
+        return None
 
     def set_leverage(self, product_id: int, leverage: int = 10) -> Dict[str, Any]:
         """Sets leverage multiplier for a contract."""
@@ -351,7 +457,13 @@ class DeltaExchangeTrader:
         side_clean = "buy" if side.lower() in ["buy", "bullish", "long"] else "sell"
 
         # Ensure leverage is configured
-        self.set_leverage(prod_id, leverage)
+        # PATCH D8: set leverage once per (product, leverage) per session.
+        cached_lev = getattr(self, "_leverage_cache", {}).get(prod_id)
+        if cached_lev != int(leverage):
+            self.set_leverage(prod_id, int(leverage))
+            if not hasattr(self, "_leverage_cache"):
+                self._leverage_cache = {}
+            self._leverage_cache[prod_id] = int(leverage)
 
         body: Dict[str, Any] = {
             "product_id": prod_id,
@@ -394,6 +506,58 @@ class DeltaExchangeTrader:
             body["limit_price"] = self.quantize_price(limit_price, product_id)
         return self.request("PUT", "/v2/orders", body=body)
 
+    def confirm_market_fill(
+        self,
+        product_id: int,
+        order_id: Optional[int],
+        order_info: Dict[str, Any],
+        fallback_mark_price: float,
+        max_wait_s: float = 3.0
+    ) -> Tuple[float, str]:
+        """
+        PATCH D5: resolves the ACTUAL executed fill price for a market order.
+        1) immediate response average_fill_price (if already populated)
+        2) poll GET /v2/fills for our order_id (up to max_wait_s)
+        3) NEVER the planned signal price — fall back to the pre-trade live mark.
+        Returns (fill_price, source_tag).
+        """
+        # 1) immediate response
+        try:
+            fp = float(order_info.get("average_fill_price") or 0.0)
+            if fp > 0:
+                return fp, "ORDER_RESPONSE"
+        except (ValueError, TypeError):
+            pass
+
+        # 2) poll the fills ledger
+        deadline = time.time() + max_wait_s
+        while time.time() < deadline:
+            try:
+                fills = self.get_fills(limit=20)
+                for f in fills:
+                    try:
+                        if int(f.get("product_id", -1)) != int(product_id):
+                            continue
+                        if order_id is not None and f.get("order_id") not in (None, order_id, int(order_id), str(order_id)):
+                            continue
+                        px = float(f.get("price") or 0.0)
+                        if px > 0:
+                            return px, "FILLS_LEDGER"
+                    except (ValueError, TypeError):
+                        continue
+            except Exception as exc:
+                logger.debug(f"Fill confirmation poll error: {exc}")
+            time.sleep(0.3)
+
+        # 3) conservative fresh fallback (planned entry is FORBIDDEN here)
+        if fallback_mark_price and fallback_mark_price > 0:
+            logger.warning(
+                f"[product {product_id}] Fill not yet visible; falling back to pre-trade MARK "
+                f"{fallback_mark_price} (planned entry is never used for risk anchoring)."
+            )
+            return float(fallback_mark_price), "MARK_FALLBACK"
+        return 0.0, "UNCONFIRMED"
+
     def reanchor_brackets_to_fill(
         self,
         symbol: str,
@@ -413,11 +577,17 @@ class DeltaExchangeTrader:
         prod_id = prod["id"]
         contract_val = float(prod.get("contract_value", 1.0) or 1.0)
 
-        # Retry loop to wait for Delta backend to persist child bracket orders
+        # PATCH D3: wait for Delta backend to persist child bracket orders.
+        # Uses ~10s exponential backoff + fails closed if orders cannot be read.
         tp_order = None
         sl_order = None
-        for attempt in range(4):
+        backoff_delays = [0.15, 0.35, 0.75, 1.5, 2.5, 4.0]
+        for attempt, delay in enumerate(backoff_delays, start=1):
             orders = self.get_open_orders()
+            if orders is None:
+                # API read error: retry rather than immediately declaring bracket lost
+                time.sleep(delay)
+                continue
             for o in orders:
                 if o.get("product_id") == prod_id:
                     s_type = str(o.get("stop_order_type", "")).lower()
@@ -427,7 +597,7 @@ class DeltaExchangeTrader:
                         sl_order = o
             if tp_order and sl_order:
                 break
-            time.sleep(0.25)
+            time.sleep(delay)
 
         if not tp_order or not sl_order:
             missing = []
@@ -474,10 +644,18 @@ class DeltaExchangeTrader:
                         "reason": f"Failed to edit SL order: {sl_edit_res.get('error', 'UNKNOWN')}",
                         "edit_res": sl_edit_res
                     }
-                logger.info(f"[{symbol}] Calibrated SL inward to {calibrated_sl} to preserve ${max_allowed_risk_usd:.2f} risk cap")
+                logger.warning(
+                    f"[{symbol}] SLIPPAGE BREACH: fill {fill_price} vs planned SL {sl_price} inflated "
+                    f"risk to ${realized_risk_usd:.2f} > ${max_allowed_risk_usd:.2f} cap. SL tightened "
+                    f"inward to {calibrated_sl} (size={size}, contract_val={contract_val}). "
+                    f"Track opening slippage per product and tighten the D6 drift/spread gates if recurrent."
+                )
 
-        # Calibrate TP to guarantee at least min_rr:1
-        # Directional ceiling so R:R >= min_rr strictly after tick quantization
+        # PATCH D4: guarantee at least min_rr:1 with a WIDEN-ONLY ratchet.
+        # The evaluator frequently extends TP1 to a liquidation magnet (2.4-3.0R+).
+        # The previous code snapped any TP that differed from the exact-2.0R grid
+        # back to 2.0R — amputating the magnet-extended reward. TP may only move
+        # OUTWARD from the fill, never inward.
         target_ticks = math.ceil((min_rr * actual_risk) / tick_size)
         calibrated_tp = fill_price + (dir_mult * target_ticks * tick_size)
 
@@ -486,43 +664,59 @@ class DeltaExchangeTrader:
         current_reward = abs(current_tp - fill_price)
         current_rr = current_reward / max(actual_risk, 1e-8)
 
+        if current_tp > 0:
+            if pos_direction == "BUY":
+                effective_tp = max(calibrated_tp, current_tp)   # keep the wider target
+            else:
+                effective_tp = min(calibrated_tp, current_tp)
+        else:
+            effective_tp = calibrated_tp
+        effective_rr = abs(effective_tp - fill_price) / max(actual_risk, 1e-8)
+
         register_position_anchor(
             symbol=symbol,
             product_id=prod_id,
             direction=pos_direction,
             entry_price=fill_price,
             initial_sl=calibrated_sl,
-            initial_tp=calibrated_tp,
+            initial_tp=effective_tp,
             size=size,
             initial_risk_dist=actual_risk
         )
 
-        if current_rr < min_rr or abs(calibrated_tp - current_tp) > float(prod.get("tick_size", 0.01)):
+        needs_edit = (current_rr < min_rr) or (abs(effective_tp - current_tp) > tick_size * 0.5)
+        if needs_edit:
             edit_res = self.edit_order(
                 order_id=tp_order["id"],
                 product_id=prod_id,
                 size=size,
-                stop_price=calibrated_tp
+                stop_price=effective_tp
             )
             is_success = bool(edit_res.get("success", False) or edit_res.get("result") or edit_res.get("id"))
             if not is_success:
-                logger.error(f"[{symbol}] Failed to re-anchor TP to {calibrated_tp}: {edit_res}")
+                logger.error(f"[{symbol}] Failed to re-anchor TP to {effective_tp}: {edit_res}")
                 return {
                     "ok": False,
                     "status": "TP_EDIT_FAILED",
                     "reason": f"Failed to edit TP order: {edit_res.get('error', 'UNKNOWN')}",
                     "edit_res": edit_res
                 }
-            logger.info(f"[{symbol}] Re-anchored TP from {current_tp} to {calibrated_tp} (R:R calibrated from {current_rr:.2f}:1 to {min_rr:.1f}:1 relative to fill {fill_price})")
+            logger.info(f"[{symbol}] Re-anchored TP from {current_tp} to {effective_tp} (R:R {current_rr:.2f}:1 -> {effective_rr:.2f}:1 relative to fill {fill_price}, widen-only)")
             return {
                 "ok": True,
                 "status": "REANCHORED",
-                "calibrated_tp": calibrated_tp,
+                "calibrated_tp": effective_tp,
                 "calibrated_sl": calibrated_sl,
-                "rr": min_rr,
+                "rr": effective_rr,
                 "edit_res": edit_res
             }
-        return {"ok": True, "status": "ALREADY_COMPLIANT", "current_rr": current_rr}
+        return {
+            "ok": True,
+            "status": "ALREADY_COMPLIANT",
+            "current_rr": current_rr,
+            "calibrated_sl": calibrated_sl,
+            "calibrated_tp": effective_tp
+        }
 
     reanchor_bracket_upon_fill = reanchor_brackets_to_fill
 
@@ -541,22 +735,31 @@ class DeltaExchangeTrader:
 
     def _audit_and_trail_positions_guarded(self) -> List[Dict[str, Any]]:
         reports = []
+        # PATCH D2 (fail-closed ordering): fetch and VERIFY both books BEFORE any
+        # destructive action. A failed positions/orders call previously looked like
+        # "flat account": prune wiped every anchor and orphan-cancel nuked live
+        # SL/TP brackets, leaving real positions naked on a transient API blip.
         raw_positions = self.get_active_positions()
         if raw_positions is None:
+            logger.warning("Delta positions API UNAVAILABLE — skipping audit cycle entirely (fail-closed: no prune, no orphan cancel, no trailing).")
+            return reports
+
+        open_orders = self.get_open_orders()
+        if open_orders is None:
+            logger.warning("Delta orders API UNAVAILABLE — skipping audit cycle entirely (fail-closed: no prune, no orphan cancel, no trailing).")
             return reports
 
         active_positions = [p for p in raw_positions if int(p.get("size", 0)) != 0]
         active_symbols = [p.get("product_symbol", "") for p in active_positions]
 
-        # Invariant 1: Always prune closed positions immediately (even if 0 remain)
+        # Invariant 1: prune anchors ONLY on a verified book
         prune_closed_positions(active_symbols)
 
-        # Invariant 2: Orphaned ghost orders cleanup (cancel resting orders for closed positions)
+        # Invariant 2: orphaned ghost orders cleanup on a verified book
         active_sym_set = {
             s.upper().replace(".PI", "").replace("USDT", "").replace("USD", "") + "USD"
             for s in active_symbols if s
         }
-        open_orders = self.get_open_orders()
         for o in open_orders:
             raw_sym = o.get("product_symbol") or ""
             if not raw_sym:
@@ -592,8 +795,11 @@ class DeltaExchangeTrader:
         except Exception as e:
             logger.warning(f"Could not load live tickers for trailing SL: {e}")
 
-        # Refresh open orders after orphan cancellation
+        # Refresh open orders after orphan cancellation (fail-closed: verified book only)
         open_orders = self.get_open_orders()
+        if open_orders is None:
+            logger.warning("Delta orders API UNAVAILABLE post-cleanup — skipping trailing audit this cycle (fail-closed).")
+            return reports
 
         for pos in active_positions:
             p_sym = pos.get("product_symbol", "")
@@ -861,9 +1067,15 @@ class DeltaExchangeTrader:
     def close_position(self, symbol: str) -> Dict[str, Any]:
         """
         Market closes any active open position for the given symbol (reduce-only).
+        PATCH D2: unverifiable position book fails closed with an explicit error
+        (never silently reports NOT_FOUND on an API failure).
         """
         clean = symbol.upper().replace(".PI", "").replace("USDT", "").replace("USD", "").strip()
-        for p in self.get_active_positions():
+        active = self.get_active_positions()
+        if active is None:
+            logger.error(f"[EMERGENCY CLOSE] [{symbol}] Position book UNAVAILABLE — cannot verify/close position. Retry recommended.")
+            return {"ok": False, "status": "POSITION_BOOK_UNAVAILABLE", "reason": f"API failure while closing {symbol} — RETRY"}
+        for p in active:
             p_sym = p.get("product_symbol", "")
             p_clean = p_sym.upper().replace(".PI", "").replace("USDT", "").replace("USD", "").strip()
             if clean == p_clean or p_sym.upper() == symbol.upper():
@@ -950,6 +1162,12 @@ class DeltaExchangeTrader:
 
         # Check max concurrent positions limit vs free cash availability
         active_pos = self.get_active_positions()
+        if active_pos is None:
+            return {
+                "ok": False,
+                "status": "REJECTED",
+                "reason": "POSITION_BOOK_UNAVAILABLE_FAIL_CLOSED: cannot verify existing positions before dispatch"
+            }
         free_cash_mode = os.environ.get("DELTA_FREE_CASH_MODE", "true").lower() in ("true", "1", "yes")
         avail_margin = self.get_available_margin_usd()
 
@@ -1036,15 +1254,53 @@ class DeltaExchangeTrader:
             return {"ok": False, "status": "REJECTED", "reason": "MISSING_MANDATORY_BRACKET_SL_TP"}
 
         dir_norm = "BUY" if direction in ("BUY", "BULLISH", "LONG") else "SELL"
+
+        # PATCH D6: live microstructure gate before dispatch.
+        # (a) fetch the product's live ticker; (b) enforce the 45bps spread gate
+        # with the REAL spread (was hardcoded 0.0 = decorative); (c) reject when
+        # the market has drifted >= 35% of the stop distance (or 1% of price,
+        # whichever is smaller) away from the planned signal entry.
+        live_mark_price = 0.0
+        spread_bps_live = 0.0
+        try:
+            tk_res = self.request("GET", f"/v2/tickers/{prod['id']}")
+            tk = tk_res.get("result", {}) if isinstance(tk_res, dict) else {}
+            if isinstance(tk, list):
+                tk = tk[0] if tk else {}
+            live_mark_price = float(tk.get("mark_price") or 0.0)
+            best_bid = float(tk.get("best_bid") or tk.get("bid") or 0.0)
+            best_ask = float(tk.get("best_ask") or tk.get("ask") or 0.0)
+            if best_bid > 0 and best_ask >= best_bid:
+                spread_bps_live = ((best_ask - best_bid) / ((best_ask + best_bid) / 2.0)) * 10000.0
+        except Exception as exc:
+            logger.warning(f"[{sym}] Live ticker fetch error: {exc}")
+
+        if live_mark_price <= 0:
+            return {"ok": False, "status": "REJECTED", "reason": "LIVE_TICKER_UNAVAILABLE_FAIL_CLOSED"}
+
         geom_ok, geom_reason = validate_trade_geometry(
             direction=dir_norm,
             entry=entry,
             stop_loss=sl,
             take_profit=tp,
-            spread_bps=0.0
+            spread_bps=spread_bps_live
         )
         if not geom_ok:
             return {"ok": False, "status": "REJECTED", "reason": f"INVALID_TRADE_GEOMETRY: {geom_reason}"}
+
+        # Stale-entry drift veto: market already ran away from the signal price.
+        r0_dist = abs(entry - sl)
+        max_drift = min(0.35 * r0_dist, 0.01 * entry)
+        if abs(live_mark_price - entry) > max_drift:
+            return {
+                "ok": False,
+                "status": "REJECTED",
+                "reason": (
+                    f"STALE_ENTRY_PRICE_DRIFT: |mark {live_mark_price:.8f} - entry {entry:.8f}| "
+                    f"= {abs(live_mark_price - entry):.8f} > tolerance {max_drift:.8f} "
+                    f"(0.35 x R0 {r0_dist:.8f}); signal price no longer executable at planned geometry"
+                )
+            }
 
         side = "buy" if direction in ("BUY", "BULLISH", "LONG") else "sell"
 
@@ -1053,23 +1309,32 @@ class DeltaExchangeTrader:
         if leverage < 1:
             leverage = 20
 
-        # Rigorous Discrete Contract Sizing via MAX_RISK_USD ($25.00) and available margin
+        # PATCH D7: fee-aware Discrete Contract Grid sizing (SSOT helper
+        # solve_fee_aware_grid — same integer grid as risk_envelope.admissible_volume,
+        # k_max form). Round-trip taker commission is INSIDE the per-contract loss so
+        # the $25.00 cap covers stop-out + fees (previously fees were unbudgeted:
+        # ~15% of the cap leaked on a typical $2,500-notional / 1%-stop trade).
         from Terminal.risk_envelope import MAX_RISK_USD
-        contract_val = float(prod.get("contract_value", 1.0) or 1.0)
-        risk_dist = abs(entry - sl)
-        single_contract_risk = risk_dist * contract_val
-        if single_contract_risk > MAX_RISK_USD:
-            return {
-                "ok": False,
-                "status": "REJECTED",
-                "reason": f"SINGLE_CONTRACT_RISK_EXCEEDS_CAP: ${single_contract_risk:.2f} > ${MAX_RISK_USD:.2f}"
-            }
 
-        if risk_dist > 0 and contract_val > 0:
-            calc_contracts = int(MAX_RISK_USD / single_contract_risk)
-            size = max(1, min(calc_contracts, 100))
-        else:
-            size = 1
+        contract_val = float(prod.get("contract_value", 1.0) or 1.0)
+        taker_fee_rate = float(prod.get("taker_fee_rate", TAKER_FEE_DEFAULT) or TAKER_FEE_DEFAULT)
+        grid = solve_fee_aware_grid(
+            entry=entry,
+            stop_loss=sl,
+            contract_value=contract_val,
+            taker_fee_rate=taker_fee_rate,
+            cap_usd=MAX_RISK_USD,
+            max_contracts=100
+        )
+        if not grid["ok"]:
+            return {"ok": False, "status": "REJECTED", "reason": grid["reason"]}
+        size = int(grid["size"])
+        realized_risk_at_size = float(grid["realized_risk_usd"])
+        logger.info(
+            f"[{sym}] Discrete Contract Grid Sizing: {size} contracts @ entry {entry} (SL {sl}) -> "
+            f"Realized risk ${realized_risk_at_size:.2f} <= ${MAX_RISK_USD:.2f} "
+            f"(Loss/contract: ${grid['loss_per_contract']:.4f} including fee ${grid['commission_per_contract']:.4f})"
+        )
 
         # Margin reservation: Ensure trade initial margin does not exceed available free cash
         if avail_margin > 0.02 and contract_val > 0:
@@ -1101,8 +1366,27 @@ class DeltaExchangeTrader:
             ok = res.get("success", False) or ("result" in res and "id" in res.get("result", {}))
             if ok:
                 order_info = res.get("result", {})
-                fill_price_raw = order_info.get("average_fill_price")
-                fill_price = float(fill_price_raw) if fill_price_raw and float(fill_price_raw) > 0 else entry
+                # PATCH D5: confirm the ACTUAL fill (fills ledger -> mark fallback).
+                # Never anchor risk math to the planned signal price.
+                order_id = order_info.get("id")
+                fill_price, fill_source = self.confirm_market_fill(
+                    product_id=prod["id"],
+                    order_id=order_id,
+                    order_info=order_info,
+                    fallback_mark_price=live_mark_price
+                )
+                if fill_price <= 0:
+                    logger.error(f"[{prod['symbol']}] Fill price unconfirmable; closing position immediately (fail-closed).")
+                    close_res = self.close_position(prod["symbol"])
+                    return {
+                        "ok": False,
+                        "status": "REJECTED_UNCONFIRMED_FILL",
+                        "reason": "FILL_PRICE_UNCONFIRMED",
+                        "venue": "DeltaExchangeIndia",
+                        "symbol": prod["symbol"],
+                        "flatten_confirmed": bool(close_res.get("success", False) or close_res.get("result") or close_res.get("id"))
+                    }
+                logger.info(f"[{prod['symbol']}] Fill confirmed @ {fill_price} (source: {fill_source}, planned entry was {entry})")
                 try:
                     reanchor_res = self.reanchor_brackets_to_fill(
                         symbol=prod["symbol"],

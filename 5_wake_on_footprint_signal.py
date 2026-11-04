@@ -313,15 +313,21 @@ class FootprintSignalSentinel:
         evaluations = []
         now_ms = time.time() * 1000
 
-        # 1. Group signals on the exact same (symbol, bar_type, time_ms) candle/bar
+        # 1. PATCH W1: group on (symbol, bar_type, bar_variant, time_ms).
+        # bar_variant (bar_label: 'Range 10' vs 'Range 200' vs '100K' vs '250K' vs '5K')
+        # MUST be part of the identity: different bar constructions closing at the same
+        # instant are DIFFERENT candles. Merging them awarded the multi-signal cluster
+        # boost (+15/+20) for one volume event seen twice, and the ledger then
+        # suppressed the second variant permanently.
         candle_clusters = defaultdict(list)
         for s in raw_signals:
             s_sym = s.get("symbol", "N/A")
             s_bt = str(s.get("bar_type", "time")).lower()
             s_t = int(s.get("time_ms") or 0)
-            candle_clusters[(s_sym, s_bt, s_t)].append(s)
+            s_var = str(s.get("bar_label") or s.get("bar_variant") or "").strip() if s_bt != "time" else ""
+            candle_clusters[(s_sym, s_bt, s_var, s_t)].append(s)
 
-        for (sym, bar_type, t_ms), cluster in candle_clusters.items():
+        for (sym, bar_type, bar_variant, t_ms), cluster in candle_clusters.items():
             try:
                 is_mock = os.environ.get("MOCK_TEST_MODE") == "1" or "PYTEST_CURRENT_TEST" in os.environ or any(s.get("is_mock") for s in cluster)
                 if bar_type in ("range", "vol", "volume"):
@@ -335,7 +341,7 @@ class FootprintSignalSentinel:
                     is_bar_closed = is_mock or (open_ms > 0 and close_ms <= now_ms) or any(s.get("bar_closed") for s in cluster)
 
                 # Single Evaluation Invariant: Once reviewed, never evaluate again
-                if self.stack.ledger.is_evaluated(sym, open_ms, bar_type=bar_type):
+                if self.stack.ledger.is_evaluated(sym, open_ms, bar_type=bar_type, bar_variant=bar_variant):
                     logger.debug(f"⏭️ [ALREADY REVIEWED] {sym} {bar_type} bar {open_ms} already evaluated. Suppressed.")
                     continue
 
@@ -352,7 +358,8 @@ class FootprintSignalSentinel:
                         action="SUPPRESSED_UNLISTED_VENUE",
                         sig_name=str(cluster[0].get("sig_name", "Unlisted")),
                         direction=unlisted_dir,
-                        bar_type=bar_type
+                        bar_type=bar_type,
+                        bar_variant=bar_variant
                     )
                     continue
 
@@ -369,7 +376,8 @@ class FootprintSignalSentinel:
                         action="DISCARDED_STALE",
                         sig_name=str(cluster[0].get("sig_name", "Stale")),
                         direction=stale_dir,
-                        bar_type=bar_type
+                        bar_type=bar_type,
+                        bar_variant=bar_variant
                     )
                     continue
 
@@ -441,8 +449,24 @@ class FootprintSignalSentinel:
                 final_action = action_str
                 if is_actionable and direction in ("BUY", "SELL"):
                     if not is_bar_closed:
-                        logger.info(f"⏳ [IN-FLIGHT FORMING BAR] {sym} {bar_type} signal evaluated live. Live Delta execution withheld until bar close.")
-                        final_action = "ANALYZED_IN_FLIGHT_FORMING"
+                        # PATCH W2: PARK the actionable forming-bar cluster instead of
+                        # consuming it. Previously it was ledger-marked here, so the
+                        # Single-Evaluation invariant suppressed it at bar close —
+                        # actionable intra-bar signals NEVER executed.
+                        park_key = (sym, open_ms, bar_type, bar_variant)
+                        self.pending_signals[park_key] = {
+                            "cluster": cluster,
+                            "close_ms": close_ms,
+                            "bar_type": bar_type,
+                            "bar_variant": bar_variant,
+                            "open_ms": open_ms,
+                            "parked_at_ms": now_ms,
+                        }
+                        logger.info(
+                            f"⏳ [IN-FLIGHT FORMING BAR] {sym} {bar_type}{('/' + bar_variant) if bar_variant else ''} "
+                            f"actionable cluster PARKED (score {score:.1f}); will dispatch at bar close (close_ms={close_ms})."
+                        )
+                        final_action = "PARKED_IN_FLIGHT_FORMING"
                     else:
                         if winsound is not None:
                             try:
@@ -477,16 +501,19 @@ class FootprintSignalSentinel:
                     final_action = "FILTERED_SUB_THRESHOLD"
 
                 # Record in Evaluated Ledger ONLY after dispatch outcome is finalized
-                self.stack.ledger.mark_evaluated(
-                    symbol=sym,
-                    open_time_ms=open_ms,
-                    signal_id=sig_id,
-                    confluence_score=score,
-                    action=final_action,
-                    sig_name=sig_name,
-                    direction=direction,
-                    bar_type=bar_type
-                )
+                # (and skip marking parked forming-bars so they can be re-evaluated at close)
+                if final_action != "PARKED_IN_FLIGHT_FORMING":
+                    self.stack.ledger.mark_evaluated(
+                        symbol=sym,
+                        open_time_ms=open_ms,
+                        signal_id=sig_id,
+                        confluence_score=score,
+                        action=final_action,
+                        sig_name=sig_name,
+                        direction=direction,
+                        bar_type=bar_type,
+                        bar_variant=bar_variant
+                    )
 
             except Exception as e:
                 logger.error(f"Error processing signal cluster for {sym}: {e}", exc_info=True)
@@ -621,6 +648,39 @@ class FootprintSignalSentinel:
 
                 del self.active_positions_tracker[key]
 
+    async def _drain_pending_forming_bars(self):
+        """
+        PATCH W2: re-evaluates parked actionable forming-bar clusters at bar close.
+        A parked cluster older than 2h without a close is discarded as stale.
+        Ledger-marking happens ONLY here (after close), preserving the
+        Single-Evaluation invariant while making close-confirmed dispatch possible.
+        """
+        if not self.pending_signals:
+            return
+        now_ms = time.time() * 1000
+        for park_key in list(self.pending_signals.keys()):
+            parked = self.pending_signals[park_key]
+            close_ms = int(parked.get("close_ms") or 0)
+            if close_ms <= 0:
+                self.pending_signals.pop(park_key, None)
+                continue
+            if (now_ms - close_ms) > 7_200_000:   # > 2h stale
+                logger.info(f"⏳ [PARKED SIGNAL STALE] {park_key} never confirmed closed; discarding.")
+                self.pending_signals.pop(park_key, None)
+                continue
+            if now_ms < close_ms:
+                continue   # bar still forming
+            cluster = parked.get("cluster") or []
+            if not cluster:
+                self.pending_signals.pop(park_key, None)
+                continue
+            logger.info(f"🔔 [BAR CLOSED] Re-evaluating parked cluster {park_key} for confirmed-close dispatch.")
+            self.pending_signals.pop(park_key, None)
+            try:
+                await self.evaluate_and_dispatch(cluster)
+            except Exception as e:
+                logger.error(f"Error draining parked cluster {park_key}: {e}", exc_info=True)
+
     async def run_once(self):
         """Processes any unread footprint signals and audits running trades once."""
         new_signals = self.read_new_raw_signals()
@@ -686,6 +746,9 @@ class FootprintSignalSentinel:
                     if new_signals:
                         logger.info(f"⚡ Discovered {len(new_signals)} new footprint signal(s) [time/range/vol]. Immediate quantitative evaluation...")
                         await self.evaluate_and_dispatch(new_signals)
+
+                    # PATCH W2: drain parked forming-bar clusters once their bar closes
+                    await self._drain_pending_forming_bars()
 
                     # Advance durable offset after processing signals
                     if hasattr(self, "_pending_offset") and self._pending_offset > self.state.get("offset", 0):

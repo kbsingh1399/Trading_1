@@ -17,6 +17,7 @@ Governed by Arena Quant Audit (Round 2 & Sonnet 5.5 Institutional Verification):
 """
 
 import math
+import os
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 import logging
 from typing import Tuple, Optional, Dict, Any
@@ -26,7 +27,10 @@ logger = logging.getLogger("RiskEnvelope")
 # ---------------------------------------------------------------------------
 # Canonical Risk Constants (SINGLE SOURCE OF TRUTH ACROSS THE ENTIRE SYSTEM)
 # ---------------------------------------------------------------------------
-HARD_FLOOR_USD = 4775.00       # Contractual floor (USD 4,700) + Self-imposed safety buffer (USD 75) = USD 4,775
+# PATCH R1: env-overridable hard floor. Default preserves the FundingPips contract
+# semantics exactly ($4,775); a personal Delta India account may consciously set
+# RISK_HARD_FLOOR_USD (e.g. '0' or a personal survival floor) without code edits.
+HARD_FLOOR_USD = float(os.environ.get("RISK_HARD_FLOOR_USD", "4775.00"))
 HALT_CUSHION_USD = 20.00       # Prospective halt cushion >= worst-case single-trade execution reserve
 OPERATING_BUFFER_MIN = 20.00   # Canonical alias for HALT_CUSHION_USD
 MAX_RISK_USD = 25.00           # Strict nominal ceiling per trade (USD 25.00)

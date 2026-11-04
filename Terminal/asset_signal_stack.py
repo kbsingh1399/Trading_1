@@ -77,11 +77,16 @@ class EvaluatedSignalsLedger:
         self._evaluated: Dict[str, Dict[str, Any]] = {}
         self.load()
 
-    def _key(self, symbol: str, open_time_ms: int, bar_type: str = "time") -> str:
+    def _key(self, symbol: str, open_time_ms: int, bar_type: str = "time", bar_variant: str = "") -> str:
+        # PATCH S1: variant-aware key — 'range' bars (Range 10 vs Range 200) and 'vol'
+        # bars (100K vs 250K vs 5K) are distinct candle constructions and must never
+        # share a dedup key, else the second variant is silently suppressed after
+        # the first is reviewed (systematic signal loss during volume bursts).
         bt = str(bar_type or "time").lower()
         if bt == "time":
             return f"{symbol.upper()}:{open_time_ms}"
-        return f"{symbol.upper()}:{bt}:{open_time_ms}"
+        var = str(bar_variant or "").strip().replace(" ", "_")
+        return f"{symbol.upper()}:{bt}:{var}:{open_time_ms}"
 
     def load(self):
         jsonl_path = self.path if str(self.path).endswith(".jsonl") else self.path.with_suffix(".jsonl")
@@ -97,7 +102,8 @@ class EvaluatedSignalsLedger:
                         if line:
                             rec = json.loads(line)
                             bt = rec.get("bar_type", "time")
-                            k = self._key(rec.get("symbol", ""), rec.get("open_time_ms", 0), bt)
+                            var = rec.get("bar_variant", "")
+                            k = self._key(rec.get("symbol", ""), rec.get("open_time_ms", 0), bt, var)
                             recs[k] = rec
                 self._evaluated = recs
                 loaded = True
@@ -113,9 +119,16 @@ class EvaluatedSignalsLedger:
                 logger.warning(f"Error loading evaluated signals json ledger: {e}")
                 self._evaluated = {}
 
-    def is_evaluated(self, symbol: str, open_time_ms: int, bar_type: str = "time") -> bool:
-        """Returns True if this exact candle has already undergone evaluation."""
-        return self._key(symbol, open_time_ms, bar_type) in self._evaluated
+    def is_evaluated(self, symbol: str, open_time_ms: int, bar_type: str = "time", bar_variant: str = "") -> bool:
+        """Returns True if this exact candle (bar_type + variant) has already undergone evaluation."""
+        if self._key(symbol, open_time_ms, bar_type, bar_variant) in self._evaluated:
+            return True
+        # Backward compatibility: a pre-patch ledger record without the variant still
+        # suppresses the same bar for legacy-keyed (range/vol) entries.
+        bt = str(bar_type or "time").lower()
+        if bt != "time" and not str(bar_variant or "").strip():
+            return f"{symbol.upper()}:{bt}:{open_time_ms}" in self._evaluated
+        return False
 
     def mark_evaluated(
         self,
@@ -126,14 +139,16 @@ class EvaluatedSignalsLedger:
         action: str,
         sig_name: str = "",
         direction: str = "",
-        bar_type: str = "time"
+        bar_type: str = "time",
+        bar_variant: str = ""
     ):
         """Records the candle as evaluated and durably persists."""
-        key = self._key(symbol, open_time_ms, bar_type)
+        key = self._key(symbol, open_time_ms, bar_type, bar_variant)
         record = {
             "symbol": symbol.upper(),
             "open_time_ms": open_time_ms,
             "bar_type": str(bar_type or "time").lower(),
+            "bar_variant": str(bar_variant or "").strip(),
             "signal_id": signal_id,
             "confluence_score": round(confluence_score, 1),
             "action": action,

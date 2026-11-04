@@ -46,7 +46,7 @@ def test_no_duplicate_risk_definitions():
 def test_venue_modules_import_risk_envelope_and_match_canonical_values():
     """Verifies that all broker venues adhere to SSOT risk envelope constants."""
     from Terminal import risk_envelope
-    from Terminal import matchtrader_live_trader
+    # MatchTrader excised (Invariant #1)
     from Terminal import delta_exchange_live_trader
 
     # Canonical values in risk_envelope
@@ -57,11 +57,6 @@ def test_venue_modules_import_risk_envelope_and_match_canonical_values():
     assert risk_envelope.MIN_RR_RATIO == 2.00
 
     # MatchTrader venue alignment
-    assert matchtrader_live_trader.EQUITY_FLOOR_TOTAL == risk_envelope.HARD_FLOOR_USD
-    assert matchtrader_live_trader.MAX_CONCURRENT_POSITIONS == risk_envelope.MAX_OPEN_POSITIONS
-    assert matchtrader_live_trader.DEFAULT_RISK_PER_TRADE_USD == risk_envelope.MAX_RISK_USD
-    assert matchtrader_live_trader.MAX_DAILY_DRAWDOWN_LIMIT == risk_envelope.MAX_DAILY_LOSS_USD
-    assert matchtrader_live_trader.LIVE_DISPATCH_ENABLED is False
 
     # Delta Exchange India venue alignment
     assert delta_exchange_live_trader.MAX_DELTA_CONCURRENT_POSITIONS == risk_envelope.MAX_OPEN_POSITIONS

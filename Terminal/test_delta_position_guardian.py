@@ -467,7 +467,8 @@ def test_failed_reanchor_triggers_emergency_close(trader):
         }
     }
 
-    with patch("Terminal.delta_exchange_live_trader.LIVE_DISPATCH_ENABLED", True), patch.object(trader, "get_wallet_balances", return_value=healthy_wallets):
+    live_ticker = {"success": True, "result": {"mark_price": "80000.0", "best_bid": "79990.0", "best_ask": "80010.0"}}
+    with patch("Terminal.delta_exchange_live_trader.LIVE_DISPATCH_ENABLED", True), patch.object(trader, "get_wallet_balances", return_value=healthy_wallets), patch.object(trader, "request", return_value=live_ticker):
         with patch.object(trader, "get_active_positions", return_value=[]):
             with patch.object(trader, "place_order", return_value=order_success_response):
                 # Re-anchor fails because bracket orders could not be located

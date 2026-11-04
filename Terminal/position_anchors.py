@@ -138,31 +138,64 @@ def get_or_recover_anchor(
     if existing and abs(existing.get("entry_price", 0.0) - entry_price) < (entry_price * 0.001):
         return existing
 
-    # Cold-Start Recovery Hierarchy
+    # PATCH A1: Cold-Start Recovery Hierarchy — tier-aware R0 inference.
+    # The profit-side SL is itself tier information:
+    #   Tier 1: SL = breakeven (+1 tick)  -> |SL-lock| / TP-dist ~ 0
+    #   Tier 2: SL locks +1.0R0, TP widened to +3.0R0 -> ratio ~ 1/3
+    #   Tier 3: SL locks +2.0R0, TP at +4.0R0           -> ratio ~ 1/2
+    # The ratio discriminator is TICK-AGNOSTIC (a 1bp price tolerance missed the
+    # +1-tick BE buffer on small-tick instruments like HBAR). The old TP/2
+    # inference recovered r0 = 1.5x-true at Tier 2, corrupting every subsequent
+    # trailing threshold after a mid-trade daemon restart.
     dir_mult = 1.0 if direction.upper() == "BUY" else -1.0
-    is_sl_loss_side = (entry_price - cur_sl_price) * dir_mult > 0
+    sl_dist_signed = (entry_price - cur_sl_price) * dir_mult if cur_sl_price > 0 else 0.0
+    is_sl_loss_side = cur_sl_price > 0 and sl_dist_signed > 0
+    tp_dist = abs(cur_tp_price - entry_price) if (cur_tp_price and cur_tp_price > 0) else 0.0
+    eff_size = max(1, abs(size))
+    env_r0 = max_risk_usd / (eff_size * max(1e-6, contract_val))
 
-    if is_sl_loss_side and cur_sl_price > 0:
-        # Step 1: SL is still on loss side -> direct derivation
+    if cur_sl_price <= 0:
+        # No stop present (naked recovery): r0 from the unwidened 2R0 TP, else envelope.
+        if tp_dist > 0:
+            r0 = tp_dist / 2.0
+            recovered_tier = 1
+        else:
+            r0 = env_r0
+            recovered_tier = 0
+    elif is_sl_loss_side:
+        # Step 1: SL still on the loss side -> direct derivation (Tier 0)
         r0 = abs(entry_price - cur_sl_price)
         recovered_tier = 0
-    elif cur_tp_price and cur_tp_price > 0:
-        # Step 2: Infer from 2.0:1 Take-Profit target
-        reward_dist = abs(cur_tp_price - entry_price)
-        r0 = reward_dist / 2.0
-        recovered_tier = 1 if not is_sl_loss_side else 0
     else:
-        # Step 3: Canonical institutional risk envelope cap ($25.00)
-        eff_size = max(1, abs(size))
-        r0 = max_risk_usd / (eff_size * max(1e-6, contract_val))
-        recovered_tier = 0
+        # SL on the profit side: s = locked distance in R0 units.
+        s = abs(sl_dist_signed)
+        ratio = (s / tp_dist) if tp_dist > 0 else 1.0   # no TP -> treat as conservative
+        if ratio < 0.05:
+            # Tier 1 signature: SL at ~breakeven (+1 tick); r0 from unwidened 2R0 TP
+            r0 = (tp_dist / 2.0) if tp_dist > 0 else env_r0
+            recovered_tier = 1
+        elif tp_dist > 0 and abs(ratio - (1.0 / 3.0)) <= 0.15 * (1.0 / 3.0):
+            # Tier 2 signature: SL locks +1R0 (ratio 1/3 of the +3R0 widened TP)
+            r0 = s
+            recovered_tier = 2
+        elif tp_dist > 0 and abs(ratio - 0.5) <= 0.15 * 0.5:
+            # Tier 3 signature: SL locks +2R0, TP at +4R0 (ratio 1/2)
+            r0 = s / 2.0
+            recovered_tier = 3
+        else:
+            # Ambiguous (TP edit may have failed mid-widen): conservative default.
+            # r0 = s reproduces exact math for Tier 2 and only *understates* r_gain
+            # for Tier 3 — whose SL is already locked at the maximum tier, so no
+            # further ratchet is possible anyway. Never overstate r0.
+            r0 = s
+            recovered_tier = 2
 
     return register_position_anchor(
         symbol=clean_sym,
         product_id=product_id,
         direction=direction,
         entry_price=entry_price,
-        initial_sl=cur_sl_price if is_sl_loss_side else entry_price - (dir_mult * r0),
+        initial_sl=cur_sl_price if cur_sl_price > 0 else entry_price - (dir_mult * r0),
         initial_tp=cur_tp_price if cur_tp_price else entry_price + (dir_mult * 2.0 * r0),
         size=size,
         initial_risk_dist=r0,

@@ -283,7 +283,9 @@ class RealtimeSignalEvaluator:
         hd_intel = {}
         if getattr(self, "hyperdash", None):
             try:
-                hd_intel = self.hyperdash.get_asset_intel(sym) or {}
+                # PATCH E2: mark_price_hint anchors whale-liq cluster distances to the
+                # live signal price instead of deriving the mark from whale UPnL.
+                hd_intel = self.hyperdash.get_asset_intel(sym, mark_price_hint=(sig_price if sig_price > 0 else None)) or {}
             except Exception as exc:
                 logger.debug("Hyperdash intel fetch failed for %s: %s", sym, exc)
                 hd_intel = {}
@@ -667,6 +669,9 @@ class RealtimeSignalEvaluator:
                 reasons.append(f"Key Long Liq Strike Barrier: ${p:,.2f}")
 
         # 3.9 Hyperdash Institutional Smart Money & Crowd Squeeze Intelligence
+        # PATCH E2: (a) staleness guard — stale/dead intel is neutralized instead of
+        # blindly trusted; (b) WHALE LIQUIDATION SWEEP-TARGETS wired into Pillar 4.
+        hd_intel_age = self._finite(hd_intel.get("intel_age_sec"), None) if hd_intel else None
         if hd_intel and hd_intel.get("data_valid"):
             hd_smart_bias = float(hd_intel.get("smart_bias", 0.0))
             hd_crowd_bias = float(hd_intel.get("crowd_bias", 0.0))
@@ -698,6 +703,49 @@ class RealtimeSignalEvaluator:
                 if "CROWD_SQUEEZE_SHORT" in hd_signals or (hd_smart_bias <= -10.0 and hd_crowd_bias >= 20.0):
                     confluence_score += 10.0
                     reasons.append(f"Hyperdash Retail Long Squeeze Fuel (Crowd bias {hd_crowd_bias:+.1f}%)")
+
+            # WHALE LIQUIDATION SWEEP-TARGETS (new Pillar 4 alpha):
+            # SHORT whale-liq clusters above price = BUY-side squeeze magnets;
+            # LONG whale-liq clusters below price = SELL-side cascade magnets.
+            sweep_targets = hd_intel.get("sweep_targets") or []
+            if direction == "BUY":
+                fwd_fuel = [t for t in sweep_targets if t.get("side") == "SHORT" and 0.3 <= float(t.get("dist_pct", 99)) <= 5.0]
+                if fwd_fuel:
+                    best_fuel = max(fwd_fuel, key=lambda t: t.get("sweep_score", 0.0))
+                    confluence_score += 8.0
+                    reasons.append(
+                        f"Whale Short-Liq Sweep Target Above: ${best_fuel.get('liq_price'):,.2f} "
+                        f"(+{best_fuel.get('dist_pct'):.1f}%, ${best_fuel.get('notional_musd', 0):.1f}M whale fuel)"
+                    )
+                stop_fuel = [t for t in sweep_targets if t.get("side") == "LONG" and -1.2 <= float(t.get("dist_pct", -99)) <= -0.15]
+                if stop_fuel:
+                    worst = max(stop_fuel, key=lambda t: t.get("sweep_score", 0.0))
+                    confluence_score -= 8.0
+                    reasons.append(
+                        f"Whale Long-Liq Magnet Below Entry: ${worst.get('liq_price'):,.2f} "
+                        f"({worst.get('dist_pct'):.1f}%, ${worst.get('notional_musd', 0):.1f}M) — stop-out fuel (-8)"
+                    )
+            elif direction == "SELL":
+                fwd_fuel = [t for t in sweep_targets if t.get("side") == "LONG" and -5.0 <= float(t.get("dist_pct", -99)) <= -0.3]
+                if fwd_fuel:
+                    best_fuel = max(fwd_fuel, key=lambda t: t.get("sweep_score", 0.0))
+                    confluence_score += 8.0
+                    reasons.append(
+                        f"Whale Long-Liq Sweep Target Below: ${best_fuel.get('liq_price'):,.2f} "
+                        f"({best_fuel.get('dist_pct'):.1f}%, ${best_fuel.get('notional_musd', 0):.1f}M whale fuel)"
+                    )
+                stop_fuel = [t for t in sweep_targets if t.get("side") == "SHORT" and 0.15 <= float(t.get("dist_pct", 99)) <= 1.2]
+                if stop_fuel:
+                    worst = max(stop_fuel, key=lambda t: t.get("sweep_score", 0.0))
+                    confluence_score -= 8.0
+                    reasons.append(
+                        f"Whale Short-Liq Magnet Above Entry: ${worst.get('liq_price'):,.2f} "
+                        f"(+{worst.get('dist_pct'):.1f}%, ${worst.get('notional_musd', 0):.1f}M) — stop-out fuel (-8)"
+                    )
+        elif hd_intel and hd_intel.get("data_valid") is False and hd_intel_age is not None:
+            reasons.append(
+                f"Hyperdash intel stale (age {hd_intel_age:.0f}s) — neutralized (no boost, no penalty)"
+            )
 
         # Forecast aligned completed-bar flow ratios through the implemented API.
 
@@ -921,25 +969,47 @@ class RealtimeSignalEvaluator:
         geom_valid = False
 
         # Primary Execution Venue: Delta Exchange India Discrete Contract Solver
-        from Terminal.delta_exchange_live_trader import delta_client
-        delta_prod = delta_client.resolve_product(sym)
+        # PATCH E1: safe venue import; PATCH E3: fee-aware grid via SSOT helper
+        try:
+            from Terminal.delta_exchange_live_trader import delta_client
+            delta_prod = delta_client.resolve_product(sym)
+        except Exception as exc:
+            logger.warning("Delta trader unavailable — evaluation-only mode for %s: %s", sym, exc)
+            delta_prod = None
 
         if delta_prod:
             contract_val = float(delta_prod.get('contract_value', 1.0) or 1.0)
             risk_dist = abs(entry - sl)
-            single_risk = risk_dist * contract_val
-            if single_risk > 0 and single_risk <= MAX_RISK_USD:
-                solved_lot = max(1, int(MAX_RISK_USD / single_risk))
-                realized_risk = min(MAX_RISK_USD, solved_lot * single_risk)
+            # PATCH E3: fee-aware discrete grid via the dispatch SSOT helper
+            # (solve_fee_aware_grid — k_max form, commissions inside the cap).
+            from Terminal.delta_exchange_live_trader import solve_fee_aware_grid
+            grid = solve_fee_aware_grid(
+                entry=entry,
+                stop_loss=sl,
+                contract_value=contract_val,
+                taker_fee_rate=float(delta_prod.get('taker_fee_rate', 0.00075) or 0.00075),
+                cap_usd=MAX_RISK_USD,
+                max_contracts=100
+            )
+            if grid["ok"]:
+                solved_lot = int(grid["size"])
+                realized_risk = min(MAX_RISK_USD, float(grid["realized_risk_usd"]))
                 effective_max_risk = MAX_RISK_USD
                 geom_valid = True
                 vol_status = 'DELTA_QUALIFIED'
             else:
-                solved_lot = 1
-                realized_risk = single_risk
-                effective_max_risk = MAX_RISK_USD
-                geom_valid = (single_risk <= MAX_RISK_USD)
-                vol_status = 'DELTA_QUALIFIED' if geom_valid else 'RISK_CAP_EXCEEDED'
+                reason = grid["reason"]
+                if "SINGLE_CONTRACT_ALL_IN_RISK_EXCEEDS_CAP" in reason or "INVALID_RISK" in reason:
+                    solved_lot = 1
+                    realized_risk = float(grid.get("loss_per_contract") or 0.0)
+                    effective_max_risk = MAX_RISK_USD
+                    geom_valid = False
+                    vol_status = 'RISK_CAP_EXCEEDED'
+                else:
+                    solved_lot = None
+                    realized_risk = 0.0
+                    geom_valid = False
+                    vol_status = f'NO_ADMISSIBLE_GRID: {reason}'
         else:
 
             try:

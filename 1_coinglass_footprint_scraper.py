@@ -73,7 +73,7 @@ logger.setLevel(logging.INFO)
 logger.handlers = [handler]
 
 # Pre-load known signals to avoid duplicate emission
-KNOWN_SIGNAL_KEYS: Set[Tuple[str, str, int]] = set()
+KNOWN_SIGNAL_KEYS: set = set()
 
 # Core Tier 1 Assets + Major Liquidity Cryptos
 DEFAULT_SYMBOLS = [
@@ -118,7 +118,8 @@ def load_known_signals():
                         t_ms = int(data.get("time_ms") or 0)
                         bt = str(data.get("bar_type") or "time").lower()
                         if sym and t_ms > 0:
-                            KNOWN_SIGNAL_KEYS.add((sym, sig, bt, t_ms))
+                            var = str(data.get("bar_label") or "").strip() if bt != "time" else ""
+                            KNOWN_SIGNAL_KEYS.add((sym, sig, bt, var, t_ms))
                     except Exception:
                         continue
             logger.info(f"Pre-loaded {len(KNOWN_SIGNAL_KEYS)} known signal keys from {SIGNALS_JSONL.name}.")
@@ -353,7 +354,15 @@ def dump_signals(signals: List[dict], candles: Optional[List[dict]] = None) -> L
     for s in signals:
         s_copy = dict(s)
         t_ms = int(s_copy.get("time_ms") or 0)
-        c_ms = t_ms + 900000
+        # PATCH C1: Range/Volume bars are discrete completed bars — their close time IS
+        # their emission time; fabricating close = open + 15m corrupted close_time_utc
+        # for every non-time bar in the parquet ledger.
+        if str(s_copy.get("bar_type") or "time").lower() in ("range", "vol", "volume"):
+            c_ms = t_ms
+        else:
+            itv_ms_probe = 300_000 if str(s_copy.get("bar_label", "")).lower().lstrip().startswith("5m") else 900_000
+            c_ms = t_ms + int(s_copy.get("bar_interval_ms") or itv_ms_probe)
+        s_copy["bar_interval_ms"] = int(c_ms - t_ms)
 
         t_ist = utc_ms_to_ist_str(t_ms)
         c_ist = utc_ms_to_ist_str(c_ms)
@@ -423,7 +432,12 @@ def dump_signals(signals: List[dict], candles: Optional[List[dict]] = None) -> L
         s["bar_closed"] = is_closed
         s["candle_close_ms"] = close_ms
         s["candle_close_ist"] = utc_ms_to_ist_str(close_ms)
-        key = (s["symbol"], str(s.get("sig_code") if s.get("sig_code") is not None else ""), bar_type, t_ms)
+        # PATCH C1: variant-aware key. Vol 100K and Vol 250K bars closing on the same
+        # burst previously collided (same sig_code, same bar_type, same t_ms) and the
+        # second variant was silently dropped — exactly during the volume spikes the
+        # footprint stack is built to harvest.
+        s_variant = str(s.get("bar_label") or "").strip() if bar_type != "time" else ""
+        key = (s["symbol"], str(s.get("sig_code") if s.get("sig_code") is not None else ""), bar_type, s_variant, t_ms)
         if key not in KNOWN_SIGNAL_KEYS:
             KNOWN_SIGNAL_KEYS.add(key)
             newly_discovered.append(s)

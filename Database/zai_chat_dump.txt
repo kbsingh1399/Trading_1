@@ -451,18 +451,6 @@ Wrote 1 files，Ran 2 commands
 All visual checks PASS. Now final packaging — verify no secrets in the repo, copy the PDF into the repo, and zip everything:
 
 Ran 4 commands
-Todos
-10
-Recon Hyperdash API surface (29 GraphQL ops, live probes, WAF/limit findings)
-Clarify deliverable requirements with user
-Read PDF + charts skill specs
-Next.js dashboard (built by subagent, E2E verified)
-Python backend (live-validated, all bugs fixed, 9/9 tests)
-Deployment layer (compose, Dockerfiles, README, ClickHouse SQL)
-Architecture diagrams D1-D3 (compact, print-scale fonts, 2x)
-Live-data matplotlib charts for PDF
-Architecture PDF (17 pages, QA PASS, VLM visual PASS)
-Packaged deliverables in download/ + secret scan clean
 
 Done — the full HD-Intel system is built, live-validated against production data, and packaged.
 
@@ -475,6 +463,91 @@ Bugs found & fixed during live testing: CDN blocks custom user-agents, API caps 
 
 Next steps: deploy on a VPS and let history accumulate (flow windows become exact after 24h), wire the Telegram/webhook alerts, or say the word and I'll iterate on any layer — signal thresholds, new signal families, or the v1.1 per-wallet fill mirroring from the roadmap.
 
+# 🏛️ Quantitative Trading System: End-to-End Architectural & Algorithmic Review
+
+Hello z.ai! As the quantitative architect who designed our Hyperdash Intel stack, we need your comprehensive, exhaustive review of our production trading system integration. 
+
+You have full browser access to inspect GitHub repository: https://github.com/kbsingh1399/_Trading_1 (branch: `main`) and evaluate the live code.
+
+Our goal is to build an institutional-grade, low-drawdown, automated "Money Printing Trading Machine" executing exclusively on **Delta Exchange India**.
+
+---
+
+### 1. System Invariants & Execution Guardrails
+1. **Sole Execution Venue**: Delta Exchange India authenticated REST API (`Terminal/delta_exchange_live_trader.py`). MatchTrader, MetaTrader 5, browser DOM automation, and legacy prop-firm bridges are 100% excised.
+2. **Capital & Margin Preservation**: Available free margin buffer $\ge 20.0\%$ universal floor at all times to cover taker exchange commissions and eliminate `insufficient_commission` rejections. Fail-closed if balance is unavailable.
+3. **Position Limits**: Strictly $\le 2$ concurrent open positions across all instruments (`MAX_OPEN_POSITIONS = 2`).
+4. **Risk Allocation**: Max $\$25.00$ USD risk per trade (`MAX_RISK_USD`) calculated via Discrete Contract Grid Solver (`Terminal/ortools_lot_solver.py` / `risk_envelope.py`).
+5. **Dynamic 1:2 R:R Invariant**: All trades strictly enforce $R:R \ge 2.0:1$ calibrated against the *actual market fill price* ($P_{\text{fill}}$), dynamically re-anchoring bracket TP/SL upon fill with directional tick quantization.
+6. **Dynamic Trailing Stop Loss**:
+   - **Tier 1 (+1.0R0)**: Move SL to Breakeven (+1 tick buffer) once mark price reaches $+1.0R0$ profit.
+   - **Tier 2 (+2.0R0)**: Move SL to lock $+1.0R0$ profit and widen TP to $+3.0R0$.
+   - **Tier 3 (+3.0R0)**: Move SL to lock $+2.0R0$ profit.
+7. **Bar & Signal Handling**:
+   - We ingest footprint signals from CoinGlass across Time (5m, 15m), Range (Range 10, Range 200), and Volume bars (100K, 250K, 5K).
+   - Signals are evaluated immediately upon arrival without waiting. In-flight forming time bars are analyzed live for situational awareness, while live Delta order execution occurs on confirmed bar closes (`is_bar_closed = True`).
+   - Range and Volume bars are inherently discrete completed bars and execute without time-candle wait.
+   - Signals on the same candle form a **Multi-Signal Cluster** (e.g. Absorption + Trapped Shorts awards $+15$ to $+20$ pts). Opposing signals on the same candle trigger an `INTRA_BAR_SIGNAL_CONFLICT` veto.
+
+---
+
+### 2. 5-Pillar Confluence Engine & Hyperdash Intelligence
+Our scoring engine (`Terminal/realtime_signal_evaluator.py`) requires a confluence score $\ge 75.0 / 100$ (with dynamic TimesFM hurdle adjustment) across 5 core pillars:
+1. **Pillar 1: Footprint & Cluster Signals** (Absorption, Trapped Buyers/Sellers, Exhaustion, CVD Divergence).
+2. **Pillar 2: Auction Profile & Value Areas** (Day VWAP, VAH/VAL/POC, Prior Day Levels, Fib-Prime dynamic EMA ribbons: 55, 59, 233).
+3. **Pillar 3: Live CoinGlass TV Liquidations** (Harvests spike reversals, exhaustion scores, and cascade tops/bottoms).
+4. **Pillar 4: Liquidation Heatmap & Strike Magnets** (Near-field shorts/longs ratio, overhead short/long squeeze fuel, CLLD turns).
+5. **Pillar 5: Whales & Sweeps + Hyperdash Institutional Intel**:
+   - `Terminal/hyperdash_intel_engine.py`: Queries GraphQL (`GetPerpsMarketParticipation`, `GetTickerPositions`) for 347 markets $\times$ 11 cohorts (Apex, Extremely Profitable, Rekt, etc.).
+   - Computes weighted `smart_bias` (-100 to +100), `crowd_bias`, net divergence, and detects `CROWD_SQUEEZE_LONG` / `CROWD_SQUEEZE_SHORT`.
+   - Wired directly into Pillar 5 (smart money alignment boost $+10$, opposing smart money penalty $-15$) and Pillar 4 (crowd squeeze fuel boost $+10$).
+6. **Auxiliary Intelligence**:
+   - **Google DeepMind TimesFM 2.5**: Quantile CVD & price drift forecasts + dynamic hurdle adjustment.
+   - **LanceDB Vector Memory**: Analogs of past trade setups and win-rate expectancy.
+   - **Trade Critic Engine**: Post-mortem memory penalizing candidate setups similar to past losing trades.
+   - **Delta Position Guardian**: Background mutex synchronizing order execution, bracket re-anchoring, and trailing stops.
+
+---
+
+### 3. Your Review Objectives & Deliverables
+Please perform an exhaustive, end-to-end review of the entire quantitative pipeline in `kbsingh1399/_Trading_1`:
+
+1. **Algorithmic Edge & Alpha Audit**:
+   - Review the weightings and math in `Terminal/realtime_signal_evaluator.py` and `Terminal/hyperdash_intel_engine.py`. Are the cohort weights (Apex: 3.0, Extremely Profitable: 2.5, Rekt: 2.5) optimal?
+   - How can we extract even more alpha from Hyperdash's top whale position books (e.g. tracking whale liquidation prices as high-probability sweep targets)?
+2. **Execution & Microstructure Hardening**:
+   - Inspect `Terminal/delta_exchange_live_trader.py` and `5_wake_on_footprint_signal.py`. Are there any subtle race conditions, clock drift vulnerabilities, or slippage risks during fill-anchored bracket re-anchoring?
+   - Verify that Range/Volume bar executions never suffer from false stale vetoes or misaligned timestamp lookups.
+3. **Direct Actionable Code Deliverables**:
+   - Do NOT just provide generic advice or high-level remarks.
+   - For ANY file where you recommend an enhancement, fix, or optimization, **provide the complete, ready-to-paste Python code blocks with file path and exact replacement targets**.
+   - Ensure all code is compatible with Python 3.11+, async/await paradigms, and Delta Exchange India's REST API specifications.
+
+We are ready to integrate your code outputs immediately and run verification tests. Let's make this machine unstoppable! 
+ 
+Show full message
+Thought Process
+
+I'll dive straight into this. Let me clone the repository and perform the exhaustive end-to-end review of the quantitative pipeline.
+
+Todos
+7
+Clone kbsingh1399/_Trading_1 repo and map full structure
+Deep-read core files: realtime_signal_evaluator.py, hyperdash_intel_engine.py
+Deep-read execution files: delta_exchange_live_trader.py, 5_wake_on_footprint_signal.py, ortools_lot_solver.py, risk_envelope.py
+Audit 1: Algorithmic edge — cohort weights, confluence math, alpha extraction (whale liq sweep targets)
+Audit 2: Execution hardening — race conditions, clock drift, slippage, Range/Volume bar stale vetoes
+Write ready-to-paste patched code deliverables to download/
+Produce comprehensive review document (PDF) and final summary
+Ran 1 commands
+
+Clone requires auth — repo may be private or needs a different access path. Let me probe availability:
+
+Ran 1 commands
+
+404 on web + codeload suggests the repo is private (or renamed). Let me verify via different egress paths and check the user's public profile:
+
+Explored 1 files
 All files in task
 4
 Save to Cloud
@@ -493,946 +566,416 @@ HD-Intel_Architecture.pdf
 hyperdash_cohorts_full.png
 hyperdash_cohorts.png
 HD-Intel_Architecture.pdf
-HD-Intel - Live Wallet-Flow Intelligence Architecture
-
-
-Engineering - HD-Intel Reference Stack
+H D
  
-6
-
-
-4.3 Intelligence Score
-
-
-The composite blends five components: bias magnitude (35%), 24h elite flow momentum (25%), elite-crowd
-
-
-divergence beyond 30 points (15%), 1h flow agreement with the 24h direction (15%), and funding headroom
-
-
-when the extreme argues against the crowd (10%). Two governors keep the leaderboard honest: whale
-
-
-concentration above 50% caps conviction, and a liquidity damper scales scores by tradeable volume so that
-
-
-unpriceable or illiquid rows sink instead of dominating. Direction is neutralized whenever the asset has no
-
-
-mark price or the elite bias is within 5 points of zero.
-
-
-Figure 2: Live model output: top assets by Intelligence Score, with the elite-vs-crowd divergence that fuels squeeze signals (validation
-
-
-run).
-
-
-5 System Architecture
-
-
-The architecture is five strict layers with one-way dependencies: sources, ingestion, the intelligence core,
-
-
-storage, and serving. Each layer is a Python package that can be unit-tested without the ones below it - the
-
-
-intelligence core in particular is a set of pure functions over plain dictionaries, which is why the entire
-
-
-feature/signal suite runs in 0.16 seconds with no network.
-
-
-Two deliberate choices deserve explanation before the diagram. In-process hot state: the dashboard reads
-
-
-from a bounded in-memory store rather than querying ClickHouse on every request, keeping p99 read
-
-
-latency in the microseconds and eliminating a whole class of partial-failure states; ClickHouse exists for
-
-
-durability, backtesting and post-mortems, and writes asynchronously. All-in-one process: the reference stack
-
-
-embeds the ingestion supervisor inside the API container - one process, one log stream, one thing to babysit -
-
-
-while the same components split into separate api and ingest workers by changing one environment variable
-
-
-when the volume outgrows a single host.
-HD-Intel - Live Wallet-Flow Intelligence Architecture
-
-
-Engineering - HD-Intel Reference Stack
+-
  
-7
-
-
-Layer
+I N T E L
  
-Components
+·
  
-Responsibility
-
-
-1 - Sources
+S Y S T E M
  
-Hyperdash GraphQL client; Hyperliquid
-
-
-public client
-
-
-Provide cohort analytics and market context; own auth
-
-
-and headers
-
-
-2 - Ingestion
+A R C H I T E C T U R E
  
-Tiered pollers, token bucket, backfill
+B L U E P R I N T
+
+
+P R O D U C T I O N
  
-Convert APIs into timestamped snapshot series without
-
-
-abusing rate limits
-
-
-3 - Intelligence
-
-
-core
+-
  
-Feature, scoring and signal modules
+R E A D Y
  
-Pure functions over snapshots; all trading logic lives
-
-
-here and nowhere else
-
-
-4 - Storage
+R E F E R E N C E
  
-MemoryStore; ClickHouseStore
+S T A C K
  
-Hot reads for serving; durable history for audit and
-
-
-backtests
-
-
-5 - Serving
+·
  
-FastAPI; Next.js dashboard; alert
-
-
-dispatcher
-
-
-Contract-first reads, human screens, outbound
-
-
-notifications
-
-
-Table 4: Layer responsibilities; each layer is independently testable and replaceable.
-HD-Intel - Live Wallet-Flow Intelligence Architecture
-
-
-Engineering - HD-Intel Reference Stack
+V E R S I O N
  
-8
-
-
-Figure 3: Five-layer system architecture; arrows are the only allowed dependency directions.
-
-
-6 Ingestion Design
-
-
-Ingestion is a set of independent asyncio loops, each polling one source at its own cadence, sharing a global
-
-
-token bucket that caps Hyperdash traffic at 1.5 requests per second with burst allowance. The backbone is
-
-
-GetPerpsMarketParticipation: a single request that returns the entire 347-market x 11-cohort matrix, which
-
-
-is why one-minute whole-universe refresh is affordable at all.
-HD-Intel - Live Wallet-Flow Intelligence Architecture
-
-
-Engineering - HD-Intel Reference Stack
+1 . 0
+Live
  
-9
+Wallet
+-
+Flow
 
 
-Stream
+Intelligence
  
-Source
+for
+
+
+Hyperliquid
+
+
+Markets
+An
  
-Cadence
+end
+-
+to
+-
+end
  
-Scope
-
-
-Participation snapshot
+platform
  
-Hyperdash GraphQL
+that
  
-60 s
+turns
  
-all 347 markets x 11 cohorts
-
-
-Market context
+every
  
-Hyperliquid public
+wallet
  
-30 s
+cohort
+'
+s
+
+
+behavior
  
-mark, funding, OI, volume - all markets
-
-
-Tier-1 position books
+on
  
-Hyperdash GraphQL
+Hyperdash
  
-300 s pass
+into
  
-top-20 by volume, 180 wallets each
-
-
-Liquidation feed
+per
+-
+asset
  
-Hyperdash GraphQL
+intelligence
+:
  
-60 s
+smart
+-
+
+
+money
  
-all recent liquidations
-
-
-TWAP monitor
+flow
  
-Hyperdash GraphQL
- 
-120 s
- 
-visible execution algos
-
-
-Wallet universe
- 
-Hyperdash GraphQL
- 
-6 h
- 
-leaderboard + per-asset stats
-
-
-History backfill
- 
-Hyperdash GraphQL
- 
-on boot
- 
-7-day hourly cohort positioning
-
-
-Table 5: Ingestion streams and cadences (all tunable via environment variables).
-
-
-Figure 4: One 60-second intelligence cycle: two requests in, signals, scores and alerts out - measured at under 1.5 seconds end to end.
-HD-Intel - Live Wallet-Flow Intelligence Architecture
-
-
-Engineering - HD-Intel Reference Stack
- 
-10
-
-
-6.1 Resilience and warm-up honesty
-
-
-Every network call retries with exponential backoff and distinguishes rate limits, WAF soft blocks and
-
-
-genuine errors; failed loops retry after 60 seconds instead of waiting out their full interval. Flow windows
-
-
-have a warm-up property the system refuses to fake: during the first hour after deployment, a “1h” flow is
-
-
-really the change since the oldest available snapshot, and every signal message labels the true elapsed window
-
-
-(for example “over 5m”) until genuine 1h/4h/24h history exists. The 7-day backfill on boot covers cohort
-
-
-positioning at universe level, while per-market windows build from the system's own snapshots - the only
-
-
-source of per-coin history, since no discovered API exposes it.
-
-
-7 Storage and Schemas
-
-
-Storage is a narrow interface with two interchangeable backends. MemoryStore keeps bounded deques (7
-
-
-days of minute-level snapshots) plus a latest-record map - it exists so the stack runs with zero infrastructure
-
-
-and so unit tests never touch a database. ClickHouseStore mirrors every append into MergeTree tables with
-
-
-partitioned TTLs; the hot read path still serves from process memory, so ClickHouse being briefly
-
-
-unavailable never degrades the dashboard.
-
-
-Table
- 
-Grain
- 
-Engine / order
- 
-TTL
-
-
-participation_snapshots
- 
-ts x coin
- 
-MergeTree (coin, ts)
- 
-400 d
-
-
-cohort_positioning
- 
-ts x cohort x coin
- 
-MergeTree (coin, cohort, ts)
- 
-400 d
-
-
-positions
- 
-ts x coin x address
- 
-MergeTree (coin, ts, address)
- 
-90 d
-
-
-market_context
- 
-ts x coin
- 
-MergeTree (coin, ts)
- 
-400 d
-
-
 signals
+,
  
-ts x type x coin
+crowd
+-
+squeeze
  
-MergeTree (ts, coin, type)
+detection
+,
  
-400 d
+liquidation
 
 
-liquidations
+maps
+,
  
-ts x coin x address
+and
  
-MergeTree (coin, ts)
+a
  
-180 d
-
-
-Table 6: ClickHouse schemas (DDL in init/clickhouse_init.sql).
-
-
-The signal table is deliberately append-only: every emitted signal - including its full feature dictionary as
-
-
-JSON - becomes a durable audit record, which is what the roadmap's backtesting module will score itself
-
-
-against.
-HD-Intel - Live Wallet-Flow Intelligence Architecture
-
-
-Engineering - HD-Intel Reference Stack
+ranked
  
+where
+-
+to
+-
+trade
+ 
+score
+ 
+-
+ 
+served
+ 
+live
+ 
+over
+ 
+a
+
+
+three
+-
+container
+ 
+stack
+.
+
+
+P R E PA R E D
+
+
+F O R
+
+
+Trading
+ 
+&
+ 
+Analytics
+ 
+Desk
+
+
+A U T H O R
+ 
+Engineering
+
+
+D A T E
+ 
+November
+ 
+2026
+
+
+347
+
+
+M A R K E T S
+ 
+T R A C K E D
+
+
 11
 
 
+C O H O R T S
+ 
+X
+ 
+M A R K E T
+
+
+7
+
+
+S I G N A L
+ 
+FA M I L I E S
+
+
+< 1.5
+ 
+s
+
+
+C Y C L E
+ 
+L AT E N C Y
+HD-Intel - Live Wallet-Flow Intelligence Architecture
+
+
+Engineering - HD-Intel Reference Stack
+ 
+i
+
+
+Table of Contents
+
+
+2
+1 Executive Summary
+
+
+2
+2 Problem Statement and Objectives
+
+
+3
+3 Data Source Survey
+
+
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 3
+3.1 Verified Hyperdash operations
+
+
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 4
+3.2 Operational findings that shaped the design
+
+
+5
+4 Intelligence Model
+
+
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 5
+4.1 Features
+
+
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 6
+4.2 Signal catalog
+
+
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 7
+4.3 Intelligence Score
+
+
+7
+5 System Architecture
+
+
+9
+6 Ingestion Design
+
+
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 11
+6.1 Resilience and warm-up honesty
+
+
+11
+7 Storage and Schemas
+
+
+12
 8 Serving Layer and Dashboard
 
 
-The FastAPI serving layer implements a five-endpoint contract that the dashboard treats as its only source of
-
-
-truth. Endpoints read the hot store, so responses are pure serialization with no computation on the request
-
-
-path; CORS is open by default and narrowed via environment configuration in any real deployment.
-
-
-Endpoint
- 
-Returns
-
-
-GET /api/health
- 
-Pipeline status: assets tracked, last cycle metrics, error count
-
-
-GET /api/assets
- 
-Every asset: score, direction, biases, flows, market context, active-signal count
-
-
-GET /api/assets/{coin}
- 
-Adds 11 cohort positionings with deltas, top-40 wallets, liquidation-wall histogram,
-
-
-asset signals
-
-
-GET /api/signals
- 
-Filterable feed by type, direction and coin (limit up to 500)
-
-
-GET /api/wallets
- 
-Copy-trade rankings with per-asset PnL and the wallet's current position on a
-
-
-requested coin
-
-
-Table 7: API contract v1 (consumed verbatim by the dashboard).
-
-
-The dashboard is a Next.js application in a deliberately thin role: no server-side data logic, no authentication,
-
-
-just typed client-side polling against the contract. The overview page carries the sortable asset intelligence
-
-
-table and a live signals rail; the asset detail page renders cohort positioning bars, flow deltas, the
-
-
-liquidation-wall map with the mark price reference line, and the wallet book; the signals page filters the full
-
-
-feed; the wallets page ranks copy-trade candidates. All pages degrade to skeleton states when the pipeline is
-
-
-restarting, which the reference deployment exercises by killing the backend mid-session in its own smoke
-
-
-tests.
-
-
+12
 9 Deployment and Scaling
 
 
-The reference deployment is three containers on one host. ClickHouse persists the history; the backend
-
-
-container runs FastAPI with the embedded ingestion supervisor (all-in-one mode); the dashboard container is
-
-
-a multi-stage Node build with the API base URL baked in at build time. The whole stack starts with docker
-
-
-compose up -d --build once the session token is set in the environment file.
-HD-Intel - Live Wallet-Flow Intelligence Architecture
-
-
-Engineering - HD-Intel Reference Stack
- 
-12
-
-
-Figure 6: Reference topology: three compose services on a single host; egress only to the two data APIs.
-
-
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 13
 9.1 Scale-out path
 
 
-Growth pressures the design in a predictable order, and each step is a seam that already exists. First, split the
-
-
-supervisor from the API by setting HD_RUN_MODE=api and running python -m hd_intel.scheduler as a
-
-
-second container pointed at the same ClickHouse - no code changes. Second, shard ingestion: the
-
-
-participation poller is already a pure function of its inputs, so N worker replicas can each own a slice of the
-
-
-Tier-1 universe behind a Redis or Kafka work queue. Third, when per-wallet fill mirroring arrives, replace
-
-
-the polling loops with Hyperliquid WebSocket subscriptions and keep the identical feature layer - the
-
-
-intelligence core never learns where its data came from. Kubernetes artifacts, horizontal pod autoscaling on
-
-
-queue depth, and a replicated ClickHouse cluster are the shapes this document deliberately does not draw
-
-
-twice: they are well-trodden paths once the seams are respected.
-HD-Intel - Live Wallet-Flow Intelligence Architecture
-
-
-Engineering - HD-Intel Reference Stack
- 
-13
-
-
+14
 10 Security and Operations
 
 
-The security model is honest about what it holds: one magic-link session cookie, no user credentials, no fund
-
-
-custody, read-only access. The token is injected via environment configuration (never committed), and
-
-
-rotation is a documented two-minute procedure - obtain a fresh magic link, update the variable, restart the
-
-
-backend - during which the Hyperliquid market feed keeps flowing and cohort analytics pause rather than
-
-
-fail.
-
-
-Failure mode
- 
-Observed behavior
- 
-Remediation
-
-
-Session cookie expires
- 
-Cohort ops 403; market context continues;
-
-
-cycles log and retry
-
-
-Rotate HD_SESSION_TOKEN,
-
-
-restart backend
-
-
-Hyperdash rate limiting
- 
-429 honored with retry-after backoff; bucket
-
-
-throttles upstream
-
-
-Auto-recovers; lower HD_MAX_RPS
-
-
-if persistent
-
-
-CDN WAF soft blocks
- 
-Empty bodies on suspicious headers; client
-
-
-retries with browser-grade UA
-
-
-Keep full header set; avoid changing
-
-
-the user agent
-
-
-Hyperliquid public 429
- 
-Backoff-and-retry inside the client, cycle
-
-
-continues on last good context
-
-
-Auto-recovers; market ctx interval is
-
-
-30 s
-
-
-ClickHouse unavailable
- 
-Store falls back to MemoryStore with a logged
-
-
-warning
-
-
-Restore service; hot path never
-
-
-degrades
-
-
-Pipeline process crash
- 
-Container restart policy restarts; MemoryStore
-
-
-rebuilds from live APIs in one cycle
- 
-ClickHouse retains all history for audit
-
-
-Table 8: Operational failure modes and responses (all exercised during validation).
-
-
-Monitoring points are exported on /api/health: assets tracked, last-cycle duration, signal count and error
-
-
-count. Anything with a metric name can be scraped; the runbook posture is that a silent pipeline is a stopped
-
-
-pipeline, so health-based alerting should page when the last successful cycle ages beyond two minutes.
-
-
+14
 11 Live Validation
 
 
-Every number in this section was produced by the reference implementation running against production
-
-
-Hyperdash and Hyperliquid APIs in November 2026 - the same code that ships in this repository, not a
-
-
-simulation. The validation harness ran the boot sequence exactly as the scheduler does: 7-day backfill, then
-
-
-three full intelligence cycles spaced seventy seconds apart, Tier-1 position-book ingestion, wallet-universe
-
-
-ingestion, and a final cycle.
-HD-Intel - Live Wallet-Flow Intelligence Architecture
-
-
-Engineering - HD-Intel Reference Stack
- 
-14
-
-
-Step
- 
-Result
-
-
-History backfill
- 
-1,859 (cohort x hour) points from one request
-
-
-Intelligence cycles
- 
-347 markets, 3 cycles, 0.6-1.8 s each, 14/1/1 signals per cycle
-
-
-Tier-1 position books
- 
-BTC, ETH, HYPE, ZEC - 180 wallets each (2.4-4.4 s per book)
-
-
-Wallet universe
- 
-100 leaderboard wallets with per-asset stats
-
-
-API contract test
- 
-347 assets served; BTC detail: 11 cohorts, 40 wallets, 12 liquidation walls
-
-
-Unit tests
- 
-9/9 passing - features, all signal families, cooldowns, rotation
-
-
-Table 9: Validation harness results (all figures from live production data).
-
-
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 15
 11.1 Signals observed in the wild
 
 
-The following signals were emitted by the live engine during validation, verbatim:
-
-
-Time
- 
-Signal
- 
-Side
- 
-Tier
- 
-Message (verbatim engine output)
-
-
-10:35:37
- 
-WHALE_CONCE
-
-
-NTRATION
-
-
-neutra
-
-
-l
- 
-[moderate]
- 
-Top-10 wallets hold 43% of gross notional - fragile,
-
-
-whale-dependent
-
-
-10:35:37
- 
-WHALE_CONCE
-
-
-NTRATION
-
-
-neutra
-
-
-l
- 
-[moderate]
- 
-Top-10 wallets hold 41% of gross notional - fragile,
-
-
-whale-dependent
-
-
-10:35:37
- 
-LIQ_MAGNET
- 
-short
- 
-[info]
- 
-$97M notional liquidatable within 5% of mark
-
-
-10:35:19
- 
-FLOW_ROTATIO
-
-
-N
- 
-long
- 
-[critical]
- 
-ARB leads the universe in elite 24h flow (8.7x the rotation
-
-
-threshold, long bias)
-
-
-10:34:07
- 
-FUNDING_EXTR
-
-
-EME
- 
-short
- 
-[critical]
- 
-Funding +0.0045%/h is +2.5 sigma cross-asset -
-
-
-mean-reversion risk
-
-
-10:32:57
- 
-FUNDING_EXTR
-
-
-EME
- 
-short
- 
-[critical]
- 
-Funding +0.0065%/h is +3.7 sigma cross-asset -
-
-
-mean-reversion risk
-
-
-10:32:57
- 
-FUNDING_EXTR
-
-
-EME
- 
-short
- 
-[critical]
- 
-Funding +0.0065%/h is +3.7 sigma cross-asset -
-
-
-mean-reversion risk
-
-
-10:32:57
- 
-CROWD_SQUEEZ
-
-
-E
- 
-short
- 
-[strong]
- 
-Crowd +58% one-sided while elite wallets -33% opposite -
-
-
-squeeze fuel
-
-
-Table 10: A sample of live signals captured during the validation run.
-
-
-Reading the sample as a trader would: ZEC showed elite cohorts adding a quarter of a billion dollars of net
-
-
-long exposure in minutes; BTC carried $97M of notional liquidatable within five percent of the mark with
-
-
-the top ten whales holding 41% of the book; and the funding screen flagged half a dozen markets
-
-
-two-and-a-half to twelve sigma away from the cross-asset mean - exactly the asymmetries the model was
+16
+12 Roadmap
 HD-Intel - Live Wallet-Flow Intelligence Architecture
 
 
 Engineering - HD-Intel Reference Stack
  
-15
+1
 
 
-built to surface. Note the honest flow windows: the engine labels “over 4m” during warm-up rather than
+1 Executive Summary
 
 
-pretending a full hour of history existed.
+HD-Intel is a live wallet-flow intelligence platform that answers one operational question:
+ 
+on which of the
 
 
-12 Roadmap
+347 Hyperliquid markets are the wallets that matter moving money right now, and in which direction?
+ 
+The
 
 
-The v1 platform is a complete, deployable loop from raw polls to operator screens. The roadmap prioritizes
+system ingests the complete Hyperdash cohort analytics surface together with the public Hyperliquid market
 
 
-fidelity of the flow signal over breadth of features, because flow is where the edge compounds.
+feed, distills it into eleven per-cohort positioning series per market, and converts those series into seven
+
+
+families of tradeable signals plus a composite 0-100 Intelligence Score that ranks every asset by smart-money
+
+
+conviction.
+
+
+This document is the complete blueprint for the platform: the data-source survey that maps every verified
+
+
+API operation and its latency, the intelligence model with exact feature and scoring formulas, the five-layer
+
+
+system architecture, the ingestion design with tiered refresh and rate-budgeted politeness, storage schemas,
+
+
+the serving contract, a Docker Compose deployment topology with a documented scale-out path, security
+
+
+and operations runbooks, and - critically - a live validation section where every number quoted in this paper
+
+
+was produced by the actual reference implementation running against production data.
+
+
+347
+ 
+11
+ 
+180
+ 
+7/7
+
+
+MARKETS TRACKED PER
+
+
+CYCLE
+ 
+COHORTS X MARKET
+ 
+WALLETS / TIER-1 BOOK
+ 
+SIGNAL FAMILIES LIVE
+
+
+The reference stack is deliberately small: three containers (ClickHouse, a Python FastAPI backend that
+
+
+embeds its own ingestion supervisor, and a Next.js dashboard) start with a single command and sustain a
+
+
+one-minute intelligence cycle on a commodity VPS. Every design decision trades elegance for operability -
+
+
+in-process hot state instead of a message broker, bounded politeness instead of raw throughput, honest
+
+
+warm-up semantics instead of fabricated history - while section 9 documents exactly which seams to pull
+
+
+when volume grows ten-fold.
+
+
+2 Problem Statement and Objectives
+
+
+Hyperdash visualizes wallet cohorts on Hyperliquid, but the question our desk needs answered is not “what
+
+
+am I looking at” - it is “where should I be looking, and which way.” That requires continuously computing
+
+
+how every cohort's positioning changes on every market, comparing elite-wallet behavior against crowd
+
+
+behavior, detecting risk formations before they unwind, and surfacing the handful of assets each hour where
+
+
+positioning actually disagrees with price. None of that exists as a deployable system; it exists as clicking
+
+
+through a web UI.
+
+
+The brief translates into five concrete objectives:
 
 
 •
  
-v1.1 - Per-wallet fill mirroring.
+O1 - Coverage.
  
-Subscribe to Hyperliquid WebSocket userFills for the tracked elite
+All ~350 tradable markets on Hyperliquid (crypto, equities, indices, commodities,
 
 
-wallets to detect position opens, adds and flips at trade granularity instead of minute snapshots - the single
-
-
-highest-leverage upgrade to flow accuracy.
-
-
-•
- 
-v1.2 - Signal evaluation.
- 
-Score every emitted signal against the following 4h/24h price path using the
-
-
-ClickHouse audit trail, producing per-family hit-rate and expectancy dashboards that inform threshold
-
-
-tuning.
-
-
-•
- 
-v1.3 - Cohort membership drift.
- 
-Track wallets migrating between cohorts (a rekt wallet healing into
-
-
-profitable is itself a signal) and maintain a persistent elite universe independent of Hyperdash's snapshot
-
-
-labels.
-
-
-•
- 
-v1.4 - Scale-out.
- 
-Redis/Kafka work queues, sharded workers, WebSocket ingestion, Kubernetes
-
-
-manifests - the seams documented in section 9.
-
-
-The platform's contract is stable end to end: same API, same signal schema, same dashboard. Each roadmap
-
-
-item tightens the loop between what the wallets are doing and what the operator sees - which was the entire
-
-
-brief.
+FX), refreshed on a tiered schedule, with the top-20 by volume receiving full per-wallet position books.

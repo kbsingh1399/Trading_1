@@ -144,9 +144,9 @@ def test_nonfinite_forecast_is_unavailable():
 
 
 def test_matchtrader_unverified_dispatch_never_touches_socket():
-    from Terminal.matchtrader_live_trader import execute_market_order
-    result = asyncio.run(execute_market_order(None, 'BUY', 1))
-    assert result['ok'] is False
+    # Invariant #1: MatchTrader excised, Delta Exchange exclusive
+    from pathlib import Path
+    assert not Path('Terminal/matchtrader_live_trader.py').exists()
 
 
 def test_dynamic_daily_floor_not_static_initial_floor():
