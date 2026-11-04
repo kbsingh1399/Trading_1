@@ -99,14 +99,14 @@ class OlapEngine:
             ask = float(asks.loc[asks.from_price_pct.abs() <= 3, 'weighted_remaining_usd'].sum())
             if bid + ask <= 0:
                 raise ValueError('No usable whale depth')
-            return {'data_valid': True, 'tight_bid_walls_usd': bid, 'tight_ask_walls_usd': ask,
+            return {'data_valid': True, 'feed_status': 'ACTIVE', 'tight_bid_walls_usd': bid, 'tight_ask_walls_usd': ask,
                     'whale_imbalance_bid_ratio': bid / (bid + ask),
                     'total_bids_usd': float(bids.weighted_remaining_usd.sum()), 'total_asks_usd': float(asks.weighted_remaining_usd.sum()),
                     'raw_tight_bid_walls_usd': float(bids.loc[bids.from_price_pct.abs() <= 3, 'remaining_usd'].sum()),
                     'raw_tight_ask_walls_usd': float(asks.loc[asks.from_price_pct.abs() <= 3, 'remaining_usd'].sum()),
                     'age_seconds': age, 'decay_tau_seconds': tau}
         except Exception as exc:
-            return {'data_valid': False, 'error': str(exc), 'whale_imbalance_bid_ratio': 0.5}
+            return {'data_valid': False, 'feed_status': 'FAIL_SOFT_UNTRACKED', 'error': str(exc), 'whale_imbalance_bid_ratio': 0.5}
 
     def query_whale_history_orders(self, symbol: str, lookback_secs: float = 3600.0) -> Dict[str, Any]:
         """Queries recent aggressive filled whale orders to determine institutional market sweep bias."""
@@ -182,69 +182,84 @@ class OlapEngine:
                     near_field=nf_dict
                 )
             
-            # 2. Magnet zones (partitioned by side)
-            mag_path = MAGNET_DIR / f'{symbol}_magnet_zones.parquet'
-            if mag_path.exists():
-                mdf = self._latest_snapshot(pd.read_parquet(mag_path))
-                if not mdf.empty:
-                    # Parse zone_price if not numeric
-                    price_col = 'zone_price' if 'zone_price' in mdf.columns else ('price' if 'price' in mdf.columns else None)
-                    if price_col:
-                        mdf['zone_price'] = pd.to_numeric(mdf[price_col], errors='coerce')
-                    elif 'price_band' in mdf.columns:
-                        def parse_mid(val):
-                            nums = re.findall(r'[\d,]+\.?\d*', str(val))
-                            if len(nums) >= 2:
-                                return (float(nums[0].replace(',', '')) + float(nums[1].replace(',', ''))) / 2.0
-                            return None
-                        mdf['zone_price'] = mdf['price_band'].apply(parse_mid)
-                    
-                    if 'score' in mdf.columns:
-                        mdf['score'] = pd.to_numeric(mdf['score'], errors='coerce')
-                        top_all = mdf.sort_values('score', ascending=False)
-                        if not top_all.empty:
-                            result['top_magnet_zone'] = top_all.iloc[0].to_dict()
+            # 2. Magnet zones (partitioned by side) - isolated fail-soft
+            try:
+                mag_path = MAGNET_DIR / f'{symbol}_magnet_zones.parquet'
+                if mag_path.exists():
+                    mdf = self._latest_snapshot(pd.read_parquet(mag_path))
+                    if not mdf.empty:
+                        # Parse zone_price if not numeric
+                        price_col = 'zone_price' if 'zone_price' in mdf.columns else ('price' if 'price' in mdf.columns else None)
+                        if price_col:
+                            mdf['zone_price'] = pd.to_numeric(mdf[price_col], errors='coerce')
+                        elif 'price_band' in mdf.columns:
+                            def parse_mid(val):
+                                nums = re.findall(r'[\d,]+\.?\d*', str(val))
+                                if len(nums) >= 2:
+                                    return (float(nums[0].replace(',', '')) + float(nums[1].replace(',', ''))) / 2.0
+                                return None
+                            mdf['zone_price'] = mdf['price_band'].apply(parse_mid)
+                        
+                        if 'score' in mdf.columns:
+                            mdf['score'] = pd.to_numeric(mdf['score'], errors='coerce')
+                            top_all = mdf.sort_values('score', ascending=False)
+                            if not top_all.empty:
+                                result['top_magnet_zone'] = top_all.iloc[0].to_dict()
 
-                    if 'side' in mdf.columns:
-                        s_mdf = mdf[mdf['side'].str.upper().str.contains('SHORT')].sort_values('rank' if 'rank' in mdf.columns else 'score', ascending=True if 'rank' in mdf.columns else False)
-                        l_mdf = mdf[mdf['side'].str.upper().str.contains('LONG')].sort_values('rank' if 'rank' in mdf.columns else 'score', ascending=True if 'rank' in mdf.columns else False)
-                        result['top_short_magnets'] = s_mdf.head(3).to_dict(orient='records')
-                        result['top_long_magnets'] = l_mdf.head(3).to_dict(orient='records')
+                        if 'side' in mdf.columns:
+                            s_mdf = mdf[mdf['side'].str.upper().str.contains('SHORT')].sort_values('rank' if 'rank' in mdf.columns else 'score', ascending=True if 'rank' in mdf.columns else False)
+                            l_mdf = mdf[mdf['side'].str.upper().str.contains('LONG')].sort_values('rank' if 'rank' in mdf.columns else 'score', ascending=True if 'rank' in mdf.columns else False)
+                            result['top_short_magnets'] = s_mdf.head(3).to_dict(orient='records')
+                            result['top_long_magnets'] = l_mdf.head(3).to_dict(orient='records')
+            except Exception as mag_exc:
+                logger.debug(f"Optional magnet zones query soft-fail for {symbol}: {mag_exc}")
 
-            # 3. Strength by distance
-            sb_path = STRENGTH_BANDS_DIR / f'{symbol}_strength_by_distance.parquet'
-            if sb_path.exists():
-                sb_df = self._latest_snapshot(pd.read_parquet(sb_path))
-                result['strength_by_distance'] = sb_df.to_dict(orient='records')
+            # 3. Strength by distance - isolated fail-soft
+            try:
+                sb_path = STRENGTH_BANDS_DIR / f'{symbol}_strength_by_distance.parquet'
+                if sb_path.exists():
+                    sb_df = self._latest_snapshot(pd.read_parquet(sb_path))
+                    result['strength_by_distance'] = sb_df.to_dict(orient='records')
+            except Exception as sb_exc:
+                logger.debug(f"Optional strength bands soft-fail for {symbol}: {sb_exc}")
 
-            # 4. Leverage tiers
-            lt_path = LEVERAGE_TIERS_DIR / f'{symbol}_leverage_tiers.parquet'
-            if lt_path.exists():
-                lt_df = self._latest_snapshot(pd.read_parquet(lt_path))
-                result['leverage_tiers'] = lt_df.to_dict(orient='records')
+            # 4. Leverage tiers - isolated fail-soft
+            try:
+                lt_path = LEVERAGE_TIERS_DIR / f'{symbol}_leverage_tiers.parquet'
+                if lt_path.exists():
+                    lt_df = self._latest_snapshot(pd.read_parquet(lt_path))
+                    result['leverage_tiers'] = lt_df.to_dict(orient='records')
+            except Exception as lt_exc:
+                logger.debug(f"Optional leverage tiers soft-fail for {symbol}: {lt_exc}")
 
-            # 5. Key liquidation levels
-            kl_path = KEY_LEVELS_DIR / f'{symbol}_key_levels.parquet'
-            if kl_path.exists():
-                kl_df = self._latest_snapshot(pd.read_parquet(kl_path))
-                if not kl_df.empty:
-                    if 'strength' in kl_df.columns:
-                        kl_df['strength'] = pd.to_numeric(kl_df['strength'], errors='coerce')
-                        kl_df = kl_df.sort_values('strength', ascending=False)
-                    result['key_levels'] = kl_df.head(10).to_dict(orient='records')
+            # 5. Key liquidation levels - isolated fail-soft
+            try:
+                kl_path = KEY_LEVELS_DIR / f'{symbol}_key_levels.parquet'
+                if kl_path.exists():
+                    kl_df = self._latest_snapshot(pd.read_parquet(kl_path))
+                    if not kl_df.empty:
+                        if 'strength' in kl_df.columns:
+                            kl_df['strength'] = pd.to_numeric(kl_df['strength'], errors='coerce')
+                            kl_df = kl_df.sort_values('strength', ascending=False)
+                        result['key_levels'] = kl_df.head(10).to_dict(orient='records')
+            except Exception as kl_exc:
+                logger.debug(f"Optional key levels soft-fail for {symbol}: {kl_exc}")
 
-            # 6. CLLD & Sentiment turns
-            if LIQ_SNAPSHOTS.exists():
-                snap_df = pd.read_parquet(LIQ_SNAPSHOTS)
-                if not snap_df.empty and 'symbol' in snap_df.columns:
-                    sym_snaps = snap_df[snap_df['symbol'] == symbol]
-                    if not sym_snaps.empty:
-                        last_snap = sym_snaps.iloc[-1]
-                        result['clld'] = {
-                            'delta': float(last_snap.get('clld_delta', 0.0) or 0.0),
-                            'sentiment_turn': str(last_snap.get('clld_sentiment_turn', '') or ''),
-                            'turn_time': str(last_snap.get('clld_turn_time', '') or '')
-                        }
+            # 6. CLLD & Sentiment turns - isolated fail-soft
+            try:
+                if LIQ_SNAPSHOTS.exists():
+                    snap_df = pd.read_parquet(LIQ_SNAPSHOTS)
+                    if not snap_df.empty and 'symbol' in snap_df.columns:
+                        sym_snaps = snap_df[snap_df['symbol'] == symbol]
+                        if not sym_snaps.empty:
+                            last_snap = sym_snaps.iloc[-1]
+                            result['clld'] = {
+                                'delta': float(last_snap.get('clld_delta', 0.0) or 0.0),
+                                'sentiment_turn': str(last_snap.get('clld_sentiment_turn', '') or ''),
+                                'turn_time': str(last_snap.get('clld_turn_time', '') or '')
+                            }
+            except Exception as clld_exc:
+                logger.debug(f"Optional CLLD soft-fail for {symbol}: {clld_exc}")
 
         except Exception as exc:
             result.update(data_valid=False, error=str(exc))

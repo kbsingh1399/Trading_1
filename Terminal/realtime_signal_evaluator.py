@@ -1251,8 +1251,8 @@ class RealtimeSignalEvaluator:
                 "cvd_slope": cvd_slope,
 
                 "recent_poc": poc_price,
-                "whale_tracked": bool(whales.get("feed_status") == "ACTIVE" and whales.get("data_valid", False)),
-                "liq_tracked": bool(liq.get("data_valid", False) is True and bool(nf_meta))
+                "whale_tracked": bool((whales.get("feed_status") == "ACTIVE" or whales.get("data_valid") is True) and whales.get("whale_imbalance_bid_ratio") is not None),
+                "liq_tracked": bool((liq.get("data_valid", False) is True or bool(nf_meta)) and near_field_shorts is not None)
 
             },
 

@@ -168,7 +168,32 @@ class DeepSeekHarnessBridge:
         model: str = "deepseek-chat",
         timeout_seconds: float = 5.0,
     ):
-        self.api_key = api_key or os.environ.get("DEEPSEEK_API_KEY", "")
+        loaded_key = api_key or os.environ.get("DEEPSEEK_API_KEY", "")
+        if not loaded_key:
+            cfg_path = Path.home() / ".delta-exchange-mcp" / "config.env"
+            if cfg_path.exists():
+                try:
+                    with open(cfg_path, "r", encoding="utf-8") as cf:
+                        for line in cf:
+                            line = line.strip()
+                            if line.startswith("DEEPSEEK_API_KEY="):
+                                loaded_key = line.split("=", 1)[1].strip()
+                                break
+                except Exception:
+                    pass
+        if not loaded_key:
+            env_path = Path(".env")
+            if env_path.exists():
+                try:
+                    with open(env_path, "r", encoding="utf-8") as ef:
+                        for line in ef:
+                            line = line.strip()
+                            if line.startswith("DEEPSEEK_API_KEY="):
+                                loaded_key = line.split("=", 1)[1].strip()
+                                break
+                except Exception:
+                    pass
+        self.api_key = loaded_key
         self.base_url = base_url.rstrip("/")
         self.model = model
         # Strict 5.0s SLA: hard-clamp to min(requested, 5.0) to prevent stalling candle invariants

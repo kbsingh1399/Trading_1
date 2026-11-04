@@ -1013,7 +1013,12 @@ class DeltaExchangeTrader:
             }
 
         # Strict Single Source of Truth for Max Open Positions (AGENTS.md Rule 3: Max 2 positions including in-flight)
-        effective_positions = len(active_pos) + len(self._inflight_orders)
+        # Exclude sub-dollar dust positions (< $1.00 notional) from blocking institutional risk slots
+        institutional_pos = [
+            p for p in active_pos
+            if (abs(int(p.get("size", 0))) * float(p.get("mark_price", 0.0) or p.get("entry_price", 0.0) or 0.0)) >= 1.0
+        ]
+        effective_positions = len(institutional_pos) + len(self._inflight_orders)
         if effective_positions >= MAX_DELTA_CONCURRENT_POSITIONS:
             return {
                 "ok": False,
