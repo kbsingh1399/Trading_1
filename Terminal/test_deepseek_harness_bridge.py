@@ -54,9 +54,24 @@ def test_unconfigured_bridge_behavior():
         "signal_details": {"title": "Test Absorption"},
         "confluence_reasons": ["Test Reason"]
     })
-    assert critique["ok"] is True
-    assert critique["status"] == "FALLBACK_ALGORITHMIC"
-    assert critique["approved"] is True
+    assert critique["ok"] is False
+    assert critique["status"] == "REJECTED_MISSING_API_KEY"
+    assert critique["approved"] is False
+    bridge.close()
+
+
+def test_bridge_timeout_clamping():
+    bridge = DeepSeekHarnessBridge(api_key="mock", timeout_seconds=60.0)
+    assert bridge.timeout_seconds <= 5.0
+    bridge.close()
+
+
+def test_bridge_child_process_containment():
+    bridge = DeepSeekHarnessBridge(api_key="mock")
+    proc = bridge.spawn_contained_process([sys.executable, "-c", "import time; time.sleep(10)"])
+    assert proc.pid > 0
+    bridge.terminate_children()
+    assert len(bridge._active_children) == 0
     bridge.close()
 
 

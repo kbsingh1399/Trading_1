@@ -477,3 +477,42 @@ def test_failed_reanchor_triggers_emergency_close(trader):
                         assert res.get("ok") is False
                         assert res.get("status") == "REJECTED_FAILED_BRACKET_ANCHOR"
                         mock_close.assert_called_once_with("BTCUSD")
+
+
+def test_sl_edit_failure_returns_false_and_does_not_claim_reanchored(trader):
+    """
+    Verifies that if SL order edit fails during reanchoring, reanchor_brackets_to_fill
+    fails closed (ok=False) and does NOT report REANCHORED.
+    """
+    trader.products_cache["BTCUSD"] = {"id": 1, "symbol": "BTCUSD", "tick_size": "0.1", "contract_value": "0.001"}
+    open_orders = [
+        {"id": 101, "product_id": 1, "stop_order_type": "take_profit_order", "side": "sell", "size": 10, "stop_price": "82000.0"},
+        {"id": 102, "product_id": 1, "stop_order_type": "stop_loss_order", "side": "sell", "size": 10, "stop_price": "70000.0"},
+    ]
+    with patch.object(trader, "get_open_orders", return_value=open_orders):
+        # Mock edit_order on SL to fail
+        with patch.object(trader, "edit_order", return_value={"success": False, "error": "ORDER_LOCKED"}):
+            res = trader.reanchor_brackets_to_fill(
+                symbol="BTCUSD",
+                fill_price=80000.0,
+                sl_price=70000.0,
+                min_rr=2.0
+            )
+            assert res.get("ok") is False
+            assert res.get("status") == "SL_EDIT_FAILED"
+            assert res.get("status") != "REANCHORED"
+
+
+def test_fx_normalized_collateral_margin(trader):
+    """
+    Verifies that INR balances are not nominally summed with USD without FX conversion.
+    """
+    mixed_wallets = [
+        {"asset_symbol": "INR", "balance": "87000.0", "available_balance": "87000.0"},
+        {"asset_symbol": "USD", "balance": "100.0", "available_balance": "80.0"},
+    ]
+    with patch.object(trader, "get_wallet_balances", return_value=mixed_wallets):
+        summary = trader.get_wallet_balances_normalized_usd()
+        assert summary["total_balance_usd"] == pytest.approx(1100.0, rel=1e-2)
+        assert summary["total_available_usd"] == pytest.approx(1080.0, rel=1e-2)
+        assert trader.get_available_margin_usd() < 2000.0

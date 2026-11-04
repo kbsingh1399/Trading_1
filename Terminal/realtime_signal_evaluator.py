@@ -1001,7 +1001,8 @@ class RealtimeSignalEvaluator:
                              and not validation_errors and not forecast_veto)
 
         deepseek_critic = {}
-        if is_actionable and getattr(self, "dsh_bridge", None):
+        dsh = getattr(self, "dsh_bridge", None)
+        if is_actionable and dsh and dsh.is_configured():
             try:
                 candidate_summary = {
                     "symbol": sym,
@@ -1016,7 +1017,7 @@ class RealtimeSignalEvaluator:
                         "rr": rr,
                     }
                 }
-                dsh_audit = self.dsh_bridge.evaluate_signal_confluence(candidate_summary)
+                dsh_audit = dsh.evaluate_signal_confluence(candidate_summary)
                 deepseek_critic = dsh_audit
                 if not dsh_audit.get("approved", False):
                     veto_msg = f"DEEPSEEK_CRITIC_VETO: {dsh_audit.get('reason')}"

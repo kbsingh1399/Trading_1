@@ -90,7 +90,17 @@ def create_win32_kill_on_close_job():
             return None
 
         info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
-        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        JOB_OBJECT_LIMIT_PROCESS_MEMORY = 0x0100
+        JOB_OBJECT_LIMIT_JOB_MEMORY = 0x0200
+        info.BasicLimitInformation.LimitFlags = (
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE |
+            JOB_OBJECT_LIMIT_PROCESS_MEMORY |
+            JOB_OBJECT_LIMIT_JOB_MEMORY
+        )
+        # Strict 150 MB Lean RAM Budget
+        max_bytes = 150 * 1024 * 1024
+        info.ProcessMemoryLimit = max_bytes
+        info.JobMemoryLimit = max_bytes
 
         res = ctypes.windll.kernel32.SetInformationJobObject(
             job,
@@ -161,10 +171,12 @@ class DeepSeekHarnessBridge:
         self.api_key = api_key or os.environ.get("DEEPSEEK_API_KEY", "")
         self.base_url = base_url.rstrip("/")
         self.model = model
-        self.timeout_seconds = timeout_seconds
+        # Strict 5.0s SLA: hard-clamp to min(requested, 5.0) to prevent stalling candle invariants
+        self.timeout_seconds = min(max(0.1, float(timeout_seconds)), 5.0)
         self.job_handle = create_win32_kill_on_close_job()
         self.dsh_home = DSH_HOME_DIR
         self.cache_dir = CACHE_DIR
+        self._active_children = []
 
     def is_configured(self) -> bool:
         """Returns True if a valid API key is present."""
@@ -201,7 +213,8 @@ class DeepSeekHarnessBridge:
 
         t0 = time.time()
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout_seconds) as resp:
+            effective_timeout = min(self.timeout_seconds, 5.0)
+            with urllib.request.urlopen(req, timeout=effective_timeout) as resp:
                 latency_ms = (time.time() - t0) * 1000.0
                 body = resp.read().decode("utf-8")
                 res_json = json.loads(body)
@@ -230,12 +243,12 @@ class DeepSeekHarnessBridge:
         reasons = signal.get("confluence_reasons", [])
 
         if not self.is_configured():
-            logger.info(f"[{sym}] DeepSeek bridge bypassed: DEEPSEEK_API_KEY not configured. Falling back to algorithmic confluence.")
+            logger.warning(f"[{sym}] DeepSeek critic fail-closed: DEEPSEEK_API_KEY not configured.")
             return {
-                "ok": True,
-                "status": "FALLBACK_ALGORITHMIC",
-                "approved": True,  # Non-blocking when unconfigured
-                "reason": "API_KEY_UNSET",
+                "ok": False,
+                "status": "REJECTED_MISSING_API_KEY",
+                "approved": False,
+                "reason": "DEEPSEEK_API_KEY_NOT_CONFIGURED",
                 "latency_ms": 0.0,
             }
 
@@ -294,8 +307,29 @@ class DeepSeekHarnessBridge:
                 "latency_ms": latency_ms,
             }
 
+    def spawn_contained_process(self, args: list, **kwargs) -> subprocess.Popen:
+        """
+        Spawns child subprocess within Win32 Job Object (<= 150 MB RAM budget and kill-on-close).
+        """
+        proc = subprocess.Popen(args, **kwargs)
+        if self.job_handle and sys.platform == "win32":
+            assign_process_to_job(self.job_handle, proc.pid)
+        self._active_children.append(proc)
+        return proc
+
+    def terminate_children(self):
+        """Terminates all tracked child processes deterministically."""
+        for proc in getattr(self, "_active_children", []):
+            try:
+                if proc.poll() is None:
+                    terminate_process_tree(proc.pid)
+            except Exception:
+                pass
+        self._active_children = []
+
     def close(self):
-        """Cleans up Win32 Job Object handle."""
+        """Cleans up child processes and Win32 Job Object handle."""
+        self.terminate_children()
         if self.job_handle and sys.platform == "win32":
             try:
                 import ctypes

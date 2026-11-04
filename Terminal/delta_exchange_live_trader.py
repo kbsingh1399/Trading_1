@@ -221,17 +221,64 @@ class DeltaExchangeTrader:
         res = self.request("GET", "/v2/wallet/balances")
         return res.get("result", [])
 
-    def get_available_margin_usd(self) -> float:
-        """Returns current available collateral margin in USD directly from authenticated REST API."""
-        try:
-            wb = self.get_wallet_balances()
-            if isinstance(wb, list):
-                for b in wb:
-                    if b.get("asset_symbol") in ("USD", "USDT", "INR"):
-                        return float(b.get("available_balance", 0.0) or 0.0)
-        except Exception as e:
-            logger.warning(f"Error fetching wallet available margin: {e}")
+    @staticmethod
+    def convert_to_usd(amount: float, asset_symbol: str) -> float:
+        """
+        Converts collateral currency to USD using explicit, conservative FX conversion.
+        USD and USDT are mapped 1:1. INR is converted at conservative 87.0 INR/USD rate.
+        """
+        sym = (asset_symbol or "").upper().strip()
+        if sym in ("USD", "USDT"):
+            return float(amount)
+        if sym == "INR":
+            return float(amount) / 87.0
         return 0.0
+
+    def get_wallet_balances_normalized_usd(self) -> Dict[str, Any]:
+        """
+        Returns FX-normalized wallet balances across active collateral assets (USD, USDT, INR).
+        Prevents nominal summation of mismatched currencies (e.g. INR + USD).
+        """
+        wb = self.get_wallet_balances()
+        if not isinstance(wb, list):
+            return {"total_balance_usd": 0.0, "total_available_usd": 0.0, "wallets": []}
+
+        wallets_summary = []
+        total_bal_usd = 0.0
+        total_avail_usd = 0.0
+
+        for b in wb:
+            sym = b.get("asset_symbol", "")
+            if sym in ("USD", "USDT", "INR"):
+                raw_bal = float(b.get("balance", 0.0) or 0.0)
+                raw_avail = float(b.get("available_balance", 0.0) or 0.0)
+                bal_usd = self.convert_to_usd(raw_bal, sym)
+                avail_usd = self.convert_to_usd(raw_avail, sym)
+                total_bal_usd += bal_usd
+                total_avail_usd += avail_usd
+                wallets_summary.append({
+                    "asset_symbol": sym,
+                    "raw_balance": raw_bal,
+                    "raw_available": raw_avail,
+                    "balance_usd": bal_usd,
+                    "available_usd": avail_usd,
+                    "buffer_pct": (raw_avail / raw_bal * 100.0) if raw_bal > 0 else 0.0
+                })
+
+        return {
+            "total_balance_usd": total_bal_usd,
+            "total_available_usd": total_avail_usd,
+            "wallets": wallets_summary
+        }
+
+    def get_available_margin_usd(self) -> float:
+        """Returns total available collateral margin in FX-normalized USD."""
+        try:
+            summary = self.get_wallet_balances_normalized_usd()
+            return summary.get("total_available_usd", 0.0)
+        except Exception as e:
+            logger.warning(f"Error fetching normalized wallet available margin: {e}")
+            return 0.0
 
     def get_open_positions(self) -> List[Dict[str, Any]]:
         """Returns all open margined positions (REST primary, CDP fallback)."""
@@ -412,12 +459,21 @@ class DeltaExchangeTrader:
             calibrated_sl = fill_price - (dir_mult * capped_dist)
             actual_risk = capped_dist
             if sl_order:
-                self.edit_order(
+                sl_edit_res = self.edit_order(
                     order_id=sl_order["id"],
                     product_id=prod_id,
                     size=size,
                     stop_price=calibrated_sl
                 )
+                sl_success = bool(sl_edit_res.get("success", False) or sl_edit_res.get("result") or sl_edit_res.get("id"))
+                if not sl_success:
+                    logger.error(f"[{symbol}] Failed to calibrate SL to {calibrated_sl}: {sl_edit_res}")
+                    return {
+                        "ok": False,
+                        "status": "SL_EDIT_FAILED",
+                        "reason": f"Failed to edit SL order: {sl_edit_res.get('error', 'UNKNOWN')}",
+                        "edit_res": sl_edit_res
+                    }
                 logger.info(f"[{symbol}] Calibrated SL inward to {calibrated_sl} to preserve ${max_allowed_risk_usd:.2f} risk cap")
 
         # Calibrate TP to guarantee at least min_rr:1
@@ -453,7 +509,7 @@ class DeltaExchangeTrader:
                 logger.error(f"[{symbol}] Failed to re-anchor TP to {calibrated_tp}: {edit_res}")
                 return {
                     "ok": False,
-                    "status": "EDIT_FAILED",
+                    "status": "TP_EDIT_FAILED",
                     "reason": f"Failed to edit TP order: {edit_res.get('error', 'UNKNOWN')}",
                     "edit_res": edit_res
                 }
@@ -923,8 +979,10 @@ class DeltaExchangeTrader:
                 avail = float(b.get("available_balance", 0.0) or 0.0)
                 if bal > 0:
                     collateral_found = True
-                    total_balance_agg += bal
-                    total_avail_agg += avail
+                    bal_usd = self.convert_to_usd(bal, asset)
+                    avail_usd = self.convert_to_usd(avail, asset)
+                    total_balance_agg += bal_usd
+                    total_avail_agg += avail_usd
                     buf_pct = (avail / bal) * 100.0
                     if buf_pct < 20.0:
                         logger.warning(
@@ -1049,14 +1107,18 @@ class DeltaExchangeTrader:
                     )
                     if not reanchor_res.get("ok", False):
                         logger.error(f"[{prod['symbol']}] Post-fill bracket re-anchoring failed: {reanchor_res}. Closing position immediately to prevent uncalibrated risk exposure.")
-                        self.close_position(prod["symbol"])
+                        close_res = self.close_position(prod["symbol"])
+                        is_flattened = bool(close_res.get("success", False) or close_res.get("result") or close_res.get("id"))
+                        if not is_flattened:
+                            logger.critical(f"🚨 CRITICAL INCIDENT: EMERGENCY FLATTENING FAILED FOR {prod['symbol']}: {close_res}")
                         return {
                             "ok": False,
                             "status": "REJECTED_FAILED_BRACKET_ANCHOR",
                             "reason": f"BRACKET_ANCHOR_FAILURE: {reanchor_res.get('reason', 'UNKNOWN')}",
                             "venue": "DeltaExchangeIndia",
                             "symbol": prod["symbol"],
-                            "details": reanchor_res
+                            "details": reanchor_res,
+                            "flatten_confirmed": is_flattened
                         }
                 except Exception as e:
                     logger.error(f"[{prod['symbol']}] Post-fill bracket re-anchoring error: {e}. Closing position immediately.")

@@ -9,9 +9,7 @@ from Terminal.risk_envelope import (
     admissible_volume, solve_volume_ortools, validate_trade_geometry,
 )
 
-EXPECTED_MT5_LOGIN = 35296418
-VALID_MT5_LOGINS = {35296418, 5064568}
-# Legacy proprietary bridges are strictly decommissioned and excised per repository invariants.
+# Legacy proprietary bridges are strictly decommissioned and excised per repository invariants (AGENTS.md Section 3).
 # Live execution targets Delta Exchange India REST API exclusively.
 
 def competition_risk_check(*, account_id=None, balance, equity, initial_balance,
@@ -37,7 +35,7 @@ def competition_risk_check(*, account_id=None, balance, equity, initial_balance,
 
 def mt5_account_book(mt5):
     account = mt5.account_info()
-    if account is None or account.login not in VALID_MT5_LOGINS or account.currency != 'USD':
+    if account is None or getattr(account, 'currency', '') != 'USD':
         raise ValueError('ACCOUNT_IDENTITY_UNKNOWN_OR_MISMATCH')
     positions, orders = mt5.positions_get(), mt5.orders_get()
     if positions is None or orders is None:
