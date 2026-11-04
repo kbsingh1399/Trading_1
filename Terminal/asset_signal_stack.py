@@ -77,8 +77,11 @@ class EvaluatedSignalsLedger:
         self._evaluated: Dict[str, Dict[str, Any]] = {}
         self.load()
 
-    def _key(self, symbol: str, open_time_ms: int) -> str:
-        return f"{symbol.upper()}:{open_time_ms}"
+    def _key(self, symbol: str, open_time_ms: int, bar_type: str = "time") -> str:
+        bt = str(bar_type or "time").lower()
+        if bt == "time":
+            return f"{symbol.upper()}:{open_time_ms}"
+        return f"{symbol.upper()}:{bt}:{open_time_ms}"
 
     def load(self):
         jsonl_path = self.path if str(self.path).endswith(".jsonl") else self.path.with_suffix(".jsonl")
@@ -93,7 +96,8 @@ class EvaluatedSignalsLedger:
                         line = line.strip()
                         if line:
                             rec = json.loads(line)
-                            k = self._key(rec.get("symbol", ""), rec.get("open_time_ms", 0))
+                            bt = rec.get("bar_type", "time")
+                            k = self._key(rec.get("symbol", ""), rec.get("open_time_ms", 0), bt)
                             recs[k] = rec
                 self._evaluated = recs
                 loaded = True
@@ -109,9 +113,9 @@ class EvaluatedSignalsLedger:
                 logger.warning(f"Error loading evaluated signals json ledger: {e}")
                 self._evaluated = {}
 
-    def is_evaluated(self, symbol: str, open_time_ms: int) -> bool:
+    def is_evaluated(self, symbol: str, open_time_ms: int, bar_type: str = "time") -> bool:
         """Returns True if this exact candle has already undergone evaluation."""
-        return self._key(symbol, open_time_ms) in self._evaluated
+        return self._key(symbol, open_time_ms, bar_type) in self._evaluated
 
     def mark_evaluated(
         self,
@@ -121,13 +125,15 @@ class EvaluatedSignalsLedger:
         confluence_score: float,
         action: str,
         sig_name: str = "",
-        direction: str = ""
+        direction: str = "",
+        bar_type: str = "time"
     ):
         """Records the candle as evaluated and durably persists."""
-        key = self._key(symbol, open_time_ms)
+        key = self._key(symbol, open_time_ms, bar_type)
         record = {
             "symbol": symbol.upper(),
             "open_time_ms": open_time_ms,
+            "bar_type": str(bar_type or "time").lower(),
             "signal_id": signal_id,
             "confluence_score": round(confluence_score, 1),
             "action": action,

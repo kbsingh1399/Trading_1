@@ -152,7 +152,12 @@ def format_confluence_card(alert: Dict[str, Any]) -> str:
     lots = trade.get("admissible_lots", "N/A")
     risk_usd = float(trade.get("realized_risk_usd") or 0.0)
 
-    status_tag = "🚨 ACTIONABLE TRADE ALERT (SCORE >= 75.0)" if is_actionable else "⚡ ANALYZED SIGNAL (FILTERED / SUB-THRESHOLD)"
+    if is_actionable and alert.get("bar_closed", True):
+        status_tag = "🚨 ACTIONABLE TRADE ALERT (SCORE >= 75.0)"
+    elif not alert.get("bar_closed", True):
+        status_tag = "⚡ ANALYZED SIGNAL (IN-FLIGHT FORMING BAR - EVALUATED LIVE)"
+    else:
+        status_tag = "⚡ ANALYZED SIGNAL (FILTERED / SUB-THRESHOLD)"
 
     vwap_str = f"${auction.get('day_vwap', 0.0):,.2f} ({auction.get('value_status', 'N/A')})" if auction.get('day_vwap') else "N/A"
     poc_vah_val = f"POC: ${auction.get('day_poc', 0.0):,.2f} | VAH: ${auction.get('day_vah', 0.0):,.2f} | VAL: ${auction.get('day_val', 0.0):,.2f}" if auction.get('day_poc') else "N/A"
@@ -303,24 +308,32 @@ class FootprintSignalSentinel:
         evaluations = []
         now_ms = time.time() * 1000
 
-        # 1. Group signals on the exact same (symbol, time_ms) candle
+        # 1. Group signals on the exact same (symbol, bar_type, time_ms) candle/bar
         candle_clusters = defaultdict(list)
         for s in raw_signals:
             s_sym = s.get("symbol", "N/A")
+            s_bt = str(s.get("bar_type", "time")).lower()
             s_t = int(s.get("time_ms") or 0)
-            candle_clusters[(s_sym, s_t)].append(s)
+            candle_clusters[(s_sym, s_bt, s_t)].append(s)
 
-        for (sym, t_ms), cluster in candle_clusters.items():
+        for (sym, bar_type, t_ms), cluster in candle_clusters.items():
             try:
-                open_ms = canonical_bar_epoch(t_ms)
-                close_ms = open_ms + 900_000
+                is_mock = os.environ.get("MOCK_TEST_MODE") == "1" or "PYTEST_CURRENT_TEST" in os.environ or any(s.get("is_mock") for s in cluster)
+                if bar_type in ("range", "vol", "volume"):
+                    open_ms = t_ms
+                    close_ms = t_ms
+                    is_bar_closed = True
+                else:
+                    itv_ms = 300_000 if str(cluster[0].get("bar_label", "")).startswith("5m") else 900_000
+                    open_ms = canonical_bar_epoch(t_ms) if itv_ms == 900_000 else ((t_ms // 300_000) * 300_000)
+                    close_ms = open_ms + itv_ms
+                    is_bar_closed = is_mock or (open_ms > 0 and close_ms <= now_ms) or any(s.get("bar_closed") for s in cluster)
 
                 # Single Evaluation Invariant: Once reviewed, never evaluate again
-                if self.stack.ledger.is_evaluated(sym, open_ms):
-                    logger.debug(f"⏭️ [ALREADY REVIEWED] {sym} candle {open_ms} already evaluated. Suppressed.")
+                if self.stack.ledger.is_evaluated(sym, open_ms, bar_type=bar_type):
+                    logger.debug(f"⏭️ [ALREADY REVIEWED] {sym} {bar_type} bar {open_ms} already evaluated. Suppressed.")
                     continue
 
-                is_mock = os.environ.get("MOCK_TEST_MODE") == "1" or "PYTEST_CURRENT_TEST" in os.environ or any(s.get("is_mock") for s in cluster)
                 # Strict Venue Invariant: Reject any asset not tradeable on Delta Exchange India
                 if not is_mock and not delta_client.resolve_product(sym):
                     logger.info(f"⏭️ [UNLISTED ASSET] {sym} is not listed on Delta Exchange India. Suppressed.")
@@ -333,14 +346,14 @@ class FootprintSignalSentinel:
                         confluence_score=0.0,
                         action="SUPPRESSED_UNLISTED_VENUE",
                         sig_name=str(cluster[0].get("sig_name", "Unlisted")),
-                        direction=unlisted_dir
+                        direction=unlisted_dir,
+                        bar_type=bar_type
                     )
                     continue
 
-                # Strict Stale Invariant: Signals closed > 30m ago are discarded
-                is_mock = os.environ.get("MOCK_TEST_MODE") == "1" or "PYTEST_CURRENT_TEST" in os.environ or any(s.get("is_mock") for s in cluster)
-                if not is_mock and (now_ms - close_ms) > 1_800_000:
-                    logger.info(f"⏳ [STALE VETO] {sym} candle closed >30m ago ({int((now_ms - close_ms)/60000)}m ago). Discarded.")
+                # Strict Stale Invariant: Signals closed > 2 hours ago are discarded
+                if not is_mock and (now_ms - close_ms) > 7_200_000:
+                    logger.info(f"⏳ [STALE VETO] {sym} {bar_type} bar closed >2h ago ({int((now_ms - close_ms)/60000)}m ago). Discarded.")
                     sig_codes = [s.get("sig_code", "") for s in cluster]
                     stale_dir = str(cluster[0].get("side", "N/A"))
                     self.stack.ledger.mark_evaluated(
@@ -350,32 +363,9 @@ class FootprintSignalSentinel:
                         confluence_score=0.0,
                         action="DISCARDED_STALE",
                         sig_name=str(cluster[0].get("sig_name", "Stale")),
-                        direction=stale_dir
+                        direction=stale_dir,
+                        bar_type=bar_type
                     )
-                    continue
-
-                # Strict Bar Type Invariant: 15m time candles only (t_ms % 900_000 == 0, bar_type == 'time')
-                bar_type = str(cluster[0].get("bar_type", "time")).lower()
-                if not is_mock and (bar_type != "time" or t_ms % 900_000 != 0):
-                    logger.info(f"🚫 [NON-TIME-BAR VETO] {sym} bar_type={bar_type}, t_ms={t_ms} not aligned to 15m time candle. Discarded.")
-                    sig_codes = [s.get("sig_code", "") for s in cluster]
-                    stale_dir = str(cluster[0].get("side", "N/A"))
-                    self.stack.ledger.mark_evaluated(
-                        symbol=sym,
-                        open_time_ms=open_ms,
-                        signal_id=generate_signal_id(sym, open_ms, stale_dir, sig_codes),
-                        confluence_score=0.0,
-                        action="DISCARDED_NON_TIME_BAR",
-                        sig_name=str(cluster[0].get("sig_name", "NonTimeBar")),
-                        direction=stale_dir
-                    )
-                    continue
-
-                # Strict Bar Completion Invariant: Derived strictly from timestamp
-                is_bar_closed = is_mock or (open_ms > 0 and close_ms <= now_ms)
-                if not is_bar_closed:
-                    mins_remaining = max(0.0, (close_ms - now_ms) / 60000.0)
-                    logger.info(f"⏳ [INTRA-BAR WICK VETO] {sym} on active candle (closes in {mins_remaining:.1f}m). Skipped to prevent wick repainting.")
                     continue
 
                 # If multiple signals fired on the exact same candle, form a unified cluster
@@ -445,34 +435,38 @@ class FootprintSignalSentinel:
                 # Phase 4: Actionable Trade Dispatch (Direct Delta Exchange India Auto-Wake Execution)
                 final_action = action_str
                 if is_actionable and direction in ("BUY", "SELL"):
-                    if winsound is not None:
-                        try:
-                            winsound.Beep(1200, 450)
-                        except Exception:
-                            pass
-                    print(" ", end="", flush=True)
-
-                    logger.info(f"⚡ CONFLUENCE THRESHOLD ACHIEVED: {score:.1f}/100 >= 75.0! Initiating Live Delta Exchange Execution...")
-                    delta_product = delta_client.resolve_product(sym)
-                    if delta_product:
-                        logger.info(f"🚀 [DELTA AUTO-WAKE] Routing {sym} ({direction}) to Delta Exchange India ({delta_product})...")
-                        order_lock_file = str(DB_DIR / ".locks" / "order_execution_inflight.lock")
-                        with FileMutex(order_lock_file, timeout=15.0) as order_guard:
-                            if not order_guard.acquired:
-                                logger.warning(f"[{sym}] Order dispatch lock timeout (15.0s). Skipping to protect in-flight trade.")
-                                final_action = "DISPATCH_LOCK_TIMEOUT"
-                            else:
-                                dispatch_res = await asyncio.to_thread(delta_client.execute_delta_signal, eval_res)
-                                logger.info(f"✨ Delta Exchange India Dispatch Result: {dispatch_res}")
-                                if dispatch_res and dispatch_res.get("ok"):
-                                    self.state["dispatched_trades_count"] += 1
-                                    save_state(self.state)
-                                    final_action = "DISPATCHED"
-                                else:
-                                    final_action = f"REJECTED_{dispatch_res.get('reason', 'UNKNOWN')}" if dispatch_res else "DISPATCH_FAILED"
+                    if not is_bar_closed:
+                        logger.info(f"⏳ [IN-FLIGHT FORMING BAR] {sym} {bar_type} signal evaluated live. Live Delta execution withheld until bar close.")
+                        final_action = "ANALYZED_IN_FLIGHT_FORMING"
                     else:
-                        logger.warning(f"No Delta Exchange product resolved for {sym}; cannot execute.")
-                        final_action = "REJECTED_UNLISTED_ON_DELTA"
+                        if winsound is not None:
+                            try:
+                                winsound.Beep(1200, 450)
+                            except Exception:
+                                pass
+                        print(" ", end="", flush=True)
+
+                        logger.info(f"⚡ CONFLUENCE THRESHOLD ACHIEVED: {score:.1f}/100 >= 75.0! Initiating Live Delta Exchange Execution...")
+                        delta_product = delta_client.resolve_product(sym)
+                        if delta_product:
+                            logger.info(f"🚀 [DELTA AUTO-WAKE] Routing {sym} ({direction}) to Delta Exchange India ({delta_product})...")
+                            order_lock_file = str(DB_DIR / ".locks" / "order_execution_inflight.lock")
+                            with FileMutex(order_lock_file, timeout=15.0) as order_guard:
+                                if not order_guard.acquired:
+                                    logger.warning(f"[{sym}] Order dispatch lock timeout (15.0s). Skipping to protect in-flight trade.")
+                                    final_action = "DISPATCH_LOCK_TIMEOUT"
+                                else:
+                                    dispatch_res = await asyncio.to_thread(delta_client.execute_delta_signal, eval_res)
+                                    logger.info(f"✨ Delta Exchange India Dispatch Result: {dispatch_res}")
+                                    if dispatch_res and dispatch_res.get("ok"):
+                                        self.state["dispatched_trades_count"] += 1
+                                        save_state(self.state)
+                                        final_action = "DISPATCHED"
+                                    else:
+                                        final_action = f"REJECTED_{dispatch_res.get('reason', 'UNKNOWN')}" if dispatch_res else "DISPATCH_FAILED"
+                        else:
+                            logger.warning(f"No Delta Exchange product resolved for {sym}; cannot execute.")
+                            final_action = "REJECTED_UNLISTED_ON_DELTA"
                 else:
                     logger.info(f"[EVALUATOR] {sym} {direction} Confluence Score: {score:.1f}/100 -> Filtered (Required >= 75.0)")
                     final_action = "FILTERED_SUB_THRESHOLD"
@@ -485,7 +479,8 @@ class FootprintSignalSentinel:
                     confluence_score=score,
                     action=final_action,
                     sig_name=sig_name,
-                    direction=direction
+                    direction=direction,
+                    bar_type=bar_type
                 )
 
             except Exception as e:
@@ -624,31 +619,11 @@ class FootprintSignalSentinel:
     async def run_once(self):
         """Processes any unread footprint signals and audits running trades once."""
         new_signals = self.read_new_raw_signals()
-        for s in new_signals:
-            k = f"{s.get('symbol')}_{s.get('sig_name')}_{s.get('time_ms')}"
-            self.pending_signals[k] = s
-
-        now_ms = time.time() * 1000
-        signals_ready = []
-        still_pending = {}
-        for k, raw in list(self.pending_signals.items()):
-            t_ms = int(raw.get("time_ms") or 0)
-            close_ms = t_ms + 900_000
-            is_bar_closed = (t_ms > 0 and close_ms <= now_ms)
-            # Strict Freshness Invariant: Only consider signals from recent completed 15m candle (<= 30m past close)
-            if (now_ms - close_ms) > 1_800_000:
-                continue
-            if is_bar_closed:
-                signals_ready.append(raw)
-            else:
-                still_pending[k] = raw
-        self.pending_signals = still_pending
-
-        if signals_ready:
-            logger.info(f"Found {len(signals_ready)} closed footprint signal(s). Evaluating...")
-            await self.evaluate_and_dispatch(signals_ready)
+        if new_signals:
+            logger.info(f"⚡ Discovered {len(new_signals)} new footprint signal(s) [time/range/vol]. Immediate quantitative evaluation...")
+            await self.evaluate_and_dispatch(new_signals)
         else:
-            logger.info("No completed candle footprint signals ready for evaluation.")
+            logger.info("No new footprint signals ready for evaluation.")
 
         await self.inspect_and_manage_running_trades()
 
@@ -701,32 +676,11 @@ class FootprintSignalSentinel:
                     except asyncio.TimeoutError:
                         pass
 
-                    # 1. Read newly appended signals and buffer intra-bar signals
+                    # 1. Read newly appended signals and immediately evaluate
                     new_signals = self.read_new_raw_signals()
-                    for s in new_signals:
-                        k = f"{s.get('symbol')}_{s.get('sig_name')}_{s.get('time_ms')}"
-                        self.pending_signals[k] = s
-
-                    # 2. Evaluate signals whose 15m candle has officially completed
-                    now_ms = time.time() * 1000
-                    signals_ready = []
-                    still_pending = {}
-                    for k, raw in list(self.pending_signals.items()):
-                        t_ms = int(raw.get("time_ms") or 0)
-                        close_ms = t_ms + 900_000
-                        is_bar_closed = (t_ms > 0 and close_ms <= now_ms)
-                        # Strict Freshness Invariant: Discard stale historical signals older than 2 closed bars (30m)
-                        if (now_ms - close_ms) > 1_800_000:
-                            continue
-                        if is_bar_closed:
-                            signals_ready.append(raw)
-                        else:
-                            still_pending[k] = raw
-                    self.pending_signals = still_pending
-
-                    if signals_ready:
-                        logger.info(f"⚡ [BAR COMPLETION WAKE] Releasing {len(signals_ready)} fully closed 15m signal(s) to evaluator.")
-                        await self.evaluate_and_dispatch(signals_ready)
+                    if new_signals:
+                        logger.info(f"⚡ Discovered {len(new_signals)} new footprint signal(s) [time/range/vol]. Immediate quantitative evaluation...")
+                        await self.evaluate_and_dispatch(new_signals)
 
                     # Advance durable offset after processing signals
                     if hasattr(self, "_pending_offset") and self._pending_offset > self.state.get("offset", 0):

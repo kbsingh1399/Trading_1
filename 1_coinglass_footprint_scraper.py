@@ -116,8 +116,9 @@ def load_known_signals():
                         sym = data.get("symbol")
                         sig = str(data.get("sig_code") if data.get("sig_code") is not None else "")
                         t_ms = int(data.get("time_ms") or 0)
+                        bt = str(data.get("bar_type") or "time").lower()
                         if sym and t_ms > 0:
-                            KNOWN_SIGNAL_KEYS.add((sym, sig, t_ms))
+                            KNOWN_SIGNAL_KEYS.add((sym, sig, bt, t_ms))
                     except Exception:
                         continue
             logger.info(f"Pre-loaded {len(KNOWN_SIGNAL_KEYS)} known signal keys from {SIGNALS_JSONL.name}.")
@@ -401,15 +402,28 @@ def dump_signals(signals: List[dict], candles: Optional[List[dict]] = None) -> L
     now_ms = time.time() * 1000
     for s in enriched:
         t_ms = int(s.get("time_ms") or 0)
-        close_ms = t_ms + 900_000
-        if s.get("bar_type", "time") != "time" or (t_ms % 900_000 != 0):
+        if t_ms <= 0:
             continue
-        if t_ms <= 0 or close_ms > now_ms or now_ms - close_ms > 1_800_000:  # Freshness invariant: immediate closed 15m candle only
+        bar_type = str(s.get("bar_type", "time")).lower()
+        if bar_type in ("range", "vol"):
+            is_closed = True
+            close_ms = t_ms
+        else:
+            itv_ms = 300_000 if str(s.get("bar_label", "")).startswith("5m") else 900_000
+            close_ms = t_ms + itv_ms
+            is_closed = (close_ms <= now_ms)
+
+        if not is_closed:
             continue
-        s["bar_closed"] = True
+
+        # Freshness invariant: ignore stale historical dumps older than 2 hours
+        if (now_ms - t_ms) > 7_200_000:
+            continue
+
+        s["bar_closed"] = is_closed
         s["candle_close_ms"] = close_ms
         s["candle_close_ist"] = utc_ms_to_ist_str(close_ms)
-        key = (s["symbol"], str(s.get("sig_code") if s.get("sig_code") is not None else ""), t_ms)
+        key = (s["symbol"], str(s.get("sig_code") if s.get("sig_code") is not None else ""), bar_type, t_ms)
         if key not in KNOWN_SIGNAL_KEYS:
             KNOWN_SIGNAL_KEYS.add(key)
             newly_discovered.append(s)
@@ -418,8 +432,7 @@ def dump_signals(signals: List[dict], candles: Optional[List[dict]] = None) -> L
         with open(SIGNALS_JSONL, "a", encoding="utf-8") as f:
             for s in newly_discovered:
                 f.write(json.dumps(s) + "\n")
-        logger.info(f"Discovered {len(newly_discovered)} closed footprint signal(s); appended to {SIGNALS_JSONL.name}")
-
+        logger.info(f"Discovered {len(newly_discovered)} footprint signal(s) [time/vol/range]; appended to {SIGNALS_JSONL.name}")
     return newly_discovered
 
 

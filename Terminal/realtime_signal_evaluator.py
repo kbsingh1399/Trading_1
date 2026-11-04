@@ -842,17 +842,17 @@ class RealtimeSignalEvaluator:
 
 
 
-        # Strict Bar Completion and Time Bar Invariant (AGENTS.md Policy 3 & Arena Finding 6)
+        # Strict Bar Completion and Bar Type Support (Time 15m/5m, Range, and Volume)
         bar_type = str(sig.get("bar_type", "time")).lower()
-        if bar_type != "time":
-            validation_errors.append('NON_TIME_BAR_DISCARDED')
-
         sig_time_ms = int(sig.get("time_ms") or 0)
-        if sig_time_ms > 0 and (sig_time_ms % 900_000 != 0):
-            validation_errors.append('MISALIGNED_TIMESTAMP_DISCARDED')
-
         now_ms = time.time() * 1000
-        is_bar_closed = (sig_time_ms > 0 and (sig_time_ms + 900_000) <= now_ms) or sig.get("bar_closed") is True
+
+        if bar_type in ("range", "vol", "volume"):
+            is_bar_closed = True
+        else:
+            bar_interval = 300_000 if (sig_time_ms % 300_000 == 0 and sig_time_ms % 900_000 != 0) else 900_000
+            is_bar_closed = (sig_time_ms > 0 and (sig_time_ms + bar_interval) <= now_ms) or sig.get("bar_closed") is True
+
         if not is_bar_closed:
             validation_errors.append('BAR_NOT_CLOSED_INTRA_BAR_WICK')
 
