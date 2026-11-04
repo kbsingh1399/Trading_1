@@ -78,7 +78,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from Terminal.runtime_io import writer_lock, atomic_parquet
 
-from Terminal.venue_admission import matchtrader_symbol, native_size
+from Terminal.venue_admission import native_size
 
 from Terminal.olap_engine import OlapEngine
 
@@ -183,6 +183,12 @@ class RealtimeSignalEvaluator:
         except Exception as exc:
             logger.warning('TradeCriticEngine unavailable: %s', exc)
             self.critic_engine = None
+        try:
+            from Terminal.deepseek_harness_bridge import DeepSeekHarnessBridge
+            self.dsh_bridge = DeepSeekHarnessBridge()
+        except Exception as exc:
+            logger.warning('DeepSeekHarnessBridge unavailable: %s', exc)
+            self.dsh_bridge = None
 
 
 
@@ -988,10 +994,33 @@ class RealtimeSignalEvaluator:
 
                              and not validation_errors and not forecast_veto)
 
+        deepseek_critic = {}
+        if is_actionable and self.dsh_bridge:
+            try:
+                candidate_summary = {
+                    "symbol": sym,
+                    "direction": direction,
+                    "confluence_score": confluence_score,
+                    "signal_details": sig,
+                    "confluence_reasons": reasons,
+                    "trade_levels": {
+                        "entry": entry,
+                        "stop_loss": sl,
+                        "take_profit": tp1,
+                        "rr": rr,
+                    }
+                }
+                dsh_audit = self.dsh_bridge.evaluate_signal_confluence(candidate_summary)
+                deepseek_critic = dsh_audit
+                if not dsh_audit.get("approved", True):
+                    veto_msg = f"DEEPSEEK_CRITIC_VETO: {dsh_audit.get('reason')}"
+                    validation_errors.append(veto_msg)
+                    reasons.append(f"Validation Veto: {veto_msg}")
+                    is_actionable = False
+            except Exception as dsh_err:
+                logger.warning(f"[{sym}] DeepSeek critic evaluation error: {dsh_err}")
+
         delta_authorized = bool(is_actionable and delta_prod is not None)
-
-        matchtrader_authorized = False
-
         mt5_authorized = bool(is_actionable and vol_status == 'OK')
 
 
@@ -1111,10 +1140,7 @@ class RealtimeSignalEvaluator:
             "delta_product_symbol": delta_prod.get("symbol") if delta_prod else None,
 
             "delta_execution_authorized": delta_authorized,
-
-            "matchtrader_symbol": None,
-
-            "matchtrader_execution_authorized": False,
+            "deepseek_critic": deepseek_critic,
 
             "mt5_execution_authorized": mt5_authorized,
 

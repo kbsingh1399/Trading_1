@@ -185,6 +185,7 @@ def format_confluence_card(alert: Dict[str, Any]) -> str:
         f"║  Risk Allocation:  Contracts={lots} | Risk=${risk_usd:.2f} (Cap: ${trade.get('hard_max_risk_usd', MAX_RISK_USD):.2f})".ljust(83) + "║",
         f"║  Delta Exchange:   Authorized={'✅ YES (DISPATCH READY)' if is_actionable and delta_prod_res else ('❌ NO (SUB-THRESHOLD)' if not is_actionable else '⚠️ NO PRODUCT (Unlisted on Delta India)')} | Product={delta_prod_sym} (10x-20x Leverage)".ljust(83) + "║",
         f"║  Risk Execution:   R:R >= 2.0:1 Guaranteed (Fill-Anchored Dynamic Calibration) | Venue: Delta India".ljust(83) + "║",
+        f"║  DeepSeek Critic:  {'✅ APPROVED (High-Probability Confluence)' if alert.get('deepseek_critic', {}).get('approved', True) else '❌ VETOED (' + str(alert.get('deepseek_critic', {}).get('reason')) + ')'}".ljust(83) + "║",
         "╟" + "─" * 82 + "╢",
         f"║  Auction Profile:  Day VWAP: {vwap_str}".ljust(83) + "║",
         f"║  Value Area:       {poc_vah_val}".ljust(83) + "║",
