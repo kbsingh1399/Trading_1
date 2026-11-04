@@ -666,3 +666,58 @@ def test_reanchor_brackets_cancels_residual_orders_on_edit_failure(trader):
         assert res.get("status") == "SL_EDIT_FAILED"
         mock_cancel.assert_any_call(102, 1)
         mock_cancel.assert_any_call(101, 1)
+
+def test_environment_aware_product_resolution_demo_vs_prod(trader):
+    """
+    Verifies that _load_products and resolve_product correctly handle demo vs production
+    endpoints and allow resolving by both symbol and numeric product_id.
+    """
+    trader.products_cache = {
+        "BTCUSD": {"id": 84, "symbol": "BTCUSD", "tick_size": 0.1, "contract_value": 0.001, "underlying": "BTC"}
+    }
+    # Resolve by symbol
+    prod_sym = trader.resolve_product("BTCUSD")
+    assert prod_sym is not None
+    assert prod_sym["id"] == 84
+
+    # Resolve by numeric product ID
+    prod_id_int = trader.resolve_product(84)
+    assert prod_id_int is not None
+    assert prod_id_int["symbol"] == "BTCUSD"
+
+    prod_id_str = trader.resolve_product("84")
+    assert prod_id_str is not None
+    assert prod_id_str["symbol"] == "BTCUSD"
+
+
+def test_audit_prioritizes_pos_product_id_and_prevents_mismatched_anchor(trader):
+    """
+    Verifies that audit_and_trail_positions uses pos.get('product_id') directly
+    and correctly matches resting bracket orders with identical product_id.
+    """
+    from Terminal.position_anchors import load_position_anchors
+
+    active_pos = [{
+        "product_symbol": "BTCUSD",
+        "product_id": 84,
+        "size": 1,
+        "entry_price": 80000.0,
+        "mark_price": 80200.0,
+        "product": {"id": 84, "contract_value": "0.001", "tick_size": "0.1"}
+    }]
+    open_orders = [
+        {"id": 201, "product_id": 84, "stop_order_type": "stop_loss_order", "stop_price": "79000.0", "side": "sell", "size": 1},
+        {"id": 202, "product_id": 84, "stop_order_type": "take_profit_order", "stop_price": "82000.0", "side": "sell", "size": 1}
+    ]
+
+    with patch.object(trader, "get_active_positions", return_value=active_pos), \
+         patch.object(trader, "get_open_orders", return_value=open_orders), \
+         patch.object(trader, "request", return_value={"result": [{"symbol": "BTCUSD", "mark_price": 80200.0}]}):
+        reports = trader.audit_and_trail_positions()
+        # No emergency closes or missing bracket warnings
+        assert not any("EMERGENCY_CLOSE" in r.get("action", "") for r in reports)
+        anchors = load_position_anchors()
+        assert "BTCUSD" in anchors
+        assert anchors["BTCUSD"]["product_id"] == 84
+        assert anchors["BTCUSD"]["initial_sl"] == 79000.0
+

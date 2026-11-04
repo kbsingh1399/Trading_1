@@ -220,7 +220,7 @@ class DeltaExchangeTrader:
             ts = str(int(time.time()))
             sig = hmac.new(self.api_secret.encode(), ("GET" + ts + "/v2/positions/margined").encode(), hashlib.sha256).hexdigest()
             headers = {"api-key": self.api_key, "timestamp": ts, "signature": sig}
-            resp = self.session.get(f"{BASE_URL}/v2/positions/margined", headers=headers, timeout=10)
+            resp = self.session.get(f"{self.base_url}/v2/positions/margined", headers=headers, timeout=10)
             if resp.status_code == 401:
                 ctx = resp.json().get("error", {}).get("context", {})
                 server_time = ctx.get("server_time")
@@ -240,7 +240,7 @@ class DeltaExchangeTrader:
     def _load_products(self):
         """Caches perpetual futures metadata for rapid resolution."""
         try:
-            resp = self.session.get(f"{BASE_URL}/v2/products", timeout=10)
+            resp = self.session.get(f"{self.base_url}/v2/products", timeout=10)
             if resp.status_code == 200:
                 data = resp.json().get("result", [])
                 for p in data:
@@ -258,9 +258,14 @@ class DeltaExchangeTrader:
         except Exception as e:
             logger.warning(f"Could not load products: {e}")
 
-    def resolve_product(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """Resolves raw symbol (e.g. 'LTC', 'LTCUSD') to Delta perpetual product."""
-        clean = symbol.upper().replace(".PI", "").replace("USDT", "").replace("USD", "")
+    def resolve_product(self, symbol: Union[str, int]) -> Optional[Dict[str, Any]]:
+        """Resolves raw symbol (e.g. 'LTC', 'LTCUSD') or product_id to Delta perpetual product."""
+        if isinstance(symbol, int) or (isinstance(symbol, str) and symbol.isdigit()):
+            target_id = int(symbol)
+            for meta in self.products_cache.values():
+                if int(meta.get("id", -1)) == target_id:
+                    return meta
+        clean = str(symbol).upper().replace(".PI", "").replace("USDT", "").replace("USD", "")
         # Exact match first
         cand1 = f"{clean}USD"
         if cand1 in self.products_cache:
@@ -923,11 +928,11 @@ class DeltaExchangeTrader:
                 continue
 
             prod = self.resolve_product(p_sym)
-            if not prod:
+            prod_id = int(pos.get("product_id") or (prod["id"] if prod else 0))
+            if not prod_id:
                 continue
-            prod_id = prod["id"]
-            contract_val = float(prod.get("contract_value", 1.0) or 1.0)
-            tick_size = float(prod.get("tick_size", 0.01) or 0.01)
+            contract_val = float(pos.get("product", {}).get("contract_value") or (prod.get("contract_value") if prod else 1.0) or 1.0)
+            tick_size = float(pos.get("product", {}).get("tick_size") or (prod.get("tick_size") if prod else 0.01) or 0.01)
 
             entry_price = float(pos.get("entry_price", 0.0) or 0.0)
             mark_price = mark_prices.get(p_sym) or float(pos.get("mark_price", 0.0) or 0.0)
@@ -1204,7 +1209,8 @@ class DeltaExchangeTrader:
             p_clean = p_sym.upper().replace(".PI", "").replace("USDT", "").replace("USD", "").strip()
             if clean == p_clean or p_sym.upper() == symbol.upper():
                 prod = self.resolve_product(p_sym)
-                if not prod:
+                prod_id = int(p.get("product_id") or (prod["id"] if prod else 0))
+                if not prod_id:
                     continue
                 size = abs(int(p.get("size", 0)))
                 if size <= 0:
@@ -1213,7 +1219,7 @@ class DeltaExchangeTrader:
                 cur_size = int(p.get("size", 0))
                 close_side = "sell" if cur_size > 0 else "buy"
                 body = {
-                    "product_id": prod["id"],
+                    "product_id": prod_id,
                     "size": size,
                     "side": close_side,
                     "order_type": "market_order",

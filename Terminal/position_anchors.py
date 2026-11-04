@@ -97,9 +97,10 @@ def register_position_anchor(
 
     # Protect existing active ratcheted positions from denominator collapse
     if existing and abs(existing.get("entry_price", 0.0) - float(entry_price)) < (float(entry_price) * 0.001):
-        if existing.get("current_tier", 0) > 0 or existing.get("initial_risk_dist", 0.0) > 0:
-            logger.info(f"[{clean_sym}] Preserving existing anchor (Tier {existing.get('current_tier', 0)}, R0={existing.get('initial_risk_dist', 0.0):.6f})")
-            return existing
+        if not product_id or existing.get("product_id") == int(product_id):
+            if existing.get("current_tier", 0) > 0 or existing.get("initial_risk_dist", 0.0) > 0:
+                logger.info(f"[{clean_sym}] Preserving existing anchor (Tier {existing.get('current_tier', 0)}, R0={existing.get('initial_risk_dist', 0.0):.6f})")
+                return existing
 
     r0 = abs(entry_price - initial_sl) if initial_risk_dist is None else float(initial_risk_dist)
     if r0 <= 0:
@@ -144,9 +145,15 @@ def get_or_recover_anchor(
     anchors = load_position_anchors()
     existing = anchors.get(clean_sym)
 
-    # Validate existing anchor matches current position entry
+    # Validate existing anchor matches current position entry and product_id
     if existing and abs(existing.get("entry_price", 0.0) - entry_price) < (entry_price * 0.001):
-        return existing
+        if not product_id or existing.get("product_id") == product_id:
+            # If resting SL is on loss side, verify existing initial_sl does not deviate wildly from real order
+            if cur_sl_price > 0 and ((direction.upper() == "BUY" and cur_sl_price < entry_price) or (direction.upper() == "SELL" and cur_sl_price > entry_price)):
+                if abs(existing.get("initial_sl", 0.0) - cur_sl_price) < (entry_price * 0.05):
+                    return existing
+            else:
+                return existing
 
     # PATCH A1: Cold-Start Recovery Hierarchy — tier-aware R0 inference.
     # The profit-side SL is itself tier information:

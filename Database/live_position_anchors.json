@@ -1,16 +1,16 @@
 {
   "BTCUSD": {
     "symbol": "BTCUSD",
-    "product_id": 27,
+    "product_id": 84,
     "direction": "BUY",
     "entry_price": 80178.0,
-    "initial_sl": 55178.0,
-    "initial_tp": 130178.0,
-    "initial_risk_dist": 25000.0,
+    "initial_sl": 79541.9,
+    "initial_tp": 81155.1,
+    "initial_risk_dist": 636.1000000000058,
     "current_tier": 0,
     "size": 1,
-    "last_ratchet_price": 55178.0,
+    "last_ratchet_price": 79541.9,
     "contract_val": 0.001,
-    "initial_risk_usd": 25.0
+    "initial_risk_usd": 0.64
   }
 }
