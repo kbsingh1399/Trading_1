@@ -247,22 +247,21 @@ async def extract_symbol_footprint(ws, sym: str, mt5_sym: str) -> dict:
 
                     const signals = [];
                     for (const set of (sigSets || [])) {{
-                        if (set.bt !== 'time') continue;
                         const X = set.X;
                         for (const s of (set.sigs || [])) {{
                             const timeMs = X && X.T ? X.T[s.i] : null;
-                            if (!timeMs || (timeMs % 900000 !== 0)) continue;
+                            if (!timeMs) continue;
                             const text = (term.sigText ? term.sigText(s, X) : null) || ['', ''];
                             signals.push({{
                                 symbol: sym,
                                 mt5_symbol: mt5,
                                 market: 'agg-perp',
-                                bar_type: set.bt,
-                                bar_label: set.label,
+                                bar_type: set.bt || 'time',
+                                bar_label: set.label || set.bt || '15m',
                                 time_ms: timeMs,
                                 datetime_utc: new Date(timeMs).toISOString(),
                                 sig_code: s.t,
-                                sig_name: term.sigName(s),
+                                sig_name: term.sigName ? term.sigName(s) : (s.t || 'Signal'),
                                 side: s.side === 'buy' ? 'bullish' : 'bearish',
                                 price: s.p,
                                 title: text[0] || '',
