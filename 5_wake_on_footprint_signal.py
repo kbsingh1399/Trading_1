@@ -306,6 +306,17 @@ class FootprintSignalSentinel:
                 # Strict Venue Invariant: Reject any asset not tradeable on Delta Exchange India
                 if not is_mock and not delta_client.resolve_product(sym):
                     logger.info(f"⏭️ [UNLISTED ASSET] {sym} is not listed on Delta Exchange India. Suppressed.")
+                    sig_codes = [s.get("sig_code", "") for s in cluster]
+                    unlisted_dir = str(cluster[0].get("side", "N/A"))
+                    self.stack.ledger.mark_evaluated(
+                        symbol=sym,
+                        open_time_ms=open_ms,
+                        signal_id=generate_signal_id(sym, open_ms, unlisted_dir, sig_codes),
+                        confluence_score=0.0,
+                        action="SUPPRESSED_UNLISTED_VENUE",
+                        sig_name=str(cluster[0].get("sig_name", "Unlisted")),
+                        direction=unlisted_dir
+                    )
                     continue
 
                 # Strict Stale Invariant: Signals closed > 30m ago are discarded

@@ -113,6 +113,9 @@ def _estimate_kyles_lambda(prices: np.ndarray, deltas: np.ndarray) -> float:
     if len(prices) < 2 or len(deltas) < 2:
         return 0.0
 
+    if not np.all(np.isfinite(prices)) or not np.all(np.isfinite(deltas)):
+        return 0.0
+
     dP = np.diff(prices)
     flow = deltas[1:]  # align with price differences
 
@@ -198,8 +201,33 @@ def compute_vpin_and_toxicity(
         raw_volumes = tail_df[vol_col].values.astype(np.float64)
         raw_volumes = np.maximum(raw_volumes, 0.0)
 
+        # STRICT NON-FINITE INTEGRITY: Reject NaN or infinite volumes
+        if not np.all(np.isfinite(raw_volumes)):
+            return {
+                "symbol": symbol,
+                "vpin": 0.50,
+                "regime": "CORRUPTED_DELTA_INTEGRITY",
+                "adverse_selection_risk": "UNKNOWN",
+                "kyles_lambda": 0.0,
+                "veto_toxic_flow": False,
+                "data_valid": False,
+                "error": "Non-finite volume values detected"
+            }
+
         if delta_col and delta_col in tail_df.columns:
             raw_deltas = tail_df[delta_col].values.astype(np.float64)
+            # STRICT NON-FINITE INTEGRITY: Reject NaN or infinite deltas
+            if not np.all(np.isfinite(raw_deltas)):
+                return {
+                    "symbol": symbol,
+                    "vpin": 0.50,
+                    "regime": "CORRUPTED_DELTA_INTEGRITY",
+                    "adverse_selection_risk": "UNKNOWN",
+                    "kyles_lambda": 0.0,
+                    "veto_toxic_flow": False,
+                    "data_valid": False,
+                    "error": "Non-finite delta values detected"
+                }
             # STRICT DATA INTEGRITY: |delta| cannot exceed volume
             # If any bar has |delta| > volume + 1e-4, reject input rather than silently sanitize
             overshoot = np.abs(raw_deltas) - raw_volumes
@@ -220,6 +248,17 @@ def compute_vpin_and_toxicity(
             opens = tail_df["open"].values.astype(np.float64)
             highs = tail_df["high"].values.astype(np.float64)
             lows = tail_df["low"].values.astype(np.float64)
+            if not (np.all(np.isfinite(closes)) and np.all(np.isfinite(opens)) and np.all(np.isfinite(highs)) and np.all(np.isfinite(lows))):
+                return {
+                    "symbol": symbol,
+                    "vpin": 0.50,
+                    "regime": "CORRUPTED_DELTA_INTEGRITY",
+                    "adverse_selection_risk": "UNKNOWN",
+                    "kyles_lambda": 0.0,
+                    "veto_toxic_flow": False,
+                    "data_valid": False,
+                    "error": "Non-finite candle price values detected"
+                }
             ranges = np.maximum(highs - lows, 1e-8)
             raw_deltas = raw_volumes * ((closes - opens) / ranges)
 

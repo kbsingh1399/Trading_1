@@ -174,3 +174,81 @@ def test_evaluator_level_vpin_veto_causal_isolation():
         assert res_toxic.get("is_actionable") is False, "Toxic setup must NOT be actionable"
         assert any("VETO_TOXIC_ORDER_FLOW" in str(r) for r in res_toxic.get("validation_errors", [])), \
             f"Expected VETO_TOXIC_ORDER_FLOW in validation_errors: {res_toxic.get('validation_errors')}"
+
+def test_vpin_rejects_nan_and_infinite_inputs():
+    """Ensure NaN, positive infinity, or negative infinity values are strictly rejected."""
+    # 1. NaN delta
+    df_nan_delta = pd.DataFrame({
+        "open": [100.0] * 20,
+        "high": [101.0] * 20,
+        "low": [99.0] * 20,
+        "close": [100.5] * 20,
+        "volume": [1000.0] * 20,
+        "delta": [np.nan] * 20
+    })
+    res_nan = compute_vpin_and_toxicity("BTC", candle_df=df_nan_delta)
+    assert res_nan["data_valid"] is False
+    assert res_nan["regime"] == "CORRUPTED_DELTA_INTEGRITY"
+
+    # 2. Inf volume
+    df_inf_vol = pd.DataFrame({
+        "open": [100.0] * 20,
+        "high": [101.0] * 20,
+        "low": [99.0] * 20,
+        "close": [100.5] * 20,
+        "volume": [np.inf] * 20,
+        "delta": [100.0] * 20
+    })
+    res_inf = compute_vpin_and_toxicity("BTC", candle_df=df_inf_vol)
+    assert res_inf["data_valid"] is False
+    assert res_inf["regime"] == "CORRUPTED_DELTA_INTEGRITY"
+
+    # 3. Nan prices in proxy mode
+    df_nan_price = pd.DataFrame({
+        "open": [np.nan] * 20,
+        "high": [101.0] * 20,
+        "low": [99.0] * 20,
+        "close": [100.5] * 20,
+        "volume": [1000.0] * 20
+    })
+    res_nan_price = compute_vpin_and_toxicity("BTC", candle_df=df_nan_price)
+    assert res_nan_price["data_valid"] is False
+    assert res_nan_price["regime"] == "CORRUPTED_DELTA_INTEGRITY"
+
+
+def test_delta_venue_symbol_guard_ledgers_unlisted_suppression(tmp_path):
+    """Ensure non-Delta symbols (e.g., GER30, EURUSD) are suppressed and recorded in the ledger."""
+    from Terminal.asset_signal_stack import EvaluatedSignalsLedger
+    import importlib
+    sentinel_mod = importlib.import_module("5_wake_on_footprint_signal")
+
+    ledger_file = tmp_path / "test_ledger.jsonl"
+    ledger = EvaluatedSignalsLedger(ledger_path=ledger_file)
+    
+    # GER30 is unlisted on Delta Exchange India
+    sym = "GER30"
+    open_ms = 1793780100000
+    sig_codes = ["abs", "exh"]
+    sig_id = sentinel_mod.generate_signal_id(sym, open_ms, "bearish", sig_codes)
+
+    # Verify not resolved by delta client
+    assert sentinel_mod.delta_client.resolve_product(sym) is None
+
+    # Mark as suppressed
+    ledger.mark_evaluated(
+        symbol=sym,
+        open_time_ms=open_ms,
+        signal_id=sig_id,
+        confluence_score=0.0,
+        action="SUPPRESSED_UNLISTED_VENUE",
+        sig_name="Absorption",
+        direction="bearish"
+    )
+
+    import json
+    assert ledger.is_evaluated(sym, open_ms) is True
+    with open(ledger_file, "r", encoding="utf-8") as f:
+        records = [json.loads(line) for line in f if line.strip()]
+    assert len(records) == 1
+    assert records[0]["symbol"] == "GER30"
+    assert records[0]["action"] == "SUPPRESSED_UNLISTED_VENUE"
