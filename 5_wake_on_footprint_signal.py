@@ -150,7 +150,7 @@ def format_confluence_card(alert: Dict[str, Any]) -> str:
     is_actionable = alert.get("is_actionable", False)
     # MatchTrader excised
     lots = trade.get("admissible_lots", "N/A")
-    risk_usd = trade.get("realized_risk_usd", 0.0)
+    risk_usd = float(trade.get("realized_risk_usd") or 0.0)
 
     status_tag = "🚨 ACTIONABLE TRADE ALERT (SCORE >= 75.0)" if is_actionable else "⚡ ANALYZED SIGNAL (FILTERED / SUB-THRESHOLD)"
 
@@ -389,18 +389,8 @@ class FootprintSignalSentinel:
                     self.stack.stack[sym]["state"] = action_str
                 self.stack.persist_stack()
 
-                # Record in Evaluated Ledger so reviewed signals NEVER re-trigger evaluation
-                self.stack.ledger.mark_evaluated(
-                    symbol=sym,
-                    open_time_ms=open_ms,
-                    signal_id=sig_id,
-                    confluence_score=score,
-                    action=action_str,
-                    sig_name=sig_name,
-                    direction=direction
-                )
-
                 # Phase 4: Actionable Trade Dispatch (Direct Delta Exchange India Auto-Wake Execution)
+                final_action = action_str
                 if is_actionable and direction in ("BUY", "SELL"):
                     if winsound is not None:
                         try:
@@ -417,16 +407,33 @@ class FootprintSignalSentinel:
                         with FileMutex(order_lock_file, timeout=15.0) as order_guard:
                             if not order_guard.acquired:
                                 logger.warning(f"[{sym}] Order dispatch lock timeout (15.0s). Skipping to protect in-flight trade.")
-                                continue
-                            dispatch_res = await asyncio.to_thread(delta_client.execute_delta_signal, eval_res)
-                        logger.info(f"✨ Delta Exchange India Dispatch Result: {dispatch_res}")
-                        if dispatch_res and dispatch_res.get("ok"):
-                            self.state["dispatched_trades_count"] += 1
-                            save_state(self.state)
+                                final_action = "DISPATCH_LOCK_TIMEOUT"
+                            else:
+                                dispatch_res = await asyncio.to_thread(delta_client.execute_delta_signal, eval_res)
+                                logger.info(f"✨ Delta Exchange India Dispatch Result: {dispatch_res}")
+                                if dispatch_res and dispatch_res.get("ok"):
+                                    self.state["dispatched_trades_count"] += 1
+                                    save_state(self.state)
+                                    final_action = "DISPATCHED"
+                                else:
+                                    final_action = f"REJECTED_{dispatch_res.get('reason', 'UNKNOWN')}" if dispatch_res else "DISPATCH_FAILED"
                     else:
                         logger.warning(f"No Delta Exchange product resolved for {sym}; cannot execute.")
+                        final_action = "REJECTED_UNLISTED_ON_DELTA"
                 else:
                     logger.info(f"[EVALUATOR] {sym} {direction} Confluence Score: {score:.1f}/100 -> Filtered (Required >= 75.0)")
+                    final_action = "FILTERED_SUB_THRESHOLD"
+
+                # Record in Evaluated Ledger ONLY after dispatch outcome is finalized
+                self.stack.ledger.mark_evaluated(
+                    symbol=sym,
+                    open_time_ms=open_ms,
+                    signal_id=sig_id,
+                    confluence_score=score,
+                    action=final_action,
+                    sig_name=sig_name,
+                    direction=direction
+                )
 
             except Exception as e:
                 logger.error(f"Error processing signal cluster for {sym}: {e}", exc_info=True)
@@ -700,7 +707,7 @@ def main():
     acquire_singleton("wake_on_footprint_signal", DB_DIR / ".locks")
 
     set_live_dispatch(True)
-    sentinel = FootprintSignalSentinel(from_current_end=(args.reset_offset or args.daemon or not args.once))
+    sentinel = FootprintSignalSentinel(from_current_end=bool(args.reset_offset))
 
     if args.once:
         asyncio.run(sentinel.run_once())

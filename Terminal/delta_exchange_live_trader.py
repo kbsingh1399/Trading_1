@@ -278,42 +278,15 @@ class DeltaExchangeTrader:
             return []
 
     def get_available_margin_usd(self) -> float:
-        """Returns current available margin in USD (CDP browser DOM primary, API fallback)."""
-        try:
-            import urllib.request, websocket, re
-            req = urllib.request.Request("http://127.0.0.1:9222/json", headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=2) as resp:
-                tabs = json.loads(resp.read().decode())
-            delta_tab = next((t for t in tabs if "delta.exchange" in t.get("url", "")), None)
-            if delta_tab:
-                ws = websocket.create_connection(delta_tab["webSocketDebuggerUrl"], timeout=3)
-                js = r"""
-                (() => {
-                    let el = Array.from(document.querySelectorAll('*')).find(e => e.innerText && e.innerText.includes('Available Margin') && e.children.length === 0);
-                    if (el && el.parentElement) {
-                        let match = el.parentElement.innerText.match(/([0-9]+\.?[0-9]*)\s*USD/);
-                        if (match) return parseFloat(match[1]);
-                    }
-                    return null;
-                })()
-                """
-                ws.send(json.dumps({"id": 1, "method": "Runtime.evaluate", "params": {"expression": js, "returnByValue": True}}))
-                res = json.loads(ws.recv())
-                ws.close()
-                val = res.get("result", {}).get("result", {}).get("value")
-                if val is not None and isinstance(val, (int, float)):
-                    return float(val)
-        except Exception as e:
-            logger.debug(f"CDP available margin error: {e}")
-
+        """Returns current available collateral margin in USD directly from authenticated REST API."""
         try:
             wb = self.get_wallet_balances()
             if isinstance(wb, list):
                 for b in wb:
                     if b.get("asset_symbol") in ("USD", "USDT", "INR"):
                         return float(b.get("available_balance", 0.0) or 0.0)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Error fetching wallet available margin: {e}")
         return 0.0
 
     def get_open_positions(self) -> List[Dict[str, Any]]:
@@ -321,7 +294,7 @@ class DeltaExchangeTrader:
         res = self.request("GET", "/v2/positions/margined")
         if res.get("result") is not None:
             return res.get("result", [])
-        return self._get_cdp_positions()
+        return []
 
     def get_active_positions(self) -> List[Dict[str, Any]]:
         """Returns non-zero open positions."""
@@ -577,11 +550,15 @@ class DeltaExchangeTrader:
                 continue
             osym = raw_sym.upper().replace(".PI", "").replace("USDT", "").replace("USD", "") + "USD"
             if osym not in active_sym_set:
-                logger.warning(f"[{osym}] Detected orphaned resting order #{o.get('id')} with position closed. Cancelling!")
-                try:
-                    self.cancel_order(o.get("id"), o.get("product_id"))
-                except Exception as ex:
-                    logger.debug(f"Error cancelling orphaned order: {ex}")
+                s_type = str(o.get("stop_order_type") or "").lower()
+                is_reduce = bool(o.get("reduce_only"))
+                # Protect resting entry orders; only cancel bracket child orders (SL/TP) or reduce_only orders
+                if s_type or is_reduce:
+                    logger.warning(f"[{osym}] Detected orphaned resting bracket #{o.get('id')} ({s_type}) with position closed. Cancelling!")
+                    try:
+                        self.cancel_order(o.get("id"), o.get("product_id"))
+                    except Exception as ex:
+                        logger.debug(f"Error cancelling orphaned order: {ex}")
 
         if not active_positions:
             return reports
@@ -656,15 +633,12 @@ class DeltaExchangeTrader:
             # 2. Deterministic Duplicate Take Profit Purge
             tp_order = None
             if len(prod_tp_orders) > 1:
-                # Reconcile against position anchor TP if available
-                anchor_data = load_position_anchors().get(p_sym, {})
-                target_anchor_tp = float(anchor_data.get("initial_tp") or 0.0)
-                if target_anchor_tp > 0:
-                    prod_tp_orders.sort(
-                        key=lambda o: abs(float(o.get("stop_price") or 0.0) - target_anchor_tp)
-                    )
-                else:
-                    prod_tp_orders.sort(key=lambda o: int(o.get("id") or 0))
+                # Directional sort preserving widest profitable TP order across all ratchet tiers:
+                # BUY: highest stop_price is widest; SELL: lowest stop_price is widest
+                prod_tp_orders.sort(
+                    key=lambda o: float(o.get("stop_price") or 0.0),
+                    reverse=(direction == "BUY")
+                )
                 tp_order = prod_tp_orders[0]
                 for dup in prod_tp_orders[1:]:
                     dup_id = dup.get("id")
@@ -814,20 +788,16 @@ class DeltaExchangeTrader:
                         )
                         is_ok = edit_res.get("success") or ("result" in edit_res and "id" in edit_res.get("result", {}))
                         if not is_ok and "immediate_execution_stop_order" in str(edit_res):
-                            logger.info(f"[{p_sym}] Replacing legacy SL order #{sl_order['id']} with fresh mark_price stop at {target_sl}")
-                            self.cancel_order(sl_order["id"], prod_id)
-                            new_sl_body = {
-                                "product_id": prod_id,
-                                "size": abs(size),
-                                "side": "sell" if direction == "BUY" else "buy",
-                                "order_type": "market_order",
-                                "stop_order_type": "stop_loss_order",
-                                "stop_price": self.quantize_price(target_sl, prod_id),
-                                "stop_trigger_method": "mark_price",
-                                "reduce_only": True
-                            }
-                            re_res = self.request("POST", "/v2/orders", body=new_sl_body)
-                            is_ok = re_res.get("success") or ("id" in re_res.get("result", {}))
+                            logger.warning(f"[{p_sym}] Market price {mark_price} already penetrated ratchet stop {target_sl}. Executing emergency market close to lock in profits!")
+                            close_res = self.close_position(p_sym)
+                            reports.append({
+                                "symbol": p_sym,
+                                "action": "EMERGENCY_MARKET_CLOSE_ON_STOP_PENETRATION",
+                                "stop_price": target_sl,
+                                "mark_price": mark_price,
+                                "close_result": close_res
+                            })
+                            continue
 
                         if is_ok:
                             update_anchor_tier(p_sym, target_tier, target_sl)
@@ -922,6 +892,13 @@ class DeltaExchangeTrader:
         if not prod:
             return {"ok": False, "status": "REJECTED", "reason": f"SYMBOL_NOT_ON_DELTA_INDIA: {sym}"}
 
+        with FileMutex(str(DB_DIR / ".locks" / "delta_position_management.lock"), timeout=10.0) as mgmt_lock:
+            if not mgmt_lock.acquired:
+                logger.warning(f"[{sym}] Live dispatch lock contention on position management mutex. Yielding.")
+                return {"ok": False, "status": "REJECTED", "reason": "POSITION_MANAGEMENT_MUTEX_CONTENTION"}
+            return self._execute_delta_signal_guarded(signal, prod, sym, direction)
+
+    def _execute_delta_signal_guarded(self, signal: Dict[str, Any], prod: Dict[str, Any], sym: str, direction: str) -> Dict[str, Any]:
         # Check in-flight orders to prevent concurrent duplicate dispatch
         if prod["symbol"] in self._inflight_orders:
             return {"ok": False, "status": "REJECTED", "reason": f"ORDER_ALREADY_IN_FLIGHT: {prod['symbol']}"}
@@ -935,12 +912,21 @@ class DeltaExchangeTrader:
         free_cash_mode = os.environ.get("DELTA_FREE_CASH_MODE", "true").lower() in ("true", "1", "yes")
         avail_margin = self.get_available_margin_usd()
 
+        # Reject mock signals in live dispatch
+        if signal.get("is_mock") or os.environ.get("MOCK_TEST_MODE") == "1":
+            logger.warning(f"[{sym}] Live dispatch rejected: mock signals prohibited from live exchange execution.")
+            return {"ok": False, "status": "REJECTED", "reason": "MOCK_SIGNAL_LIVE_DISPATCH_PROHIBITED"}
+
         # Capital & Margin Preservation Invariant: available free margin buffer >= 20% universal floor (Fail-Closed)
         wb = self.get_wallet_balances()
-        usd_item = next((b for b in wb if b.get("asset_symbol") == "USD"), {}) if isinstance(wb, list) else {}
-        total_balance = float(usd_item.get("balance", 0.0) or 0.0)
+        collateral_item = next(
+            (b for b in wb if b.get("asset_symbol") in ("USD", "USDT", "INR")),
+            {}
+        ) if isinstance(wb, list) else {}
+        total_balance = float(collateral_item.get("balance", 0.0) or 0.0)
+        collateral_asset = collateral_item.get("asset_symbol", "USD")
         if total_balance <= 0 or not isinstance(wb, list):
-            logger.warning(f"Live dispatch blocked: unable to verify account balance from Delta API (balance=${total_balance:.4f}).")
+            logger.warning(f"Live dispatch blocked: unable to verify account balance from Delta API (balance=${total_balance:.4f} {collateral_asset}).")
             return {
                 "ok": False,
                 "status": "REJECTED",
@@ -948,11 +934,11 @@ class DeltaExchangeTrader:
             }
         margin_buffer_pct = (avail_margin / total_balance) * 100.0
         if margin_buffer_pct < 20.0:
-            logger.warning(f"Live dispatch blocked: free margin buffer {margin_buffer_pct:.1f}% is below 20.0% minimum guardrail (${avail_margin:.4f} of ${total_balance:.4f} USD).")
+            logger.warning(f"Live dispatch blocked: free margin buffer {margin_buffer_pct:.1f}% is below 20.0% minimum guardrail ({avail_margin:.4f} of {total_balance:.4f} {collateral_asset}).")
             return {
                 "ok": False,
                 "status": "REJECTED",
-                "reason": f"INSUFFICIENT_MARGIN_BUFFER: {margin_buffer_pct:.1f}% < 20.0% floor (available=${avail_margin:.4f} USD of ${total_balance:.4f})"
+                "reason": f"INSUFFICIENT_MARGIN_BUFFER: {margin_buffer_pct:.1f}% < 20.0% floor (available={avail_margin:.4f} of {total_balance:.4f} {collateral_asset})"
             }
 
         # Strict Single Source of Truth for Max Open Positions (AGENTS.md Rule 3: Max 2 positions including in-flight)

@@ -114,7 +114,7 @@ def load_known_signals():
                     try:
                         data = json.loads(line)
                         sym = data.get("symbol")
-                        sig = str(data.get("sig_code") or "")
+                        sig = str(data.get("sig_code") if data.get("sig_code") is not None else "")
                         t_ms = int(data.get("time_ms") or 0)
                         if sym and t_ms > 0:
                             KNOWN_SIGNAL_KEYS.add((sym, sig, t_ms))
@@ -246,13 +246,13 @@ async def extract_symbol_footprint(ws, sym: str, mt5_sym: str) -> dict:
                     unsub();
 
                     const signals = [];
-                    for (const set of sigSets) {{
+                    for (const set of (sigSets || [])) {{
                         if (set.bt !== 'time') continue;
                         const X = set.X;
-                        for (const s of set.sigs) {{
+                        for (const s of (set.sigs || [])) {{
                             const timeMs = X && X.T ? X.T[s.i] : null;
                             if (!timeMs || (timeMs % 900000 !== 0)) continue;
-                            const text = term.sigText(s, X);
+                            const text = (term.sigText ? term.sigText(s, X) : null) || ['', ''];
                             signals.push({{
                                 symbol: sym,
                                 mt5_symbol: mt5,
@@ -410,7 +410,7 @@ def dump_signals(signals: List[dict], candles: Optional[List[dict]] = None) -> L
         s["bar_closed"] = True
         s["candle_close_ms"] = close_ms
         s["candle_close_ist"] = utc_ms_to_ist_str(close_ms)
-        key = (s["symbol"], str(s.get("sig_code", "")), t_ms)
+        key = (s["symbol"], str(s.get("sig_code") if s.get("sig_code") is not None else ""), t_ms)
         if key not in KNOWN_SIGNAL_KEYS:
             KNOWN_SIGNAL_KEYS.add(key)
             newly_discovered.append(s)
