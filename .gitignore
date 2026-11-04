@@ -47,6 +47,10 @@ Database/Vector_Memory/*
 colibri/
 
 
-# Archived legacy and non-pipeline files
+# Submodules & external tools
+deepseek-harness/
+Database/DSH_Home/
+logs/
+
 archive/
 
