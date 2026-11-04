@@ -320,7 +320,9 @@ class TradeCriticEngine:
         Deterministic, zero-latency microstructural knife detection.
         Returns (is_vetoed, reason_string, audit_metadata).
         """
-        dir_clean = direction.upper()
+        dir_clean = str(direction or "BUY").upper()
+        htf_clean = str(htf_bias or "NEUTRAL").upper()
+        liq_clean = str(liq_bias or "NEUTRAL").upper()
         audit = {
             "symbol": symbol,
             "direction": dir_clean,
@@ -329,10 +331,10 @@ class TradeCriticEngine:
             "pct_from_ema233": round(((price - ema233) / (ema233 + 1e-9)) * 100, 2) if ema233 > 0 else 0.0,
             "ema89": ema89 or 0.0,
             "pct_from_ema89": round(((price - (ema89 or ema233)) / ((ema89 or ema233) + 1e-9)) * 100, 2) if (ema89 or ema233) > 0 else 0.0,
-            "htf_bias": htf_bias.upper(),
+            "htf_bias": htf_clean,
             "cvd_slope": cvd_slope,
             "has_liq_spike": has_liq_spike,
-            "liq_bias": liq_bias,
+            "liq_bias": liq_clean,
             "has_footprint_absorption": has_footprint_absorption,
             "rr_ratio": rr_ratio
         }
@@ -353,11 +355,11 @@ class TradeCriticEngine:
                 khi += min(15.0, pct_under_89 * 8.0)
             if cvd_slope < 0:
                 khi += min(25.0, abs(cvd_slope) * 40.0)
-            if has_liq_spike and liq_bias in ("BEARISH_REVERSAL", "LONG_LIQ_DOMINANT"):
+            if has_liq_spike and liq_clean in ("BEARISH_REVERSAL", "LONG_LIQ_DOMINANT"):
                 khi += 20.0
-            elif liq_bias == "LONG_LIQ_DOMINANT":
+            elif liq_clean == "LONG_LIQ_DOMINANT":
                 khi += 10.0
-            if "BEAR" in htf_bias.upper():
+            if "BEAR" in htf_clean:
                 khi += 15.0
             if not has_footprint_absorption:
                 khi += 10.0
@@ -366,13 +368,13 @@ class TradeCriticEngine:
 
             # Price well below EMA233, 4H trend bearish, CVD dumping, long liquidations active without absorption
             is_below_ema = ema233 > 0 and price < ema233
-            is_htf_bear = htf_bias.upper() in ("BEARISH", "STRONG_BEARISH")
+            is_htf_bear = htf_clean in ("BEARISH", "STRONG_BEARISH")
             is_cvd_dumping = cvd_slope < -0.25
-            is_liq_cascade = (has_liq_spike and liq_bias == "BEARISH_REVERSAL") or (liq_bias == "LONG_LIQ_DOMINANT")
+            is_liq_cascade = (has_liq_spike and liq_clean == "BEARISH_REVERSAL") or (liq_clean == "LONG_LIQ_DOMINANT")
 
             if is_below_ema and is_htf_bear and is_cvd_dumping and not has_footprint_absorption:
                 reason = (
-                    f"VETO_FALLING_KNIFE: Price (${price:.4f}) is below EMA233 (${ema233:.4f}) with 4H {htf_bias} bias, "
+                    f"VETO_FALLING_KNIFE: Price (${price:.4f}) is below EMA233 (${ema233:.4f}) with 4H {htf_clean} bias, "
                     f"negative CVD slope ({cvd_slope:+.2f}), and zero footprint absorption. Catching falling knife blocked."
                 )
                 return True, reason, audit
@@ -403,11 +405,11 @@ class TradeCriticEngine:
                 shi += min(15.0, pct_over_89 * 8.0)
             if cvd_slope > 0:
                 shi += min(25.0, abs(cvd_slope) * 40.0)
-            if has_liq_spike and liq_bias in ("BULLISH_REVERSAL", "SHORT_LIQ_DOMINANT"):
+            if has_liq_spike and liq_clean in ("BULLISH_REVERSAL", "SHORT_LIQ_DOMINANT"):
                 shi += 20.0
-            elif liq_bias == "SHORT_LIQ_DOMINANT":
+            elif liq_clean == "SHORT_LIQ_DOMINANT":
                 shi += 10.0
-            if "BULL" in htf_bias.upper():
+            if "BULL" in htf_clean:
                 shi += 15.0
             if not has_footprint_absorption:
                 shi += 10.0
@@ -415,13 +417,13 @@ class TradeCriticEngine:
             audit["squeeze_hazard_index"] = round(shi, 1)
 
             is_above_ema = ema233 > 0 and price > ema233
-            is_htf_bull = htf_bias.upper() in ("BULLISH", "STRONG_BULLISH")
+            is_htf_bull = htf_clean in ("BULLISH", "STRONG_BULLISH")
             is_cvd_pumping = cvd_slope > 0.25
-            is_short_squeeze = (has_liq_spike and liq_bias == "BULLISH_REVERSAL") or (liq_bias == "SHORT_LIQ_DOMINANT")
+            is_short_squeeze = (has_liq_spike and liq_clean == "BULLISH_REVERSAL") or (liq_clean == "SHORT_LIQ_DOMINANT")
 
             if is_above_ema and is_htf_bull and is_cvd_pumping and not has_footprint_absorption:
                 reason = (
-                    f"VETO_PARABOLIC_SQUEEZE: Price (${price:.4f}) is above EMA233 (${ema233:.4f}) with 4H {htf_bias} bias, "
+                    f"VETO_PARABOLIC_SQUEEZE: Price (${price:.4f}) is above EMA233 (${ema233:.4f}) with 4H {htf_clean} bias, "
                     f"positive CVD slope ({cvd_slope:+.2f}), and zero footprint absorption. Shorting parabolic squeeze blocked."
                 )
                 return True, reason, audit
@@ -462,10 +464,11 @@ class TradeCriticEngine:
         Embeds candidate setup into semantic space and performs vector search against
         losing trades postmortem table. Returns adversarial critic evaluation.
         """
-        dir_clean = direction.upper()
+        dir_clean = str(direction or "BUY").upper()
+        htf_clean = str(htf_bias or "NEUTRAL").upper()
         narrative = (
             f"Candidate {dir_clean} trade on {symbol} at ${price:.4f}. "
-            f"4H Macro HTF is {htf_bias}. Confluence score is {confluence_score:.1f}/100. "
+            f"4H Macro HTF is {htf_clean}. Confluence score is {confluence_score:.1f}/100. "
             f"5-bar CVD slope is {cvd_slope:+.2f}. Whale imbalance is {whale_imbalance:+.2f}. "
             f"Liquidation state: {liq_regime}. Value Area relation: {value_area_relation}. "
             f"Reward-to-Risk ratio: {rr_ratio:.2f}:1."

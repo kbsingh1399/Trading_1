@@ -570,7 +570,11 @@ class DeltaExchangeTrader:
                 logger.debug(f"Fill confirmation poll error: {exc}")
             time.sleep(0.3)
 
-        # 3) conservative fresh fallback (planned entry is FORBIDDEN here)
+        # 3) If order was explicitly cancelled and no fill was recorded, do NOT fall back to mark
+        if str(order_info.get("state", "")).lower() == "cancelled":
+            return 0.0, "ORDER_CANCELLED_NO_FILL"
+
+        # 4) conservative fresh fallback (planned entry is FORBIDDEN here)
         if fallback_mark_price and fallback_mark_price > 0:
             logger.warning(
                 f"[product {product_id}] Fill not yet visible; falling back to pre-trade MARK "
@@ -620,7 +624,20 @@ class DeltaExchangeTrader:
                 break
             time.sleep(delay)
 
+        def _cancel_brackets():
+            if sl_order and sl_order.get("id"):
+                try:
+                    self.cancel_order(sl_order["id"], prod_id)
+                except Exception as ce:
+                    logger.debug(f"[{symbol}] Failed to cancel SL bracket #{sl_order.get('id')}: {ce}")
+            if tp_order and tp_order.get("id"):
+                try:
+                    self.cancel_order(tp_order["id"], prod_id)
+                except Exception as ce:
+                    logger.debug(f"[{symbol}] Failed to cancel TP bracket #{tp_order.get('id')}: {ce}")
+
         if not tp_order or not sl_order:
+            _cancel_brackets()
             missing = []
             if not tp_order:
                 missing.append("TP")
@@ -648,18 +665,6 @@ class DeltaExchangeTrader:
             loss_per_contract = actual_risk * contract_val
             allowed_size = math.floor(round(max_allowed_risk_usd / max(1e-9, loss_per_contract), 8))
             shed_contracts = size - allowed_size
-
-            def _cancel_brackets():
-                if sl_order and sl_order.get("id"):
-                    try:
-                        self.cancel_order(sl_order["id"], prod_id)
-                    except Exception as ce:
-                        logger.debug(f"[{symbol}] Failed to cancel SL bracket #{sl_order.get('id')}: {ce}")
-                if tp_order and tp_order.get("id"):
-                    try:
-                        self.cancel_order(tp_order["id"], prod_id)
-                    except Exception as ce:
-                        logger.debug(f"[{symbol}] Failed to cancel TP bracket #{tp_order.get('id')}: {ce}")
 
             if allowed_size >= 1 and shed_contracts > 0:
                 shed_side = "sell" if pos_direction == "BUY" else "buy"
@@ -701,6 +706,7 @@ class DeltaExchangeTrader:
                     sl_success = bool(sl_edit_res.get("success", False) or sl_edit_res.get("result") or sl_edit_res.get("id"))
                     if not sl_success:
                         logger.error(f"[{symbol}] Failed to update SL order size to {size}: {sl_edit_res}")
+                        _cancel_brackets()
                         return {
                             "ok": False,
                             "status": "SL_EDIT_FAILED",
@@ -767,6 +773,7 @@ class DeltaExchangeTrader:
             is_success = bool(edit_res.get("success", False) or edit_res.get("result") or edit_res.get("id"))
             if not is_success:
                 logger.error(f"[{symbol}] Failed to re-anchor TP to {effective_tp}: {edit_res}")
+                _cancel_brackets()
                 return {
                     "ok": False,
                     "status": "TP_EDIT_FAILED",
@@ -1518,6 +1525,15 @@ class DeltaExchangeTrader:
                     fallback_mark_price=live_mark_price
                 )
                 if fill_price <= 0:
+                    if fill_source == "ORDER_CANCELLED_NO_FILL" or str(order_info.get("state", "")).lower() == "cancelled":
+                        logger.info(f"[{prod['symbol']}] IOC limit order cancelled without execution (5-tick slippage buffer protected against adverse fill).")
+                        return {
+                            "ok": False,
+                            "status": "IOC_UNFILLED",
+                            "reason": "IOC_ORDER_CANCELLED_UNFILLED",
+                            "venue": "DeltaExchangeIndia",
+                            "symbol": prod["symbol"]
+                        }
                     logger.error(f"[{prod['symbol']}] Fill price unconfirmable; closing position immediately (fail-closed).")
                     close_res = self.close_position(prod["symbol"])
                     return {
@@ -1544,6 +1560,13 @@ class DeltaExchangeTrader:
                         else:
                             close_res = self.close_position(prod["symbol"])
                             is_flattened = bool(close_res.get("success", False) or close_res.get("result") or close_res.get("id"))
+                            try:
+                                open_orders = self.get_open_orders() or []
+                                for o in open_orders:
+                                    if o.get("product_id") == prod["id"]:
+                                        self.cancel_order(o.get("id"), prod["id"])
+                            except Exception as ce:
+                                logger.debug(f"[{prod['symbol']}] Residual order cancellation error: {ce}")
                         if not is_flattened:
                             logger.critical(f"🚨 CRITICAL INCIDENT: EMERGENCY FLATTENING FAILED FOR {prod['symbol']}: {close_res}")
                         return {

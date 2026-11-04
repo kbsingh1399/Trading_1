@@ -270,3 +270,36 @@ def test_htf_momentum_runover_causal_grounding(critic):
     )
     assert audit_grounded["critic_verdict"] in ("HARD_VETO", "HIGH_PENALTY", "ADVISORY")
     assert audit_grounded["penalty"] > 0.0
+
+
+def test_trade_critic_null_safety(critic):
+    """Verifies that check_microstructure_knife_veto and audit_candidate_setup handle None gracefully."""
+    vetoed, reason, audit = critic.check_microstructure_knife_veto(
+        symbol="BTC",
+        direction="BUY",
+        price=60000.0,
+        ema233=65000.0,
+        htf_bias=None,
+        cvd_slope=-0.50,
+        has_liq_spike=False,
+        liq_bias=None,
+        has_footprint_absorption=True,
+        rr_ratio=2.5
+    )
+    assert isinstance(vetoed, bool)
+    assert audit.get("htf_bias") == "NEUTRAL"
+    assert audit.get("liq_bias") == "NEUTRAL"
+
+    sem_audit = critic.audit_candidate_setup(
+        symbol="BTC",
+        direction="BUY",
+        price=60000.0,
+        confluence_score=80.0,
+        htf_bias=None,
+        cvd_slope=0.1,
+        whale_imbalance=0.0,
+        liq_regime=None,
+        value_area_relation="INSIDE_VA",
+        rr_ratio=2.5
+    )
+    assert "critic_verdict" in sem_audit

@@ -471,6 +471,80 @@ class TestCandleClusterAndFivePillars(unittest.TestCase):
             # Must be popped from pending_signals
             self.assertNotIn(park_key_deg, sentinel.pending_signals)
 
+    def test_forming_bar_cross_cycle_signal_accumulation(self):
+        """Verifies that signals arriving across multiple cycles for the same forming candle are accumulated."""
+        sentinel = FootprintSignalSentinel(from_current_end=True)
+        if hasattr(sentinel, 'stack') and hasattr(sentinel.stack, 'ledger'):
+            sentinel.stack.ledger._evaluated = {}
+        sentinel.pending_signals.clear()
+
+        now_ms = time.time() * 1000
+        future_ms = int((now_ms // 900_000) * 900_000)
+        park_key = ("ETHUSD", future_ms, "time", "")
+
+        # Cycle 1: Signal A arrives on forming bar
+        signal_a = [{
+            "symbol": "ETHUSD",
+            "sig_name": "Absorption",
+            "sig_code": "SIG_ABS_01",
+            "side": "bullish",
+            "price": 3000.0,
+            "time_ms": future_ms,
+            "bar_type": "time",
+            "is_mock": False,
+            "bar_closed": False
+        }]
+
+        sentinel.evaluator.evaluate_signal = MagicMock(return_value={
+            "symbol": "ETHUSD",
+            "direction": "BUY",
+            "confluence_score": 78.0,
+            "is_actionable": False,
+            "validation_errors": ["BAR_NOT_CLOSED_INTRA_BAR_WICK"],
+            "deepmind_timesfm": {"required_threshold": 75.0, "adverse_veto": False}
+        })
+
+        with patch.dict(os.environ, {"MOCK_TEST_MODE": "0"}, clear=False):
+            asyncio.run(sentinel.evaluate_and_dispatch(signal_a))
+            self.assertIn(park_key, sentinel.pending_signals)
+            self.assertEqual(len(sentinel.pending_signals[park_key]["cluster"]), 1)
+
+            # Cycle 2: Signal B arrives for same forming candle
+            signal_b = [{
+                "symbol": "ETHUSD",
+                "sig_name": "DeltaDivergence",
+                "sig_code": "SIG_DIV_02",
+                "side": "bullish",
+                "price": 3002.0,
+                "time_ms": future_ms,
+                "bar_type": "time",
+                "is_mock": False,
+                "bar_closed": False
+            }]
+
+            captured_eval_clusters = []
+            def mock_eval(raw_sig):
+                captured_eval_clusters.append(raw_sig.get("cluster_signals", [raw_sig]))
+                return {
+                    "symbol": "ETHUSD",
+                    "direction": "BUY",
+                    "confluence_score": 88.0,
+                    "is_actionable": False,
+                    "validation_errors": ["BAR_NOT_CLOSED_INTRA_BAR_WICK"],
+                    "deepmind_timesfm": {"required_threshold": 75.0, "adverse_veto": False}
+                }
+
+            sentinel.evaluator.evaluate_signal = MagicMock(side_effect=mock_eval)
+            asyncio.run(sentinel.evaluate_and_dispatch(signal_b))
+
+            # Merged cluster must now contain BOTH signals
+            self.assertIn(park_key, sentinel.pending_signals)
+            parked_signals = sentinel.pending_signals[park_key]["cluster"]
+            self.assertEqual(len(parked_signals), 2)
+            codes = {s.get("sig_code") for s in parked_signals}
+            self.assertIn("SIG_ABS_01", codes)
+            self.assertIn("SIG_DIV_02", codes)
+
 
 if __name__ == "__main__":
     unittest.main()

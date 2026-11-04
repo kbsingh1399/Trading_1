@@ -594,3 +594,73 @@ def test_fx_normalized_collateral_margin(trader):
         assert summary["total_balance_usd"] == pytest.approx(1100.0, rel=1e-2)
         assert summary["total_available_usd"] == pytest.approx(1080.0, rel=1e-2)
         assert trader.get_available_margin_usd() < 2000.0
+
+
+def test_execute_delta_signal_handles_cancelled_ioc_without_emergency_close(trader):
+    """
+    Verifies that when an IOC limit order expires cancelled without execution,
+    execute_delta_signal returns status='IOC_UNFILLED' and does not attempt emergency close.
+    """
+    signal = {
+        "symbol": "BTCUSD",
+        "direction": "BUY",
+        "confluence_score": 85.0,
+        "trade_parameters": {
+            "entry_price": 80000.0,
+            "stop_loss": 79000.0,
+            "take_profit_1": 82000.0
+        }
+    }
+    healthy_wallets = [{"asset_symbol": "USD", "balance": "5000.0", "available_balance": "4800.0"}]
+    trader.products_cache["BTCUSD"] = {"id": 1, "symbol": "BTCUSD", "tick_size": "0.1", "contract_value": "0.001"}
+    cancelled_ioc_response = {
+        "success": True,
+        "result": {
+            "id": 54321,
+            "product_id": 1,
+            "state": "cancelled",
+            "size": 5,
+            "unfilled_size": 5,
+            "average_fill_price": None
+        }
+    }
+    live_ticker = {"success": True, "result": {"mark_price": "80000.0", "best_bid": "79990.0", "best_ask": "80010.0"}}
+
+    with patch("Terminal.delta_exchange_live_trader.LIVE_DISPATCH_ENABLED", True), \
+         patch.object(trader, "get_wallet_balances", return_value=healthy_wallets), \
+         patch.object(trader, "request", return_value=live_ticker), \
+         patch.object(trader, "get_active_positions", return_value=[]), \
+         patch.object(trader, "place_order", return_value=cancelled_ioc_response), \
+         patch.object(trader, "get_fills", return_value=[]), \
+         patch.object(trader, "close_position") as mock_close:
+        res = trader.execute_delta_signal(signal)
+        assert res.get("ok") is False
+        assert res.get("status") == "IOC_UNFILLED"
+        # Emergency close must NOT have been called
+        mock_close.assert_not_called()
+
+
+def test_reanchor_brackets_cancels_residual_orders_on_edit_failure(trader):
+    """
+    Verifies that if SL order edit fails during reanchoring, cancel_order is called
+    to ensure zero orphaned orders remain on the exchange.
+    """
+    trader.products_cache["BTCUSD"] = {"id": 1, "symbol": "BTCUSD", "tick_size": "0.1", "contract_value": "0.001"}
+    open_orders = [
+        {"id": 101, "product_id": 1, "stop_order_type": "take_profit_order", "side": "sell", "size": 10, "stop_price": "82000.0"},
+        {"id": 102, "product_id": 1, "stop_order_type": "stop_loss_order", "side": "sell", "size": 10, "stop_price": "70000.0"},
+    ]
+    with patch.object(trader, "get_open_orders", return_value=open_orders), \
+         patch.object(trader, "request", return_value={"success": True, "result": {"id": 888}}), \
+         patch.object(trader, "edit_order", return_value={"success": False, "error": "ORDER_LOCKED"}), \
+         patch.object(trader, "cancel_order") as mock_cancel:
+        res = trader.reanchor_brackets_to_fill(
+            symbol="BTCUSD",
+            fill_price=80000.0,
+            sl_price=70000.0,
+            min_rr=2.0
+        )
+        assert res.get("ok") is False
+        assert res.get("status") == "SL_EDIT_FAILED"
+        mock_cancel.assert_any_call(102, 1)
+        mock_cancel.assert_any_call(101, 1)

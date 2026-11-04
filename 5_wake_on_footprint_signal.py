@@ -368,6 +368,22 @@ class FootprintSignalSentinel:
                     else:
                         is_bar_closed = is_mock or (open_ms > 0 and close_ms <= now_ms)
 
+                # Merge signals across polling cycles for the same candle
+                park_key = (sym, open_ms, bar_type, bar_variant)
+                if park_key in self.pending_signals:
+                    parked_info = self.pending_signals[park_key]
+                    parked_cluster = parked_info.get("cluster", [])
+                    existing_sig_keys = {
+                        (s.get("sig_code"), s.get("sig_name"), s.get("side")) for s in cluster
+                    }
+                    for ps in parked_cluster:
+                        ps_k = (ps.get("sig_code"), ps.get("sig_name"), ps.get("side"))
+                        if ps_k not in existing_sig_keys:
+                            cluster.append(ps)
+                            existing_sig_keys.add(ps_k)
+                    if is_bar_closed:
+                        self.pending_signals.pop(park_key, None)
+
                 # Single Evaluation Invariant: Once reviewed, never evaluate again
                 if self.stack.ledger.is_evaluated(sym, open_ms, bar_type=bar_type, bar_variant=bar_variant):
                     logger.debug(f"⏭️ [ALREADY REVIEWED] {sym} {bar_type} bar {open_ms} already evaluated. Suppressed.")
@@ -621,6 +637,10 @@ class FootprintSignalSentinel:
                         bar_variant=bar_variant
                     )
 
+                if sym in self.stack.stack:
+                    self.stack.stack[sym]["state"] = final_action
+                self.stack.persist_stack()
+
             except Exception as e:
                 logger.error(f"Error processing signal cluster for {sym}: {e}", exc_info=True)
 
@@ -797,6 +817,9 @@ class FootprintSignalSentinel:
             await self.evaluate_and_dispatch(new_signals)
         else:
             logger.info("No new footprint signals ready for evaluation.")
+
+        # Drain any parked forming-bar clusters whose bars have closed
+        await self._drain_pending_forming_bars()
 
         await self.inspect_and_manage_running_trades()
 
