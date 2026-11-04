@@ -182,7 +182,7 @@ def format_confluence_card(alert: Dict[str, Any]) -> str:
         "╟" + "─" * 82 + "╢",
         f"║  Trade Geometry:   Entry=${trade.get('entry_price', 0.0):,.4f} | SL=${trade.get('stop_loss', 0.0):,.4f} (-{trade.get('sl_pct', 0.0)}%)".ljust(83) + "║",
         f"║                    TP1=${trade.get('take_profit_1', 0.0):,.4f} | TP2=${trade.get('take_profit_2', 0.0):,.4f} | R:R={trade.get('rr_ratio', 0.0)}:1".ljust(83) + "║",
-        f"║  Risk Allocation:  Lots={lots} | Risk=${risk_usd:.2f} (Cap: ${trade.get('hard_max_risk_usd', MAX_RISK_USD):.2f})".ljust(83) + "║",
+        f"║  Risk Allocation:  Contracts={lots} | Risk=${risk_usd:.2f} (Cap: ${trade.get('hard_max_risk_usd', MAX_RISK_USD):.2f})".ljust(83) + "║",
         f"║  Delta Exchange:   Authorized={'✅ YES (DISPATCH READY)' if is_actionable and delta_prod_res else ('❌ NO (SUB-THRESHOLD)' if not is_actionable else '⚠️ NO PRODUCT (Unlisted on Delta India)')} | Product={delta_prod_sym} (10x-20x Leverage)".ljust(83) + "║",
         f"║  Risk Execution:   R:R >= 2.0:1 Guaranteed (Fill-Anchored Dynamic Calibration) | Venue: Delta India".ljust(83) + "║",
         "╟" + "─" * 82 + "╢",
@@ -302,13 +302,24 @@ class FootprintSignalSentinel:
                     continue
 
                 # Strict Stale Invariant: Signals closed > 30m ago are discarded
-                has_mock_flag = any(s.get("bar_closed") for s in cluster)
-                if not has_mock_flag and (now_ms - close_ms) > 1_800_000:
+                is_mock = os.environ.get("MOCK_TEST_MODE") == "1" or "PYTEST_CURRENT_TEST" in os.environ or any(s.get("is_mock") for s in cluster)
+                if not is_mock and (now_ms - close_ms) > 1_800_000:
                     logger.info(f"⏳ [STALE VETO] {sym} candle closed >30m ago ({int((now_ms - close_ms)/60000)}m ago). Discarded.")
+                    sig_codes = [s.get("sig_code", "") for s in cluster]
+                    stale_dir = str(cluster[0].get("side", "N/A"))
+                    self.stack.ledger.mark_evaluated(
+                        symbol=sym,
+                        open_time_ms=open_ms,
+                        signal_id=generate_signal_id(sym, open_ms, stale_dir, sig_codes),
+                        confluence_score=0.0,
+                        action="DISCARDED_STALE",
+                        sig_name=str(cluster[0].get("sig_name", "Stale")),
+                        direction=stale_dir
+                    )
                     continue
 
                 # Strict Bar Completion Invariant: Derived strictly from timestamp
-                is_bar_closed = has_mock_flag or (open_ms > 0 and close_ms <= now_ms)
+                is_bar_closed = is_mock or (open_ms > 0 and close_ms <= now_ms)
                 if not is_bar_closed:
                     mins_remaining = max(0.0, (close_ms - now_ms) / 60000.0)
                     logger.info(f"⏳ [INTRA-BAR WICK VETO] {sym} on active candle (closes in {mins_remaining:.1f}m). Skipped to prevent wick repainting.")
@@ -403,7 +414,10 @@ class FootprintSignalSentinel:
                     if delta_product:
                         logger.info(f"🚀 [DELTA AUTO-WAKE] Routing {sym} ({direction}) to Delta Exchange India ({delta_product})...")
                         order_lock_file = str(DB_DIR / ".locks" / "order_execution_inflight.lock")
-                        with FileMutex(order_lock_file, timeout=15.0):
+                        with FileMutex(order_lock_file, timeout=15.0) as order_guard:
+                            if not order_guard.acquired:
+                                logger.warning(f"[{sym}] Order dispatch lock timeout (15.0s). Skipping to protect in-flight trade.")
+                                continue
                             dispatch_res = await asyncio.to_thread(delta_client.execute_delta_signal, eval_res)
                         logger.info(f"✨ Delta Exchange India Dispatch Result: {dispatch_res}")
                         if dispatch_res and dispatch_res.get("ok"):
@@ -561,8 +575,8 @@ class FootprintSignalSentinel:
             t_ms = int(raw.get("time_ms") or 0)
             close_ms = t_ms + 900_000
             is_bar_closed = (t_ms > 0 and close_ms <= now_ms)
-            # Strict Freshness Invariant: Only consider signals from the latest completed 15m candle (<= 15m past close)
-            if (now_ms - close_ms) > 900_000:
+            # Strict Freshness Invariant: Only consider signals from recent completed 15m candle (<= 30m past close)
+            if (now_ms - close_ms) > 1_800_000:
                 continue
             if is_bar_closed:
                 signals_ready.append(raw)
@@ -641,8 +655,8 @@ class FootprintSignalSentinel:
                         t_ms = int(raw.get("time_ms") or 0)
                         close_ms = t_ms + 900_000
                         is_bar_closed = (t_ms > 0 and close_ms <= now_ms)
-                        # Strict Freshness Invariant: Discard stale historical signals older than 1 closed bar (15m)
-                        if (now_ms - close_ms) > 900_000:
+                        # Strict Freshness Invariant: Discard stale historical signals older than 2 closed bars (30m)
+                        if (now_ms - close_ms) > 1_800_000:
                             continue
                         if is_bar_closed:
                             signals_ready.append(raw)

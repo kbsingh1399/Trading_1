@@ -103,20 +103,26 @@ def load_target_symbols() -> Tuple[List[str], Dict[str, str]]:
 
 def load_known_signals():
     global KNOWN_SIGNAL_KEYS
-    if SIGNALS_PARQUET.exists():
+    KNOWN_SIGNAL_KEYS = set()
+    if SIGNALS_JSONL.exists():
         try:
-            df = pd.read_parquet(SIGNALS_PARQUET)
-            now_ms = time.time() * 1000
-            KNOWN_SIGNAL_KEYS = set()
-            for _, r in df.iterrows():
-                t_ms = int(r.get('time_ms', 0) or 0)
-                close_ms = float(r.get('close_time_ms', 0) or 0) or (t_ms + 900_000)
-                if t_ms <= 0 or close_ms > now_ms or now_ms - close_ms > 7_200_000:
-                    continue
-                KNOWN_SIGNAL_KEYS.add((r['symbol'], str(r.get('sig_code', '')), t_ms))
-            logger.info(f"Pre-loaded {len(KNOWN_SIGNAL_KEYS)} recent closed signal keys into memory.")
+            with open(SIGNALS_JSONL, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                        sym = data.get("symbol")
+                        sig = str(data.get("sig_code") or "")
+                        t_ms = int(data.get("time_ms") or 0)
+                        if sym and t_ms > 0:
+                            KNOWN_SIGNAL_KEYS.add((sym, sig, t_ms))
+                    except Exception:
+                        continue
+            logger.info(f"Pre-loaded {len(KNOWN_SIGNAL_KEYS)} known signal keys from {SIGNALS_JSONL.name}.")
         except Exception as e:
-            logger.warning(f"Could not pre-load known signals: {e}")
+            logger.warning(f"Could not pre-load known signals from JSONL: {e}")
 
 
 def cleanup_orphan_tabs(keep_tab_id: Optional[str] = None):
@@ -241,8 +247,11 @@ async def extract_symbol_footprint(ws, sym: str, mt5_sym: str) -> dict:
 
                     const signals = [];
                     for (const set of sigSets) {{
+                        if (set.bt !== 'time') continue;
                         const X = set.X;
                         for (const s of set.sigs) {{
+                            const timeMs = X && X.T ? X.T[s.i] : null;
+                            if (!timeMs || (timeMs % 900000 !== 0)) continue;
                             const text = term.sigText(s, X);
                             signals.push({{
                                 symbol: sym,
@@ -250,8 +259,8 @@ async def extract_symbol_footprint(ws, sym: str, mt5_sym: str) -> dict:
                                 market: 'agg-perp',
                                 bar_type: set.bt,
                                 bar_label: set.label,
-                                time_ms: X && X.T ? X.T[s.i] : null,
-                                datetime_utc: X && X.T ? new Date(X.T[s.i]).toISOString() : null,
+                                time_ms: timeMs,
+                                datetime_utc: new Date(timeMs).toISOString(),
                                 sig_code: s.t,
                                 sig_name: term.sigName(s),
                                 side: s.side === 'buy' ? 'bullish' : 'bearish',
@@ -394,6 +403,8 @@ def dump_signals(signals: List[dict], candles: Optional[List[dict]] = None) -> L
     for s in enriched:
         t_ms = int(s.get("time_ms") or 0)
         close_ms = t_ms + 900_000
+        if s.get("bar_type") != "time" or (t_ms % 900_000 != 0):
+            continue
         if t_ms <= 0 or close_ms > now_ms or now_ms - close_ms > 1_800_000:  # Freshness invariant: immediate closed 15m candle only
             continue
         s["bar_closed"] = True

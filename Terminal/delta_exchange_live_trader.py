@@ -21,11 +21,14 @@ from Terminal.risk_envelope import (
     MIN_RR_RATIO,
     validate_trade_geometry
 )
+from Terminal.runtime_io import FileMutex
 from Terminal.position_anchors import (
     register_position_anchor,
     get_or_recover_anchor,
     update_anchor_tier,
-    prune_closed_positions
+    prune_closed_positions,
+    load_position_anchors,
+    DB_DIR
 )
 
 logger = logging.getLogger("DeltaExchangeTrader")
@@ -477,9 +480,12 @@ class DeltaExchangeTrader:
         # Check if slippage inflated dollar risk beyond MAX_RISK_USD
         realized_risk_usd = actual_risk * size * contract_val
         calibrated_sl = sl_price
+        tick_size = float(prod.get("tick_size", 0.01) or 0.01)
         if realized_risk_usd > max_allowed_risk_usd:
             # Capping SL inward towards fill to preserve MAX_RISK_USD
-            capped_dist = max_allowed_risk_usd / (size * contract_val)
+            # Directional inward floor so realized risk <= max_allowed_risk_usd strictly
+            max_loss_ticks = math.floor(max_allowed_risk_usd / max(1e-9, (size * contract_val * tick_size)))
+            capped_dist = max_loss_ticks * tick_size
             calibrated_sl = fill_price - (dir_mult * capped_dist)
             actual_risk = capped_dist
             if sl_order:
@@ -489,11 +495,12 @@ class DeltaExchangeTrader:
                     size=size,
                     stop_price=calibrated_sl
                 )
-                logger.info(f"[{symbol}] Calibrated SL inward to  to preserve  cap")
+                logger.info(f"[{symbol}] Calibrated SL inward to {calibrated_sl} to preserve ${max_allowed_risk_usd:.2f} risk cap")
 
         # Calibrate TP to guarantee at least min_rr:1
-        target_reward = actual_risk * min_rr
-        calibrated_tp = fill_price + (dir_mult * target_reward)
+        # Directional ceiling so R:R >= min_rr strictly after tick quantization
+        target_ticks = math.ceil((min_rr * actual_risk) / tick_size)
+        calibrated_tp = fill_price + (dir_mult * target_ticks * tick_size)
 
         # Check current TP
         current_tp = float(tp_order.get("stop_price", 0.0) or 0.0)
@@ -532,8 +539,17 @@ class DeltaExchangeTrader:
     def audit_and_trail_positions(self) -> List[Dict[str, Any]]:
         """
         Audits all active Delta Exchange positions, enforces R:R >= 2.0, ratchets
-        trailing stop-loss monotonically, recovers naked positions, and cancels orphaned ghost orders.
+        trailing stop-loss monotonically, recovers naked positions, purges duplicate orders,
+        and cancels orphaned ghost orders with cross-process mutual exclusion.
         """
+        reports = []
+        with FileMutex(str(DB_DIR / ".locks" / "delta_position_management.lock"), timeout=5.0) as mgmt_lock:
+            if not mgmt_lock.acquired:
+                logger.info("Another process is actively auditing Delta positions. Yielding.")
+                return reports
+            return self._audit_and_trail_positions_guarded()
+
+    def _audit_and_trail_positions_guarded(self) -> List[Dict[str, Any]]:
         reports = []
         raw_positions = self.get_active_positions()
         if raw_positions is None:
@@ -606,16 +622,60 @@ class DeltaExchangeTrader:
             direction = "BUY" if size > 0 else "SELL"
             dir_mult = 1.0 if direction == "BUY" else -1.0
 
-            # Match SL and TP orders
-            sl_order = None
-            tp_order = None
+            # Match SL and TP orders with deterministic duplicate order purge
+            prod_sl_orders = []
+            prod_tp_orders = []
             for o in open_orders:
                 if int(o.get("product_id", 0)) == prod_id:
                     s_type = str(o.get("stop_order_type", "")).lower()
                     if "stop_loss" in s_type:
-                        sl_order = o
+                        prod_sl_orders.append(o)
                     elif "take_profit" in s_type:
-                        tp_order = o
+                        prod_tp_orders.append(o)
+
+            # 1. Deterministic Duplicate Stop Loss Purge
+            sl_order = None
+            if len(prod_sl_orders) > 1:
+                # BUY: highest stop_price is tightest ratchet; SELL: lowest stop_price is tightest ratchet
+                prod_sl_orders.sort(
+                    key=lambda o: float(o.get("stop_price") or 0.0),
+                    reverse=(direction == "BUY")
+                )
+                sl_order = prod_sl_orders[0]
+                for dup in prod_sl_orders[1:]:
+                    dup_id = dup.get("id")
+                    logger.warning(f"[{p_sym}] Purging duplicate SL order #{dup_id} @ {dup.get('stop_price')}")
+                    try:
+                        self.cancel_order(dup_id, prod_id)
+                        reports.append({"symbol": p_sym, "action": "PURGED_DUPLICATE_SL", "order_id": dup_id, "stop_price": dup.get("stop_price")})
+                    except Exception as ce:
+                        logger.error(f"[{p_sym}] Failed to cancel duplicate SL #{dup_id}: {ce}")
+            elif prod_sl_orders:
+                sl_order = prod_sl_orders[0]
+
+            # 2. Deterministic Duplicate Take Profit Purge
+            tp_order = None
+            if len(prod_tp_orders) > 1:
+                # Reconcile against position anchor TP if available
+                anchor_data = load_position_anchors().get(p_sym, {})
+                target_anchor_tp = float(anchor_data.get("initial_tp") or 0.0)
+                if target_anchor_tp > 0:
+                    prod_tp_orders.sort(
+                        key=lambda o: abs(float(o.get("stop_price") or 0.0) - target_anchor_tp)
+                    )
+                else:
+                    prod_tp_orders.sort(key=lambda o: int(o.get("id") or 0))
+                tp_order = prod_tp_orders[0]
+                for dup in prod_tp_orders[1:]:
+                    dup_id = dup.get("id")
+                    logger.warning(f"[{p_sym}] Purging duplicate TP order #{dup_id} @ {dup.get('stop_price')}")
+                    try:
+                        self.cancel_order(dup_id, prod_id)
+                        reports.append({"symbol": p_sym, "action": "PURGED_DUPLICATE_TP", "order_id": dup_id, "stop_price": dup.get("stop_price")})
+                    except Exception as ce:
+                        logger.error(f"[{p_sym}] Failed to cancel duplicate TP #{dup_id}: {ce}")
+            elif prod_tp_orders:
+                tp_order = prod_tp_orders[0]
 
             # --- NAKED POSITION RECOVERY ---
             if not sl_order:
@@ -683,12 +743,13 @@ class DeltaExchangeTrader:
             unrealized_dist = dir_mult * (mark_price - entry_price)
             r_gain = unrealized_dist / r0
 
-            # TP Calibration check
+            # TP Calibration check: strict R:R >= 2.0 invariant with directional tick snapping
             if tp_order and cur_tp_price:
                 reward_dist = abs(cur_tp_price - entry_price)
                 rr = reward_dist / r0
-                if rr < 1.95:
-                    target_tp = entry_price + (dir_mult * 2.0 * r0)
+                if rr < 1.999:
+                    target_ticks = math.ceil((2.0 * r0) / tick_size)
+                    target_tp = entry_price + (dir_mult * target_ticks * tick_size)
                     self.edit_order(
                         order_id=tp_order["id"],
                         product_id=prod_id,
@@ -874,26 +935,33 @@ class DeltaExchangeTrader:
         free_cash_mode = os.environ.get("DELTA_FREE_CASH_MODE", "true").lower() in ("true", "1", "yes")
         avail_margin = self.get_available_margin_usd()
 
-        # Capital & Margin Preservation Invariant: available free margin buffer >= 20% universal floor
+        # Capital & Margin Preservation Invariant: available free margin buffer >= 20% universal floor (Fail-Closed)
         wb = self.get_wallet_balances()
         usd_item = next((b for b in wb if b.get("asset_symbol") == "USD"), {}) if isinstance(wb, list) else {}
         total_balance = float(usd_item.get("balance", 0.0) or 0.0)
-        if total_balance > 0:
-            margin_buffer_pct = (avail_margin / total_balance) * 100.0
-            if margin_buffer_pct < 20.0:
-                logger.warning(f"Live dispatch blocked: free margin buffer {margin_buffer_pct:.1f}% is below 20.0% minimum guardrail (${avail_margin:.4f} of ${total_balance:.4f} USD).")
-                return {
-                    "ok": False,
-                    "status": "REJECTED",
-                    "reason": f"INSUFFICIENT_MARGIN_BUFFER: {margin_buffer_pct:.1f}% < 20.0% floor (available=${avail_margin:.4f} USD of ${total_balance:.4f})"
-                }
-
-        # Strict Single Source of Truth for Max Open Positions (AGENTS.md Rule 3: Max 2 positions)
-        if len(active_pos) >= MAX_DELTA_CONCURRENT_POSITIONS:
+        if total_balance <= 0 or not isinstance(wb, list):
+            logger.warning(f"Live dispatch blocked: unable to verify account balance from Delta API (balance=${total_balance:.4f}).")
             return {
                 "ok": False,
                 "status": "REJECTED",
-                "reason": f"DELTA_MAX_POSITIONS_REACHED: {len(active_pos)}/{MAX_DELTA_CONCURRENT_POSITIONS}"
+                "reason": "UNABLE_TO_VERIFY_MARGIN_BUFFER: account balance unavailable or zero"
+            }
+        margin_buffer_pct = (avail_margin / total_balance) * 100.0
+        if margin_buffer_pct < 20.0:
+            logger.warning(f"Live dispatch blocked: free margin buffer {margin_buffer_pct:.1f}% is below 20.0% minimum guardrail (${avail_margin:.4f} of ${total_balance:.4f} USD).")
+            return {
+                "ok": False,
+                "status": "REJECTED",
+                "reason": f"INSUFFICIENT_MARGIN_BUFFER: {margin_buffer_pct:.1f}% < 20.0% floor (available=${avail_margin:.4f} USD of ${total_balance:.4f})"
+            }
+
+        # Strict Single Source of Truth for Max Open Positions (AGENTS.md Rule 3: Max 2 positions including in-flight)
+        effective_positions = len(active_pos) + len(self._inflight_orders)
+        if effective_positions >= MAX_DELTA_CONCURRENT_POSITIONS:
+            return {
+                "ok": False,
+                "status": "REJECTED",
+                "reason": f"DELTA_MAX_POSITIONS_REACHED: {effective_positions}/{MAX_DELTA_CONCURRENT_POSITIONS}"
             }
 
         trade_params = signal.get("trade_parameters") or signal.get("trade_levels") or {}

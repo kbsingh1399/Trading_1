@@ -129,7 +129,7 @@ def rotate_warp_ip(context: str = "Collector", reason: str = "SCHEDULED", force:
     """
     Event-driven Cloudflare WARP True IP Rotation on Windows.
     Alternates between ISP egress and re-provisioned Cloudflare WARP client edge.
-    Guarantees zero dropped orders via MatchTrader in-flight execution lock with 20s TTL auto-expiry.
+    Guarantees zero dropped orders via live order in-flight execution lock with 20s TTL auto-expiry.
     """
     now = time.time()
     last_rot = _get_last_rotation_time()
@@ -137,7 +137,7 @@ def rotate_warp_ip(context: str = "Collector", reason: str = "SCHEDULED", force:
     # Hold persistent order-dispatch mutex to guarantee zero order-rotation interleaving
     with FileMutex(str(LOCK_DIR / "order_execution_inflight.lock"), timeout=0.0) as order_guard:
         if not order_guard.acquired:
-            logger.warning(f"[{context}] [Cloudflare WARP] MatchTrader/Delta order execution is currently IN-FLIGHT. Rotation blocked to protect trade.")
+            logger.warning(f"[{context}] [Cloudflare WARP] Delta Exchange order execution is currently IN-FLIGHT. Rotation blocked to protect trade.")
             return get_current_ip()
 
         valid_reasons = ["CHALLENGE", "HTTP_403", "HTTP_429", "FAILED_TO_LOAD", "CONSECUTIVE_EMPTY_SCRAPES", "MANUAL_OVERRIDE"]
@@ -202,8 +202,7 @@ COLLECTOR_LOCK_MAP = {
     "FootprintScraper": LOCK_DIR / "cdp_footprint.lock",
     "WhaleScraper": LOCK_DIR / "cdp_whales.lock",
     "LiquidationScraper": LOCK_DIR / "cdp_liquidation.lock",
-    "MatchTraderLiveExecution": LOCK_DIR / "matchtrader_execution.lock",
-    "MatchTraderExecution": LOCK_DIR / "matchtrader_execution.lock",
+    "DeltaLiveExecution": LOCK_DIR / "order_execution_inflight.lock",
 }
 
 
