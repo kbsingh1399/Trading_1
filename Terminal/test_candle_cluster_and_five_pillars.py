@@ -236,6 +236,68 @@ class TestCandleClusterAndFivePillars(unittest.TestCase):
         self.assertEqual(called_raw.get("cluster_agreement"), "UNANIMOUS_BULLISH")
         self.assertEqual(len(called_raw.get("cluster_signals")), 2)
 
+    def test_hyperdash_smart_money_and_crowd_squeeze_boost(self):
+        """Verifies Hyperdash smart money accumulation and crowd squeeze signals boost confluence score."""
+        self.evaluator.hyperdash = MagicMock()
+        self.evaluator.hyperdash.get_asset_intel.return_value = {
+            "coin": "SOL",
+            "symbol": "SOLUSD",
+            "data_valid": True,
+            "smart_bias": 28.5,
+            "crowd_bias": -35.2,
+            "intel_score": 88.0,
+            "intel_direction": "BULLISH",
+            "signals": ["SMART_MONEY_ACCUM", "CROWD_SQUEEZE_LONG"]
+        }
+
+        signal = {
+            "symbol": "SOLUSD",
+            "sig_name": "Absorption",
+            "side": "bullish",
+            "price": 100.0,
+            "time_ms": 1700000000000,
+            "bar_closed": True
+        }
+
+        res = self.evaluator.evaluate_signal(signal)
+        reasons = res.get("confluence_reasons", [])
+        self.assertTrue(any("Hyperdash Smart Money Accumulation" in r for r in reasons))
+        self.assertTrue(any("Hyperdash Retail Short Squeeze Fuel" in r for r in reasons))
+        self.assertIn("hyperdash_intel", res)
+        self.assertEqual(res["hyperdash_intel"]["smart_bias"], 28.5)
+
+        # Verify card renders Hyperdash line
+        card = format_confluence_card(res)
+        self.assertIn("Hyperdash Intel:", card)
+        self.assertIn("Smart Bias=+28.5%", card)
+
+    def test_hyperdash_opposing_distribution_penalty(self):
+        """Verifies opposing smart money distribution penalizes bullish signal (-15 pts)."""
+        self.evaluator.hyperdash = MagicMock()
+        self.evaluator.hyperdash.get_asset_intel.return_value = {
+            "coin": "SOL",
+            "symbol": "SOLUSD",
+            "data_valid": True,
+            "smart_bias": -26.0,
+            "crowd_bias": 15.0,
+            "intel_score": 40.0,
+            "intel_direction": "BEARISH",
+            "signals": ["SMART_MONEY_DIST"]
+        }
+
+        signal = {
+            "symbol": "SOLUSD",
+            "sig_name": "Absorption",
+            "side": "bullish",
+            "price": 100.0,
+            "time_ms": 1700000000000,
+            "bar_closed": True
+        }
+
+        res = self.evaluator.evaluate_signal(signal)
+        reasons = res.get("confluence_reasons", [])
+        self.assertTrue(any("Hyperdash Opposing Smart Money Distribution" in r for r in reasons))
+
 
 if __name__ == "__main__":
     unittest.main()
