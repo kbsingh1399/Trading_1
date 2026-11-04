@@ -659,6 +659,23 @@ class HyperdashIntelEngine:
         return res
 
 
+    def start_background_updater(self, interval_sec: float = 60.0):
+        """Starts a background daemon thread that keeps participation features hot."""
+        if getattr(self, "_bg_thread", None) and self._bg_thread.is_alive():
+            return
+        
+        def _bg_loop():
+            logger.info("Hyperdash continuous background updater started (interval=%ss).", interval_sec)
+            while True:
+                try:
+                    self.refresh_participation(force=True)
+                except Exception as exc:
+                    logger.debug("Hyperdash background updater refresh error: %s", exc)
+                time.sleep(interval_sec)
+
+        self._bg_thread = threading.Thread(target=_bg_loop, daemon=True, name="HyperdashBgUpdater")
+        self._bg_thread.start()
+
     async def get_asset_intel_async(self, symbol: str, mark_price_hint: Optional[float] = None) -> Dict[str, Any]:
         """Async wrapper — safe to await directly from an event loop (offloaded to a thread)."""
         import asyncio
@@ -669,4 +686,30 @@ class HyperdashIntelEngine:
 
 # Global singleton engine
 hyperdash_engine = HyperdashIntelEngine()
+
+
+if __name__ == "__main__":
+    import argparse
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [HYPERDASH] %(message)s")
+    parser = argparse.ArgumentParser(description="Hyperdash Institutional Intelligence Daemon")
+    parser.add_argument("--daemon", action="store_true", help="Run as dedicated background daemon")
+    parser.add_argument("--interval", type=float, default=60.0, help="Refresh interval in seconds (default: 60)")
+    parser.add_argument("--symbol", type=str, default="BTCUSD", help="Test symbol to print")
+    args = parser.parse_args()
+
+    engine = HyperdashIntelEngine()
+    if args.daemon:
+        logger.info(f"Starting Hyperdash Intelligence Daemon (interval={args.interval}s)...")
+        while True:
+            try:
+                ok = engine.refresh_participation(force=True)
+                logger.info(f"Hyperdash participation updated: {ok} | Markets: {len(engine._coin_features)} | Saved: {FEATURES_CACHE_FILE.name}")
+            except Exception as e:
+                logger.error(f"Hyperdash daemon cycle error: {e}")
+            time.sleep(args.interval)
+    else:
+        engine.refresh_participation(force=True)
+        intel = engine.get_asset_intel(args.symbol)
+        print(json.dumps(intel, indent=2, default=str))
+
 

@@ -34,3 +34,16 @@ This repository follows Google's **Elephant-Goldfish Model (EGM)** for architect
 - **Full Capability Matrix Utilization**: Proactively select and utilize ALL relevant skills and MCP tools across system domains (e.g., `agent-memory`, `systematic-debugging`, `quant-analyst`, `backtesting-frameworks`, `database-optimizer`, `performance-engineer`, `test-driven-development`, `code-review-graph`, `delta-exchange-mcp`, `sqlite`, `chrome-devtools`) rather than offering isolated, shallow, or improvised suggestions.
 - **Persistent Knowledge & State Synchronization**: Maintain and update the agent memory graph (`memory` MCP server & `agent-memory` pattern) across sessions with verified architectural invariants, execution guardrails, and audit benchmarks.
 - **Deep Cognitive Reasoning**: Mirror the comprehensive depth of the complete slash-command suite (`/plan`, `/boost`, `/teamwork`, `/goal`, `/agent-memory`, `/learn`) to guarantee verified, production-grade output.
+
+## 5. 360-Degree Operational Reality Verification Policy
+- **Never Confuse Code Presence with Operational Runtime**: The presence of an import, class, or unit test is NOT evidence that a background process is active or data is flowing. Before claiming any pipeline or daemon is running, the agent MUST explicitly query the operating system process table (`Get-CimInstance Win32_Process`) and active background tasks (`manage_task list`).
+- **Physical Disk Persistence Verification**: Never claim a data dump is healthy without inspecting physical files on disk (`Path.stat().st_size > 0` and recent `st_mtime`). An empty directory, unwritten cache, or stagnant timestamp indicates a halted pipeline.
+- **Zero-Latency Evaluation Path Invariant**: Real-time signal evaluation paths must NEVER perform blocking synchronous network fetches. All external data streams (Footprint, Whales, Liquidations, Heatmaps, Hyperdash) must be kept warm by dedicated background daemons, allowing signal evaluation to query hot memory/disk in <1ms.
+- **The 6 Authorized Background Daemons**:
+  1. `1_coinglass_footprint_scraper.py --daemon` (Pillar 1: Footprint & Tape)
+  2. `2_coinglass_whales.py --daemon` (Pillar 2: Whale Book & Sweeps)
+  3. `3_coinglass_liquidation_levels.py --daemon` (Pillar 3: Liquidation Heatmap)
+  4. `4_coinglass_tv_scraper.py --daemon` (Pillar 4: Live TV Liquidation Flushes)
+  5. `Terminal/hyperdash_intel_engine.py --daemon` (Pillar 5: Hyperdash Institutional Intelligence)
+  6. `5_wake_on_footprint_signal.py --daemon` (Pillar 6: Realtime Sentinel & Delta Execution Bridge)
+
