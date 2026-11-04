@@ -381,6 +381,13 @@ class UnifiedAPIFootprintEngine:
                     key = (str(s["symbol"]), str(s.get("sig_code", "")), int(s.get("time_ms", 0)))
                     self.known_signal_keys[key] = int(s.get("time_ms", now_ms))
                 logger.info(f"Appended {len(new_signals)} new footprint signals to {SIGNALS_PARQUET.name} (Total: {len(combined_df)})")
+                try:
+                    footprint_jsonl = SIGNALS_DIR / "footprint_signals.jsonl"
+                    with open(footprint_jsonl, "a", encoding="utf-8") as jf:
+                        for s in new_signals:
+                            jf.write(json.dumps(s) + "\n")
+                except Exception as je:
+                    logger.debug(f"Could not append to footprint_signals.jsonl: {je}")
             except Exception as e:
                 logger.error(f"Failed to append footprint signals: {e}")
 
