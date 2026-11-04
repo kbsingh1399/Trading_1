@@ -397,7 +397,7 @@ class DeltaExchangeTrader:
 
         if stop_loss_price is not None:
             body["bracket_stop_loss_price"] = self.quantize_price(stop_loss_price, prod_id)
-            body["bracket_stop_trigger_method"] = "last_traded_price"
+            body["bracket_stop_trigger_method"] = "mark_price"
 
         if take_profit_price is not None:
             body["bracket_take_profit_price"] = self.quantize_price(take_profit_price, prod_id)
@@ -648,7 +648,7 @@ class DeltaExchangeTrader:
                     "order_type": "market_order",
                     "stop_order_type": "stop_loss_order",
                     "stop_price": self.quantize_price(rec_sl, prod_id),
-                    "stop_trigger_method": "last_traded_price",
+                    "stop_trigger_method": "mark_price",
                     "reduce_only": True
                 }
                 res = self.request("POST", "/v2/orders", body=sl_body)
@@ -752,6 +752,22 @@ class DeltaExchangeTrader:
                             stop_price=target_sl
                         )
                         is_ok = edit_res.get("success") or ("result" in edit_res and "id" in edit_res.get("result", {}))
+                        if not is_ok and "immediate_execution_stop_order" in str(edit_res):
+                            logger.info(f"[{p_sym}] Replacing legacy SL order #{sl_order['id']} with fresh mark_price stop at {target_sl}")
+                            self.cancel_order(sl_order["id"], prod_id)
+                            new_sl_body = {
+                                "product_id": prod_id,
+                                "size": abs(size),
+                                "side": "sell" if direction == "BUY" else "buy",
+                                "order_type": "market_order",
+                                "stop_order_type": "stop_loss_order",
+                                "stop_price": self.quantize_price(target_sl, prod_id),
+                                "stop_trigger_method": "mark_price",
+                                "reduce_only": True
+                            }
+                            re_res = self.request("POST", "/v2/orders", body=new_sl_body)
+                            is_ok = re_res.get("success") or ("id" in re_res.get("result", {}))
+
                         if is_ok:
                             update_anchor_tier(p_sym, target_tier, target_sl)
                             logger.info(f"🛡️ [{p_sym}] Ratcheted Stop Loss to {target_sl} ({tier_tag}, gain: +{r_gain:.2f}R0, mark: {mark_price})")
