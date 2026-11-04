@@ -138,12 +138,13 @@ def solve_fee_aware_grid(
 
 
 def load_credentials() -> Dict[str, str]:
-    """Loads API key and secret from environment or ~/.delta-exchange-mcp/config.env."""
+    """Loads API key, secret, and demo token from environment or ~/.delta-exchange-mcp/config.env."""
     key = os.environ.get("DELTA_API_KEY")
     secret = os.environ.get("DELTA_API_SECRET")
-    env = os.environ.get("DELTA_MCP_ENV", "india_prod")
+    token = os.environ.get("DELTA_DEMO_TOKEN")
+    env = os.environ.get("DELTA_MCP_ENV", "demo")
 
-    if (not key or not secret) and CONFIG_ENV_PATH.exists():
+    if CONFIG_ENV_PATH.exists():
         try:
             with open(CONFIG_ENV_PATH, "r", encoding="utf-8") as f:
                 for line in f:
@@ -157,12 +158,14 @@ def load_credentials() -> Dict[str, str]:
                             key = v
                         elif k == "DELTA_API_SECRET" and not secret:
                             secret = v
+                        elif k == "DELTA_DEMO_TOKEN" and not token:
+                            token = v
                         elif k == "DELTA_MCP_ENV":
                             env = v
         except Exception as e:
             logger.warning(f"Error reading {CONFIG_ENV_PATH}: {e}")
 
-    return {"api_key": key or "", "api_secret": secret or "", "env": env}
+    return {"api_key": key or "", "api_secret": secret or "", "token": token or "", "env": env}
 
 
 # Canonical pre-populated product metadata for zero-network resolution in tests
@@ -189,10 +192,13 @@ class DeltaExchangeTrader:
         creds = load_credentials()
         self.api_key = creds.get("api_key", "")
         self.api_secret = creds.get("api_secret", "")
+        self.token = creds.get("token", "")
+        self.env = creds.get("env", "demo")
+        self.base_url = "https://cdn-ind.testnet.deltaex.org" if self.env in ("demo", "testnet") else BASE_URL
         self.server_time_offset = 0.0
         self.products_cache: Dict[str, Dict[str, Any]] = dict(DEFAULT_PRODUCTS)
         self._inflight_orders: Set[str] = set()
-        if self.api_key and self.api_secret:
+        if (self.api_key and self.api_secret) or self.token:
             try:
                 self._sync_server_time()
                 self._load_products()
@@ -263,23 +269,26 @@ class DeltaExchangeTrader:
             query_str = "?" + "&".join([f"{k}={v}" for k, v in sorted(params.items())])
         body_str = json.dumps(body) if body is not None else ""
 
-        sig_payload = method.upper() + ts + path + query_str + body_str
-        signature = hmac.new(
-            self.api_secret.encode("utf-8"),
-            sig_payload.encode("utf-8"),
-            hashlib.sha256
-        ).hexdigest()
-
         headers = {
-            "api-key": self.api_key,
-            "timestamp": ts,
-            "signature": signature,
             "Content-Type": "application/json",
             "Accept": "application/json",
             "User-Agent": "AntigravityQuant/1.0"
         }
+        if getattr(self, "token", None):
+            headers["Authorization"] = self.token
+        elif self.api_key and self.api_secret:
+            sig_payload = method.upper() + ts + path + query_str + body_str
+            signature = hmac.new(
+                self.api_secret.encode("utf-8"),
+                sig_payload.encode("utf-8"),
+                hashlib.sha256
+            ).hexdigest()
+            headers["api-key"] = self.api_key
+            headers["timestamp"] = ts
+            headers["signature"] = signature
 
-        url = BASE_URL + path + query_str
+        base = getattr(self, "base_url", BASE_URL)
+        url = base + path + query_str
         method_upper = method.upper()
         if method_upper == 'GET':
             req_func = requests.get

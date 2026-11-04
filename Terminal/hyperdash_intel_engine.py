@@ -346,7 +346,22 @@ class HyperdashIntelEngine:
         self._participation_cache: Dict[str, Any] = {}
         self._coin_features: Dict[str, Dict[str, Any]] = {}
         self._ticker_positions_cache: Dict[str, Tuple[float, List[Dict[str, Any]], bool]] = {}
-        self._refresh_lock = threading.Lock()   # thread-safe: evaluate_signal fans out on worker threads
+        self._refresh_lock = threading.Lock()
+
+        # Load disk cache if available
+        if FEATURES_CACHE_FILE.exists():
+            try:
+                import pandas as pd
+                df = pd.read_parquet(FEATURES_CACHE_FILE)
+                for _, row in df.iterrows():
+                    d = row.to_dict()
+                    sigs = str(d.get('signals') or '').split(',')
+                    d['signals'] = [s.strip() for s in sigs if s.strip()]
+                    self._coin_features[d['coin']] = d
+                if not df.empty and 'updated_at' in df.columns:
+                    self._last_participation_ts = float(df['updated_at'].max())
+            except Exception as e:
+                logger.debug(f'Could not load cached hyperdash features: {e}')   # thread-safe: evaluate_signal fans out on worker threads
 
 
     # ------------------------------------------------------------------ transport
@@ -524,6 +539,14 @@ class HyperdashIntelEngine:
 
 
         self._coin_features = features_map
+        try:
+            import pandas as pd
+            df = pd.DataFrame(list(features_map.values()))
+            if not df.empty:
+                df['signals'] = df['signals'].apply(lambda x: ','.join(x) if isinstance(x, list) else str(x))
+                atomic_parquet(df, FEATURES_CACHE_FILE)
+        except Exception as e:
+            logger.debug(f'Failed to persist hyperdash features parquet: {e}')
 
 
     # ------------------------------------------------------------------ whale book
