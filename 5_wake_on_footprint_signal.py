@@ -302,6 +302,12 @@ class FootprintSignalSentinel:
                     logger.debug(f"⏭️ [ALREADY REVIEWED] {sym} candle {open_ms} already evaluated. Suppressed.")
                     continue
 
+                is_mock = os.environ.get("MOCK_TEST_MODE") == "1" or "PYTEST_CURRENT_TEST" in os.environ or any(s.get("is_mock") for s in cluster)
+                # Strict Venue Invariant: Reject any asset not tradeable on Delta Exchange India
+                if not is_mock and not delta_client.resolve_product(sym):
+                    logger.info(f"⏭️ [UNLISTED ASSET] {sym} is not listed on Delta Exchange India. Suppressed.")
+                    continue
+
                 # Strict Stale Invariant: Signals closed > 30m ago are discarded
                 is_mock = os.environ.get("MOCK_TEST_MODE") == "1" or "PYTEST_CURRENT_TEST" in os.environ or any(s.get("is_mock") for s in cluster)
                 if not is_mock and (now_ms - close_ms) > 1_800_000:

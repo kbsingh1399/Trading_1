@@ -11,10 +11,10 @@ Database/Candle_Data/<SYMBOL>.parquet.
 Guarantees:
 - True equal-volume bucket partitioning across cumulative trading volume (Easley et al. 2012).
 - Proportional volume and buy/sell delta allocation across bucket transitions.
-- Kyle's Lambda calculated via OLS price-impact regression slope: Cov(dP, dV) / (Var(dV) + eps).
-- Bounded, stable estimators with zero division guardrails and robust zero-flow fallbacks.
-- Strict input validation enforcing |delta| <= volume.
-- Explicit data qualification: fails closed with regime="DATA_UNAVAILABLE" and data_valid=False.
+- Kyle's Lambda calculated via OLS price-impact regression slope: Cov(dP, dV, ddof=1) / Var(dV, ddof=1).
+- Unbiased estimators with matched degrees of freedom (ddof=1) and strict zero-net-flow fallback.
+- Strict input integrity: rejects bars where |delta| > volume, returning data_valid=False.
+- Explicit data qualification: fails closed with regime="DATA_UNAVAILABLE" or "CORRUPTED_DELTA_INTEGRITY".
 ========================================================================================
 """
 
@@ -53,11 +53,8 @@ def _construct_volume_buckets(
     if bucket_size <= 0:
         return np.zeros(0), np.zeros(0), 0.0
 
-    # Buy and sell components per bar
-    # Invariant: |delta| <= volume
-    clipped_deltas = np.clip(deltas, -volumes, volumes)
-    v_buys = (volumes + clipped_deltas) / 2.0
-    v_sells = (volumes - clipped_deltas) / 2.0
+    v_buys = (volumes + deltas) / 2.0
+    v_sells = (volumes - deltas) / 2.0
 
     bucket_buys = []
     bucket_sells = []
@@ -110,25 +107,32 @@ def _estimate_kyles_lambda(prices: np.ndarray, deltas: np.ndarray) -> float:
     """
     Estimates Kyle's Lambda (price impact slope) via linear regression:
     dP_t = lambda * Delta_t + epsilon_t
-    lambda = Cov(dP, Delta) / (Var(Delta) + eps)
-    Safely falls back to 0.0 on zero variance or zero net flow.
+    lambda = Cov(dP, Delta, ddof=1) / (Var(Delta, ddof=1) + eps)
+    Strictly returns 0.0 when net flow is zero (sum(Delta) == 0) or Var(Delta) == 0.
     """
     if len(prices) < 2 or len(deltas) < 2:
         return 0.0
 
     dP = np.diff(prices)
-    flow = deltas[1:]  # align with price diffs
+    flow = deltas[1:]  # align with price differences
 
-    if len(dP) == 0 or len(flow) == 0:
+    if len(dP) < 2 or len(flow) < 2:
         return 0.0
 
-    var_flow = float(np.var(flow))
+    # Explicit Zero Net Flow check (across either input deltas or flow slice)
+    if abs(float(np.sum(deltas))) < 1e-5 or abs(float(np.sum(flow))) < 1e-5:
+        return 0.0
+
+    var_flow = float(np.var(flow, ddof=1))
     if var_flow < 1e-12:
         return 0.0
 
-    cov_p_flow = float(np.cov(dP, flow)[0, 1])
-    # Kyle's lambda represents price impact: positive delta should raise price (lambda >= 0)
+    cov_matrix = np.cov(dP, flow, ddof=1)
+    cov_p_flow = float(cov_matrix[0, 1])
+
     raw_lambda = cov_p_flow / var_flow
+    if abs(raw_lambda) < 1e-8:
+        return 0.0
     return float(np.clip(raw_lambda, 0.0, 100.0))
 
 
@@ -196,6 +200,20 @@ def compute_vpin_and_toxicity(
 
         if delta_col and delta_col in tail_df.columns:
             raw_deltas = tail_df[delta_col].values.astype(np.float64)
+            # STRICT DATA INTEGRITY: |delta| cannot exceed volume
+            # If any bar has |delta| > volume + 1e-4, reject input rather than silently sanitize
+            overshoot = np.abs(raw_deltas) - raw_volumes
+            if np.any(overshoot > 1e-4):
+                return {
+                    "symbol": symbol,
+                    "vpin": 0.50,
+                    "regime": "CORRUPTED_DELTA_INTEGRITY",
+                    "adverse_selection_risk": "UNKNOWN",
+                    "kyles_lambda": 0.0,
+                    "veto_toxic_flow": False,
+                    "data_valid": False,
+                    "error": "Input delta exceeds total bar volume"
+                }
         else:
             # Proxy delta using candle range
             closes = tail_df["close"].values.astype(np.float64)
@@ -205,12 +223,9 @@ def compute_vpin_and_toxicity(
             ranges = np.maximum(highs - lows, 1e-8)
             raw_deltas = raw_volumes * ((closes - opens) / ranges)
 
-        # STRICT INVARIANT: |delta| <= volume
-        sanitized_deltas = np.clip(raw_deltas, -raw_volumes, raw_volumes)
-
         # True Volume-Synchronized Partitioning
         bucket_buys, bucket_sells, bucket_size = _construct_volume_buckets(
-            raw_volumes, sanitized_deltas, num_buckets=num_buckets
+            raw_volumes, raw_deltas, num_buckets=num_buckets
         )
 
         if len(bucket_buys) > 0 and bucket_size > 0:
@@ -227,7 +242,7 @@ def compute_vpin_and_toxicity(
         # Statistical Kyle's Lambda Regression
         if "close" in tail_df.columns:
             closes = tail_df["close"].values.astype(np.float64)
-            kyles_lambda = _estimate_kyles_lambda(closes, sanitized_deltas)
+            kyles_lambda = _estimate_kyles_lambda(closes, raw_deltas)
         else:
             kyles_lambda = 0.0
 
