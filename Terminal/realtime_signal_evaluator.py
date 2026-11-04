@@ -990,6 +990,18 @@ class RealtimeSignalEvaluator:
                 "mitigation": sem_audit.get("matched_lesson")
             }
 
+        # Microstructure VPIN Order Flow Toxicity Check (Lopez de Prado)
+        vpin_metrics = {"vpin": 0.50, "regime": "UNKNOWN", "data_valid": False}
+        try:
+            from Terminal.microstructure_vpin_engine import compute_vpin_and_toxicity
+            vpin_metrics = compute_vpin_and_toxicity(sym)
+            if vpin_metrics.get("data_valid") and vpin_metrics.get("veto_toxic_flow"):
+                v_reason = f"VETO_TOXIC_ORDER_FLOW: VPIN ({vpin_metrics['vpin']:.2f}) >= 0.80 indicates extreme informed order flow toxicity"
+                validation_errors.append(v_reason)
+                logger.warning(f"[{sym}] {v_reason}")
+        except Exception as ve:
+            logger.debug(f"VPIN computation note for {sym}: {ve}")
+
         reasons.extend('Validation Veto: ' + error for error in validation_errors)
 
         confluence_score = max(0.0, min(100.0, confluence_score))
@@ -1153,6 +1165,7 @@ class RealtimeSignalEvaluator:
 
             "delta_execution_authorized": delta_authorized,
             "deepseek_critic": deepseek_critic,
+            "vpin_metrics": vpin_metrics,
 
             "mt5_execution_authorized": mt5_authorized,
 

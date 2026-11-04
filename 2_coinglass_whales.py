@@ -7,7 +7,7 @@ Standalone CoinGlass Large Orderbook & Whale Blotter Scraper (In-Browser CDP Bri
 Pillar 2 of 5 Standalone Crypto Pipeline:
 - Strictly operates via Chrome DevTools Protocol (CDP) on 127.0.0.1:9222.
 - Ephemeral tab lifecycle: opens tab (?bot=whale_scraper), harvests, closes immediately.
-- Reaps any orphaned bot tabs; strictly preserves user & matchtrader tabs.
+- Reaps any orphaned bot tabs; strictly preserves user & delta exchange tabs.
 - Scrapes:
   1. Whale Market Snapshots (Wall imbalance bid:ask, bid walls USD, ask walls USD, open walls)
   2. Active Open Whale Orders (Table 2 virtual scrolling in .lo-bt-body)

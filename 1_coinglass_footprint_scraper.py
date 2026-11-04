@@ -126,7 +126,7 @@ def load_known_signals():
 
 
 def cleanup_orphan_tabs(keep_tab_id: Optional[str] = None):
-    """Reaps any orphaned bot tabs in Chrome, preserving user & matchtrader tabs."""
+    """Reaps any orphaned bot tabs in Chrome, preserving user & delta exchange tabs."""
     try:
         req = urllib.request.Request("http://127.0.0.1:9222/json", headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=3) as resp:

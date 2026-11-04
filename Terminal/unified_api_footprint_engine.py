@@ -22,8 +22,8 @@ Guarantees:
 - Generates all 5 CoinGlass footprint algorithms: Absorption, Divergence, Swing CVD Divergence,
   Exhaustion, and Trapped Traders.
 - Appends newly triggered signals to Database/Signals/coinglass_aggregated_futures_signals.parquet.
-- Automatically triggers RealtimeSignalEvaluator and MatchTrader Live Bridge for high-confluence
-  order execution on MatchTrader (Account 101305360).
+- Automatically triggers RealtimeSignalEvaluator and Delta Exchange India live trader for high-confluence
+  order execution on Delta Exchange India exclusively.
 ========================================================================================
 """
 
@@ -522,7 +522,7 @@ class UnifiedAPIFootprintEngine:
             # Evaluate through RealtimeSignalEvaluator for high-confluence execution
             if self.evaluator:
                 try:
-                    logger.info(f"Evaluating {len(all_new_signals)} fresh signals for MatchTrader / MT5 order execution...")
+                    logger.info(f"Evaluating {len(all_new_signals)} fresh signals for Delta Exchange India order execution...")
                     self.evaluator.evaluate_new_signals(all_new_signals)
                 except Exception as e:
                     logger.error(f"Error in signal evaluation: {e}")

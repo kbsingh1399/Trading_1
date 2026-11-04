@@ -14,7 +14,7 @@ Pillar 3 of 5 Standalone Crypto Pipeline:
 
 - Ephemeral tab lifecycle: opens tab (?bot=liq_scraper), harvests, closes immediately.
 
-- Reaps any orphaned bot tabs; strictly preserves user & matchtrader tabs.
+- Reaps any orphaned bot tabs; strictly preserves user & delta exchange tabs.
 
 - Scrapes all 6 institutional liquidation structures:
 
