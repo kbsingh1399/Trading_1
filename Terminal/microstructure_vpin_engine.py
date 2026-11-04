@@ -2,20 +2,19 @@
 ========================================================================================
 Microstructure VPIN & Order Flow Toxicity Engine
 ========================================================================================
-Implements Volume-Synchronized Probability of Toxicity (VPIN) based on Easley, 
-Lopez de Prado, and O'Hara (2012) and Kyle's Lambda price impact coefficient.
+Implements true Volume-Synchronized Probability of Toxicity (VPIN) based on Easley, 
+Lopez de Prado, and O'Hara (2012) and Kyle's Lambda price impact regression estimator.
 
 Calculates real-time adverse selection risk from M15 volume and delta vectors in
 Database/Candle_Data/<SYMBOL>.parquet.
 
 Guarantees:
-- Zero-division guardrails and pure vectorized numpy/pandas operations (< 2ms compute).
-- Classifies order flow into 4 distinct toxicity regimes:
-  * EXTREME_TOXICITY (VPIN >= 0.80): Informed toxic flow; high slippage & adverse fills.
-  * HIGH_TOXICITY    (0.65 <= VPIN < 0.80): Elevated aggressive market sweeps.
-  * MODERATE_TOXICITY(0.40 <= VPIN < 0.65): Balanced, two-sided institutional auction.
-  * LOW_TOXICITY     (VPIN < 0.40): Passive absorption; ideal for mean reversion/breakouts.
-- Kyle's Lambda (Price impact per unit of net volume) estimates expected fill drag.
+- True equal-volume bucket partitioning across cumulative trading volume (Easley et al. 2012).
+- Proportional volume and buy/sell delta allocation across bucket transitions.
+- Kyle's Lambda calculated via OLS price-impact regression slope: Cov(dP, dV) / (Var(dV) + eps).
+- Bounded, stable estimators with zero division guardrails and robust zero-flow fallbacks.
+- Strict input validation enforcing |delta| <= volume.
+- Explicit data qualification: fails closed with regime="DATA_UNAVAILABLE" and data_valid=False.
 ========================================================================================
 """
 
@@ -23,7 +22,7 @@ import sys
 import math
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -36,27 +35,124 @@ logger = logging.getLogger("MicrostructureVPIN")
 logger.setLevel(logging.INFO)
 
 
+def _construct_volume_buckets(
+    volumes: np.ndarray,
+    deltas: np.ndarray,
+    num_buckets: int = 50
+) -> Tuple[np.ndarray, np.ndarray, float]:
+    """
+    Constructs N equal-volume buckets per Easley, Lopez de Prado & O'Hara (2012).
+    Partitions continuous volume into fixed-size buckets of size V = sum(volumes) / num_buckets,
+    allocating buy/sell delta proportionally when a bar spans bucket boundaries.
+    """
+    total_vol = float(np.sum(volumes))
+    if total_vol <= 0 or num_buckets <= 0:
+        return np.zeros(0), np.zeros(0), 0.0
+
+    bucket_size = total_vol / float(num_buckets)
+    if bucket_size <= 0:
+        return np.zeros(0), np.zeros(0), 0.0
+
+    # Buy and sell components per bar
+    # Invariant: |delta| <= volume
+    clipped_deltas = np.clip(deltas, -volumes, volumes)
+    v_buys = (volumes + clipped_deltas) / 2.0
+    v_sells = (volumes - clipped_deltas) / 2.0
+
+    bucket_buys = []
+    bucket_sells = []
+
+    cur_b_buy = 0.0
+    cur_b_sell = 0.0
+    cur_b_filled = 0.0
+
+    for v, vb, vs in zip(volumes, v_buys, v_sells):
+        rem_bar_vol = v
+        rem_bar_buy = vb
+        rem_bar_sell = vs
+
+        while rem_bar_vol > 1e-12:
+            needed = bucket_size - cur_b_filled
+            if rem_bar_vol >= needed:
+                # Fill current bucket to exact capacity
+                frac = needed / rem_bar_vol if rem_bar_vol > 0 else 1.0
+                cur_b_buy += rem_bar_buy * frac
+                cur_b_sell += rem_bar_sell * frac
+
+                bucket_buys.append(cur_b_buy)
+                bucket_sells.append(cur_b_sell)
+
+                rem_bar_vol -= needed
+                rem_bar_buy -= rem_bar_buy * frac
+                rem_bar_sell -= rem_bar_sell * frac
+
+                cur_b_buy = 0.0
+                cur_b_sell = 0.0
+                cur_b_filled = 0.0
+            else:
+                # Add remainder of bar to current bucket
+                cur_b_buy += rem_bar_buy
+                cur_b_sell += rem_bar_sell
+                cur_b_filled += rem_bar_vol
+                rem_bar_vol = 0.0
+                rem_bar_buy = 0.0
+                rem_bar_sell = 0.0
+
+    # If final bucket has volume, append it
+    if cur_b_filled > 1e-12:
+        bucket_buys.append(cur_b_buy)
+        bucket_sells.append(cur_b_sell)
+
+    return np.array(bucket_buys, dtype=np.float64), np.array(bucket_sells, dtype=np.float64), bucket_size
+
+
+def _estimate_kyles_lambda(prices: np.ndarray, deltas: np.ndarray) -> float:
+    """
+    Estimates Kyle's Lambda (price impact slope) via linear regression:
+    dP_t = lambda * Delta_t + epsilon_t
+    lambda = Cov(dP, Delta) / (Var(Delta) + eps)
+    Safely falls back to 0.0 on zero variance or zero net flow.
+    """
+    if len(prices) < 2 or len(deltas) < 2:
+        return 0.0
+
+    dP = np.diff(prices)
+    flow = deltas[1:]  # align with price diffs
+
+    if len(dP) == 0 or len(flow) == 0:
+        return 0.0
+
+    var_flow = float(np.var(flow))
+    if var_flow < 1e-12:
+        return 0.0
+
+    cov_p_flow = float(np.cov(dP, flow)[0, 1])
+    # Kyle's lambda represents price impact: positive delta should raise price (lambda >= 0)
+    raw_lambda = cov_p_flow / var_flow
+    return float(np.clip(raw_lambda, 0.0, 100.0))
+
+
 def compute_vpin_and_toxicity(
     symbol: str,
     candle_df: Optional[pd.DataFrame] = None,
-    lookback_bars: int = 50
+    lookback_bars: int = 50,
+    num_buckets: int = 50
 ) -> Dict[str, Any]:
     """
-    Computes rolling VPIN (Volume-Synchronized Probability of Toxicity) and
-    Kyle's Lambda price impact coefficient for a given symbol.
+    Computes true Volume-Synchronized Probability of Toxicity (VPIN) and
+    Kyle's Lambda statistical price impact coefficient.
     """
     try:
         clean_sym = symbol.upper().replace(".PI", "").replace("USDT", "").replace("USD", "").strip()
         if candle_df is None:
             p_file = CANDLE_DIR / f"{clean_sym}.parquet"
             if not p_file.exists():
-                # Try with USD or full symbol
                 p_file = CANDLE_DIR / f"{symbol}.parquet"
             if not p_file.exists():
                 return {
                     "symbol": symbol,
                     "vpin": 0.50,
-                    "regime": "INSUFFICIENT_DATA",
+                    "regime": "DATA_UNAVAILABLE",
                     "adverse_selection_risk": "UNKNOWN",
                     "kyles_lambda": 0.0,
                     "veto_toxic_flow": False,
@@ -70,7 +166,7 @@ def compute_vpin_and_toxicity(
             return {
                 "symbol": symbol,
                 "vpin": 0.50,
-                "regime": "INSUFFICIENT_DATA",
+                "regime": "DATA_UNAVAILABLE",
                 "adverse_selection_risk": "UNKNOWN",
                 "kyles_lambda": 0.0,
                 "veto_toxic_flow": False,
@@ -88,44 +184,50 @@ def compute_vpin_and_toxicity(
             return {
                 "symbol": symbol,
                 "vpin": 0.50,
-                "regime": "INSUFFICIENT_DATA",
+                "regime": "DATA_UNAVAILABLE",
                 "adverse_selection_risk": "UNKNOWN",
                 "kyles_lambda": 0.0,
                 "veto_toxic_flow": False,
                 "data_valid": False
             }
 
-        volumes = tail_df[vol_col].values.astype(np.float64)
+        raw_volumes = tail_df[vol_col].values.astype(np.float64)
+        raw_volumes = np.maximum(raw_volumes, 0.0)
+
         if delta_col and delta_col in tail_df.columns:
-            deltas = tail_df[delta_col].values.astype(np.float64)
+            raw_deltas = tail_df[delta_col].values.astype(np.float64)
         else:
-            # Proxy delta using close - open vs high - low if delta unavailable
+            # Proxy delta using candle range
             closes = tail_df["close"].values.astype(np.float64)
             opens = tail_df["open"].values.astype(np.float64)
             highs = tail_df["high"].values.astype(np.float64)
             lows = tail_df["low"].values.astype(np.float64)
             ranges = np.maximum(highs - lows, 1e-8)
-            deltas = volumes * ((closes - opens) / ranges)
+            raw_deltas = raw_volumes * ((closes - opens) / ranges)
 
-        # Decompose volume into taker buy and taker sell components
-        # V = V_buy + V_sell, Delta = V_buy - V_sell
-        v_buy = np.maximum(0.0, (volumes + deltas) / 2.0)
-        v_sell = np.maximum(0.0, (volumes - deltas) / 2.0)
+        # STRICT INVARIANT: |delta| <= volume
+        sanitized_deltas = np.clip(raw_deltas, -raw_volumes, raw_volumes)
 
-        # Total Volume and Absolute Order Imbalance
-        total_vol = np.sum(v_buy + v_sell)
-        abs_imbalance = np.sum(np.abs(v_buy - v_sell))
+        # True Volume-Synchronized Partitioning
+        bucket_buys, bucket_sells, bucket_size = _construct_volume_buckets(
+            raw_volumes, sanitized_deltas, num_buckets=num_buckets
+        )
 
-        if total_vol > 0:
-            vpin = float(np.clip(abs_imbalance / total_vol, 0.0, 1.0))
+        if len(bucket_buys) > 0 and bucket_size > 0:
+            # VPIN = sum(|V_buy - V_sell|) / (N * V)
+            imbalances = np.abs(bucket_buys - bucket_sells)
+            total_bucket_vol = float(np.sum(bucket_buys + bucket_sells))
+            if total_bucket_vol > 0:
+                vpin = float(np.clip(np.sum(imbalances) / total_bucket_vol, 0.0, 1.0))
+            else:
+                vpin = 0.50
         else:
             vpin = 0.50
 
-        # Kyle's Lambda estimation: abs(dP) / (abs(sum(delta)) + eps)
+        # Statistical Kyle's Lambda Regression
         if "close" in tail_df.columns:
-            price_change = abs(float(tail_df["close"].iloc[-1]) - float(tail_df["close"].iloc[0]))
-            net_delta_vol = abs(float(np.sum(deltas)))
-            kyles_lambda = float(price_change / (net_delta_vol + 1e-6))
+            closes = tail_df["close"].values.astype(np.float64)
+            kyles_lambda = _estimate_kyles_lambda(closes, sanitized_deltas)
         else:
             kyles_lambda = 0.0
 
@@ -153,7 +255,8 @@ def compute_vpin_and_toxicity(
             "regime": regime,
             "adverse_selection_risk": adverse_risk,
             "kyles_lambda": round(kyles_lambda, 8),
-            "total_window_volume": round(float(total_vol), 2),
+            "total_window_volume": round(float(np.sum(raw_volumes)), 2),
+            "num_buckets_evaluated": len(bucket_buys),
             "veto_toxic_flow": veto,
             "data_valid": True
         }

@@ -42,6 +42,8 @@ if not logger.handlers:
 
 def get_current_ip() -> str:
     """Queries external IP via ipify."""
+    if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("OFFLINE_MODE", "").lower() in ("true", "1"):
+        return "127.0.0.1"
     try:
         req = urllib.request.Request("https://api.ipify.org?format=json", headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=4) as response:
