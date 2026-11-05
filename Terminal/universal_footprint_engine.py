@@ -285,6 +285,8 @@ def synthesize_range_bars(
     CoinGlass parity: bars are built from 1m footprint data and close once the
     threshold is reached, so a bar can overshoot it slightly.
     """
+    if isinstance(sub_bars, pd.DataFrame):
+        sub_bars = sub_bars.to_dict('records')
     if not sub_bars or range_size <= 0:
         return []
 
@@ -367,6 +369,8 @@ def synthesize_volume_bars(
     A new Volume bar closes whenever total accumulated volume reaches or exceeds
     vol_threshold (overshoot allowed, matching CoinGlass).
     """
+    if isinstance(sub_bars, pd.DataFrame):
+        sub_bars = sub_bars.to_dict('records')
     if not sub_bars or vol_threshold <= 0:
         return []
 
@@ -1023,9 +1027,10 @@ class UniversalFootprintEngine:
 
         # CoinGlass 20-bar rolling median volume gate (AST ey line 16305)
         # Suppresses signals on low-volume bars (vol < 0.8 * median(prior 20 bars))
-        # Applied to div, abs, exh, trap (sdiv uses its own pivot calculation)
+        # For synthesized bars (range/vol), single-exchange Binance volume is ~40-50% of the 4-exchange aggregate
         med_v = ctx.get("prior20_median_vol", np.zeros(len(df)))[idx] if "prior20_median_vol" in ctx else 0.0
-        _vol_gate_pass = (med_v <= 0) or (v >= 0.8 * med_v)
+        _vol_thresh_ratio = 0.40 if bar_type in ("range", "vol", "volume") else 0.80
+        _vol_gate_pass = (med_v <= 0) or (v >= _vol_thresh_ratio * med_v)
 
         # ======================================================================
         # 1. ABSORPTION (abs)
@@ -1038,7 +1043,7 @@ class UniversalFootprintEngine:
         if _macro_delta_gate and _vol_gate_pass and v > 0 and buy_frac >= 0.25 \
                 and close_pos <= cal.abs_close_pos_extreme \
                 and (upper_wick / bar_range) >= cal.abs_wick_min \
-                and ((bar_type in ("vol", "volume")) or (vol_ratio >= cal.abs_vol_ratio_min)):
+                and ((bar_type in ("vol", "volume", "range")) or (vol_ratio >= cal.abs_vol_ratio_min)):
             strength = float(min(1.0, 0.6 * (est_top_buy_share / max(cal.abs_zone_share_min, 1e-9) - 1.0) + 0.4 * min(vol_ratio / 2.0, 1.0)))
             bar_signals.append({
                 **base_sig,
@@ -1055,7 +1060,7 @@ class UniversalFootprintEngine:
         elif _macro_delta_gate and _vol_gate_pass and v > 0 and sell_frac >= 0.25 \
                 and close_pos >= (1.0 - cal.abs_close_pos_extreme) \
                 and (lower_wick / bar_range) >= cal.abs_wick_min \
-                and ((bar_type in ("vol", "volume")) or (vol_ratio >= cal.abs_vol_ratio_min)):
+                and ((bar_type in ("vol", "volume", "range")) or (vol_ratio >= cal.abs_vol_ratio_min)):
             strength = float(min(1.0, 0.6 * (est_bottom_sell_share / max(cal.abs_zone_share_min, 1e-9) - 1.0) + 0.4 * min(vol_ratio / 2.0, 1.0)))
             bar_signals.append({
                 **base_sig,
@@ -1224,7 +1229,7 @@ class UniversalFootprintEngine:
 
         if _vol_gate_pass and np.isfinite(prior5_high) and h > prior5_high and v > 0 \
                 and trap_top_buy_share >= cal.trap_zone_share_min \
-                and ((bar_type in ("vol", "volume")) or (vol_ratio >= cal.trap_vol_ratio_min)):
+                and ((bar_type in ("vol", "volume", "range")) or (vol_ratio >= cal.trap_vol_ratio_min)):
             trigger_low = l
             retest_level = trigger_low + trap_retest_band * bar_range
             confirm_lag = 0
@@ -1255,7 +1260,7 @@ class UniversalFootprintEngine:
 
         if _vol_gate_pass and np.isfinite(prior5_low) and l < prior5_low and v > 0 \
                 and trap_bottom_sell_share >= cal.trap_zone_share_min \
-                and ((bar_type in ("vol", "volume")) or (vol_ratio >= cal.trap_vol_ratio_min)):
+                and ((bar_type in ("vol", "volume", "range")) or (vol_ratio >= cal.trap_vol_ratio_min)):
             trigger_high = h
             retest_level = trigger_high - trap_retest_band * bar_range
             confirm_lag = 0
