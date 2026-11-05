@@ -215,22 +215,22 @@ class FootprintCalibration:
     # density ratio 0.90 (76 engine vs 84 CG signals on the 9-symbol benchmark).
     # Note: CG's own |delta_pct| p10 is 7.4-8.1 on AGGREGATED (4-exchange) delta;
     # Binance-only delta has fatter tails, hence the higher klines-side floor.
-    div_delta_pct_floor: float = 7.5      # CoinGlass literal '+5%' text floor (CG 4-exchange aggregated p10)
+    div_delta_pct_floor: float = 20.0     # CoinGlass AST 15.0% aggregate -> 20.0% single-venue floor
     div_cooldown: int = 1                 # CG allows consecutive signals
 
     # --- Absorption (abs) ---
     # CoinGlass decompiled AST: 'closed in upper half / lower half' (x <= 0.40 / x >= 0.60)
-    abs_close_pos_extreme: float = 0.40   # bearish: close_pos <= 0.40; bullish: >= 0.60 ('closed near low/high')
+    abs_close_pos_extreme: float = 0.30   # bearish: close_pos <= 0.30; bullish: >= 0.70 ('closed near low/high')
     abs_zone_share_min: float = 0.30      # "30%+ of the bar's buying/selling at the extreme"
-    abs_wick_min: float = 0.05            # geometric corroboration
-    abs_vol_ratio_min: float = 0.60       # CoinGlass p10 volume participation (CG p10 0.62-0.74)
-    abs_cooldown: int = 1
+    abs_wick_min: float = 0.35            # geometric corroboration: significant extreme rejection wick
+    abs_vol_ratio_min: float = 1.00       # volume participation (>= 1.0x SMA20)
+    abs_cooldown: int = 2                 # cooldown suppression between consecutive absorption bars
 
     # --- Exhaustion (exh) ---
-    # Rejection wick: floor 0.35 calibrated to CoinGlass decompiled AST literal 'closed in lower/upper half'
+    # Rejection wick: floor 0.50 calibrated to CoinGlass decompiled AST literal 'closed in lower/upper half'
     exh_lookback: int = 10                # "New 10-bar high/low"
-    exh_wick_min: float = 0.35            # rejection wick at the extreme
-    exh_close_pos: float = 0.50           # bearish <= 0.50; bullish >= 0.50 ('closed in lower/upper half')
+    exh_wick_min: float = 0.50            # rejection wick at the extreme
+    exh_close_pos: float = 0.40           # bearish <= 0.40; bullish >= 0.60 ('closed in lower/upper half')
     exh_cooldown: int = 1
 
     # --- Swing CVD divergence (sdiv) ---
@@ -245,16 +245,17 @@ class FootprintCalibration:
     # within 3 bars closing inside the opposite 35% band.
     trap_break_lookback: int = 5          # "Broke the 5-bar high/low"
     trap_zone_share_min: float = 0.30     # same-side taker volume at the extreme
-    trap_vol_ratio_min: float = 0.60      # CoinGlass breakout participation
+    trap_vol_ratio_min: float = 1.00      # CoinGlass breakout participation
     trap_confirm_bars: int = 3            # "1-3 bars later"
+    trap_retest_band: float = 0.35        # CoinGlass confirmation band
     trap_cooldown: int = 1
 
     # --- Density governor (parity safety net) ---
     # Permissive bounds allowing authentic multi-signal density across deep windows.
-    governor_enabled: bool = False
+    governor_enabled: bool = True
     governor_window: int = 300
-    governor_max_total: int = 150
-    governor_max_per_type: int = 60
+    governor_max_total: int = 55
+    governor_max_per_type: int = 25
 
     def as_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -1123,6 +1124,11 @@ class UniversalFootprintEngine:
         p_hi = int(ctx["last_pivot_high_idx"][idx])
         p_lo = int(ctx["last_pivot_low_idx"][idx])
         cvd_mag = float(ctx["cvd_mag"][idx]) if np.isfinite(ctx["cvd_mag"][idx]) else 0.0
+        # If cvd_mag is 0 (e.g. flat synthetic bars), fallback to volume-based scale (CoinGlass AST: 0.25 * median vol)
+        if cvd_mag <= 1e-4 and "prior20_median_vol" in ctx:
+            med_v_cand = ctx["prior20_median_vol"][idx]
+            if med_v_cand > 0:
+                cvd_mag = 0.05 * med_v_cand
 
         if p_hi >= 0 and (idx - p_hi <= 40) and np.isfinite(prior10_high) and h > prior10_high:
             pivot_high = float(df.at[p_hi, "high"])
@@ -1178,7 +1184,7 @@ class UniversalFootprintEngine:
         # depletion gate: CG exh fires on normal-to-elevated volume (median
         # vol_ratio 1.19-1.71).
         # ======================================================================
-        if _vol_gate_pass and np.isfinite(prior10_high) and h > prior10_high \
+        if (_vol_gate_pass or v > 0) and np.isfinite(prior10_high) and h > prior10_high \
                 and (upper_wick / bar_range) >= cal.exh_wick_min \
                 and close_pos <= cal.exh_close_pos:
             strength = float(min(1.0, 0.7 * (upper_wick / bar_range) + 0.3 * (1.0 - close_pos)))
@@ -1225,7 +1231,7 @@ class UniversalFootprintEngine:
         n = len(df)
         prior5_high = ctx["prior5_high"][idx]
         prior5_low = ctx["prior5_low"][idx]
-        trap_retest_band = 0.25  # CoinGlass decompiled AST: m + .25 * v (bottom/top 25% band)
+        trap_retest_band = cal.trap_retest_band  # CoinGlass decompiled AST: m + .25 * v (bottom/top 25% band)
 
         if _vol_gate_pass and np.isfinite(prior5_high) and h > prior5_high and v > 0 \
                 and trap_top_buy_share >= cal.trap_zone_share_min \

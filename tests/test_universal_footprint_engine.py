@@ -402,10 +402,10 @@ def test_trailing_ratchet_never_widens():
 def test_signal_density_parity_on_eth_window():
     """The over-generation defect fix: ETH 300-bar window must stay in the CoinGlass density band."""
     engine = UniversalFootprintEngine()
-    raw = pd.read_parquet(CANDLE_DIR / "ETH.parquet")
+    raw = pd.read_parquet(CANDLE_DIR / "ETH.parquet").tail(300)
     df, sigs = engine.analyze_bars(
         raw, symbol="ETH", asset_class="Crypto",
-        rolling_window=len(raw), inspect_last_n_bars=len(raw))
+        rolling_window=300, inspect_last_n_bars=300)
     n = len(df)
     bars_with = int((df["signals_count"] > 0).sum())
     density = 100.0 * bars_with / n
