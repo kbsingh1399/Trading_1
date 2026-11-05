@@ -105,7 +105,7 @@ COINGLASS_BAR_CONFIGS: Dict[str, Dict[str, Any]] = {
     },
     "BTC": {
         "range": [{"label": "Range 250", "size": 250.0}, {"label": "Range 200", "size": 200.0}, {"label": "Range 100", "size": 100.0}],
-        "vol": [{"label": "Volume 1.0K BTC", "threshold": 1_000.0}, {"label": "Volume 2.0K BTC", "threshold": 2_000.0}, {"label": "Volume 2.5K BTC", "threshold": 2_500.0}, {"label": "Volume 500 BTC", "threshold": 500.0}]
+        "vol": [{"label": "Volume 2.0K BTC", "threshold": 2_000.0}, {"label": "Volume 1.0K BTC", "threshold": 1_000.0}, {"label": "Volume 2.5K BTC", "threshold": 2_500.0}, {"label": "Volume 500 BTC", "threshold": 500.0}]
     },
     "SOL": {
         "range": [{"label": "Range 0.25", "size": 0.25}],

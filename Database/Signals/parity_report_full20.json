@@ -1,0 +1,765 @@
+{
+  "overall_time_rate": 100.0,
+  "threshold": 85.0,
+  "pass": true,
+  "bar_config_verification": {
+    "BTC_vol_default": "Volume 2.0K BTC",
+    "ETH_vol_default": "Volume 50K ETH",
+    "DOGE_vol_default": "Volume 50M DOGE",
+    "BTC_range_default": "Range 250",
+    "DOGE_range_default": "Range 0.0002"
+  },
+  "results": [
+    {
+      "symbol": "BTC",
+      "time_bars": {
+        "bars": 99,
+        "rate": 100.0,
+        "sig_counts": {
+          "ABS": 1,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 1
+      },
+      "range_bars": {
+        "bars": 42,
+        "rate": 0.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 0,
+        "label": "Range 250",
+        "size": 250.0
+      },
+      "vol_bars": {
+        "bars": 67,
+        "rate": 0.0,
+        "sig_counts": {
+          "ABS": 1,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 1,
+        "label": "Volume 2.0K BTC",
+        "threshold": 2000.0
+      },
+      "errors": []
+    },
+    {
+      "symbol": "ETH",
+      "time_bars": {
+        "bars": 99,
+        "rate": 100.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 0
+      },
+      "range_bars": {
+        "bars": 43,
+        "rate": 0.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 0,
+        "label": "Range 10",
+        "size": 10.0
+      },
+      "vol_bars": {
+        "bars": 69,
+        "rate": 0.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 0,
+        "label": "Volume 50K ETH",
+        "threshold": 50000.0
+      },
+      "errors": []
+    },
+    {
+      "symbol": "SOL",
+      "time_bars": {
+        "bars": 99,
+        "rate": 100.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 0
+      },
+      "range_bars": {
+        "bars": 90,
+        "rate": 0.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 0,
+        "label": "Range 0.25",
+        "size": 0.25
+      },
+      "vol_bars": {
+        "bars": 79,
+        "rate": 0.0,
+        "sig_counts": {
+          "ABS": 1,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 1,
+        "label": "Volume 200K SOL",
+        "threshold": 200000.0
+      },
+      "errors": []
+    },
+    {
+      "symbol": "BNB",
+      "time_bars": {
+        "bars": 99,
+        "rate": 100.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 0
+      },
+      "range_bars": {
+        "bars": 52,
+        "rate": 0.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 0,
+        "label": "Range 2.0",
+        "size": 2.0
+      },
+      "vol_bars": {
+        "bars": 25,
+        "rate": 0.0,
+        "sig_counts": {
+          "ABS": 1,
+          "EXH": 1,
+          "DIV": 0,
+          "TRAP": 1
+        },
+        "all_signals": 3,
+        "label": "Volume 20K BNB",
+        "threshold": 20000.0
+      },
+      "errors": []
+    },
+    {
+      "symbol": "XRP",
+      "time_bars": {
+        "bars": 99,
+        "rate": 100.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 0
+      },
+      "range_bars": {
+        "bars": 55,
+        "rate": 0.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 0,
+        "label": "Range 0.005",
+        "size": 0.005
+      },
+      "vol_bars": {
+        "bars": 82,
+        "rate": 0.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 0,
+        "label": "Volume 5.0M XRP",
+        "threshold": 5000000.0
+      },
+      "errors": []
+    },
+    {
+      "symbol": "DOGE",
+      "time_bars": {
+        "bars": 99,
+        "rate": 100.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 1,
+          "TRAP": 0
+        },
+        "all_signals": 1
+      },
+      "range_bars": {
+        "bars": 81,
+        "rate": 0.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 0,
+        "label": "Range 0.0002",
+        "size": 0.0002
+      },
+      "vol_bars": {
+        "bars": 69,
+        "rate": 0.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 0,
+        "label": "Volume 50M DOGE",
+        "threshold": 50000000.0
+      },
+      "errors": []
+    },
+    {
+      "symbol": "ADA",
+      "time_bars": {
+        "bars": 99,
+        "rate": 100.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 1,
+          "TRAP": 0
+        },
+        "all_signals": 1
+      },
+      "range_bars": {
+        "bars": 0,
+        "rate": 0.0,
+        "sig_counts": {},
+        "all_signals": []
+      },
+      "vol_bars": {
+        "bars": 33,
+        "rate": 0.0,
+        "sig_counts": {
+          "ABS": 1,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 1,
+        "label": "Volume 25M ADA",
+        "threshold": 25000000.0
+      },
+      "errors": []
+    },
+    {
+      "symbol": "AVAX",
+      "time_bars": {
+        "bars": 99,
+        "rate": 100.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 1,
+          "TRAP": 0
+        },
+        "all_signals": 1
+      },
+      "range_bars": {
+        "bars": 0,
+        "rate": 0.0,
+        "sig_counts": {},
+        "all_signals": []
+      },
+      "vol_bars": {
+        "bars": 30,
+        "rate": 0.0,
+        "sig_counts": {
+          "ABS": 1,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 1,
+        "label": "Volume 500K AVAX",
+        "threshold": 500000.0
+      },
+      "errors": []
+    },
+    {
+      "symbol": "LINK",
+      "time_bars": {
+        "bars": 99,
+        "rate": 100.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 0
+      },
+      "range_bars": {
+        "bars": 72,
+        "rate": 0.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 0,
+        "label": "Range 0.05",
+        "size": 0.05
+      },
+      "vol_bars": {
+        "bars": 33,
+        "rate": 0.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 0,
+        "label": "Volume 500K LINK",
+        "threshold": 500000.0
+      },
+      "errors": []
+    },
+    {
+      "symbol": "SUI",
+      "time_bars": {
+        "bars": 99,
+        "rate": 100.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 1,
+          "TRAP": 0
+        },
+        "all_signals": 1
+      },
+      "range_bars": {
+        "bars": 0,
+        "rate": 0.0,
+        "sig_counts": {},
+        "all_signals": []
+      },
+      "vol_bars": {
+        "bars": 79,
+        "rate": 0.0,
+        "sig_counts": {
+          "ABS": 1,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 1,
+        "label": "Volume 2.0M SUI",
+        "threshold": 2000000.0
+      },
+      "errors": []
+    },
+    {
+      "symbol": "PEPE",
+      "time_bars": {
+        "bars": 99,
+        "rate": 100.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 0
+      },
+      "range_bars": {
+        "bars": 0,
+        "rate": 0.0,
+        "sig_counts": {},
+        "all_signals": []
+      },
+      "vol_bars": {
+        "bars": 98,
+        "rate": 0.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 0,
+        "label": "Volume 500M PEPE",
+        "threshold": 500000000.0
+      },
+      "errors": []
+    },
+    {
+      "symbol": "NEAR",
+      "time_bars": {
+        "bars": 99,
+        "rate": 100.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 0
+      },
+      "range_bars": {
+        "bars": 0,
+        "rate": 0.0,
+        "sig_counts": {},
+        "all_signals": []
+      },
+      "vol_bars": {
+        "bars": 88,
+        "rate": 0.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 1
+        },
+        "all_signals": 1,
+        "label": "Volume 1.0M NEAR",
+        "threshold": 1000000.0
+      },
+      "errors": []
+    },
+    {
+      "symbol": "DOT",
+      "time_bars": {
+        "bars": 99,
+        "rate": 100.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 1,
+          "TRAP": 0
+        },
+        "all_signals": 1
+      },
+      "range_bars": {
+        "bars": 0,
+        "rate": 0.0,
+        "sig_counts": {},
+        "all_signals": []
+      },
+      "vol_bars": {
+        "bars": 98,
+        "rate": 0.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 0,
+        "label": "Volume 200K DOT",
+        "threshold": 200000.0
+      },
+      "errors": []
+    },
+    {
+      "symbol": "LTC",
+      "time_bars": {
+        "bars": 99,
+        "rate": 100.0,
+        "sig_counts": {
+          "ABS": 1,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 1
+      },
+      "range_bars": {
+        "bars": 0,
+        "rate": 0.0,
+        "sig_counts": {},
+        "all_signals": []
+      },
+      "vol_bars": {
+        "bars": 78,
+        "rate": 0.0,
+        "sig_counts": {
+          "ABS": 1,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 1,
+        "label": "Volume 10K LTC",
+        "threshold": 10000.0
+      },
+      "errors": []
+    },
+    {
+      "symbol": "BCH",
+      "time_bars": {
+        "bars": 99,
+        "rate": 100.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 1,
+          "TRAP": 0
+        },
+        "all_signals": 1
+      },
+      "range_bars": {
+        "bars": 37,
+        "rate": 0.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 0,
+        "label": "Range 2.0",
+        "size": 2.0
+      },
+      "vol_bars": {
+        "bars": 87,
+        "rate": 0.0,
+        "sig_counts": {
+          "ABS": 1,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 1,
+        "label": "Volume 2.0K BCH",
+        "threshold": 2000.0
+      },
+      "errors": []
+    },
+    {
+      "symbol": "TRX",
+      "time_bars": {
+        "bars": 99,
+        "rate": 100.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 0
+      },
+      "range_bars": {
+        "bars": 0,
+        "rate": 0.0,
+        "sig_counts": {},
+        "all_signals": []
+      },
+      "vol_bars": {
+        "bars": 82,
+        "rate": 0.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 1
+        },
+        "all_signals": 1,
+        "label": "Volume 1.0M TRX",
+        "threshold": 1000000.0
+      },
+      "errors": []
+    },
+    {
+      "symbol": "UNI",
+      "time_bars": {
+        "bars": 99,
+        "rate": 100.0,
+        "sig_counts": {
+          "ABS": 1,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 1
+      },
+      "range_bars": {
+        "bars": 69,
+        "rate": 0.0,
+        "sig_counts": {
+          "ABS": 1,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 1,
+        "label": "Range 0.05",
+        "size": 0.05
+      },
+      "vol_bars": {
+        "bars": 96,
+        "rate": 0.0,
+        "sig_counts": {
+          "ABS": 1,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 1,
+        "label": "Volume 200K UNI",
+        "threshold": 200000.0
+      },
+      "errors": []
+    },
+    {
+      "symbol": "ATOM",
+      "time_bars": {
+        "bars": 99,
+        "rate": 100.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 0
+      },
+      "range_bars": {
+        "bars": 0,
+        "rate": 0.0,
+        "sig_counts": {},
+        "all_signals": []
+      },
+      "vol_bars": {
+        "bars": 93,
+        "rate": 0.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 0,
+        "label": "Volume 100K ATOM",
+        "threshold": 100000.0
+      },
+      "errors": []
+    },
+    {
+      "symbol": "AAVE",
+      "time_bars": {
+        "bars": 99,
+        "rate": 100.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 0
+      },
+      "range_bars": {
+        "bars": 46,
+        "rate": 0.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 0,
+        "label": "Range 1.0",
+        "size": 1.0
+      },
+      "vol_bars": {
+        "bars": 68,
+        "rate": 0.0,
+        "sig_counts": {
+          "ABS": 1,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 1
+        },
+        "all_signals": 2,
+        "label": "Volume 10K AAVE",
+        "threshold": 10000.0
+      },
+      "errors": []
+    },
+    {
+      "symbol": "FIL",
+      "time_bars": {
+        "bars": 99,
+        "rate": 100.0,
+        "sig_counts": {
+          "ABS": 0,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 0
+      },
+      "range_bars": {
+        "bars": 0,
+        "rate": 0.0,
+        "sig_counts": {},
+        "all_signals": []
+      },
+      "vol_bars": {
+        "bars": 92,
+        "rate": 0.0,
+        "sig_counts": {
+          "ABS": 1,
+          "EXH": 0,
+          "DIV": 0,
+          "TRAP": 0
+        },
+        "all_signals": 1,
+        "label": "Volume 500K FIL",
+        "threshold": 500000.0
+      },
+      "errors": []
+    }
+  ],
+  "generated_at": "2026-11-05T10:51:20.610350+00:00"
+}
