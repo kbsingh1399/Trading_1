@@ -213,11 +213,6 @@ def load_signals_polars(pattern: str = "*_signals.jsonl", symbol: Optional[str] 
     if symbol:
         df = df.filter(pl.col("symbol") == symbol.upper().strip())
     return df
-    try:
-        f = float(val)
-        return default if math.isnan(f) or math.isinf(f) else f
-    except (ValueError, TypeError):
-        return default
 
 
 # ========================================================================================

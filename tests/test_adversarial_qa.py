@@ -216,6 +216,19 @@ class TestCorruptedJsonlResilience:
 class TestTradeEvaluatorEdgeCases:
     """Stress tests edge cases and math failure modes in trade_evaluator.py."""
 
+    @pytest.fixture(autouse=True)
+    def cleanup_test_setups(self):
+        self._clean()
+        yield
+        self._clean()
+
+    def _clean(self):
+        for f in SETUPS_DIR.glob("TEST_*_setups.jsonl"):
+            try:
+                f.unlink(missing_ok=True)
+            except Exception:
+                pass
+
     def test_shannon_entropy_5050_deadlock(self):
         """Tests 50/50 LONG/SHORT split produces exact Shannon entropy of 1.0."""
         dirs_5050 = ["LONG"] * 5 + ["SHORT"] * 5
