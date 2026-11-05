@@ -81,12 +81,21 @@ class FileMutex:
                     self.handle.seek(0)
                     if os.name == 'nt':
                         import msvcrt
-                        msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
+                        try:
+                            msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
+                        except (OSError, PermissionError):
+                            pass
                     else:
                         import fcntl
-                        fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+                        try:
+                            fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+                        except (OSError, PermissionError):
+                            pass
             finally:
-                self.handle.close()
+                try:
+                    self.handle.close()
+                except Exception:
+                    pass
                 self.handle = None
                 self.acquired = False
 
@@ -165,13 +174,14 @@ def atomic_append_jsonl(path, records):
 
 
 def atomic_parquet(frame, path, compression='snappy'):
-    if hasattr(frame, 'to_parquet'):
-        _publish(path, lambda p: frame.to_parquet(p, index=False, engine='pyarrow', compression=compression))
-    elif hasattr(frame, 'write_parquet'):
-        _publish(path, lambda p: frame.write_parquet(p, compression=compression))
-    else:
-        import pyarrow.parquet as pq
-        _publish(path, lambda p: pq.write_table(frame, p, compression=compression))
+    with writer_lock(path):
+        if hasattr(frame, 'to_parquet'):
+            _publish(path, lambda p: frame.to_parquet(p, index=False, engine='pyarrow', compression=compression))
+        elif hasattr(frame, 'write_parquet'):
+            _publish(path, lambda p: frame.write_parquet(p, compression=compression))
+        else:
+            import pyarrow.parquet as pq
+            _publish(path, lambda p: pq.write_table(frame, p, compression=compression))
 
 
 def upsert_parquet(frame, path, keys, sort_by=None, limit=None, compression='snappy'):
@@ -595,22 +605,10 @@ def rotate_warp_ip(context: str = "Collector", reason: str = "SCHEDULED", force:
 
 
 
-                # Stage 2: Full Edge Re-Provisioning (delete registration -> new -> connect)
-
-                logger.info(f"[{context}] [Cloudflare WARP] Performing Full Registration Re-Provisioning...")
-
+                # Stage 2: Resilient Re-Connect (toggle session without registration deletion)
+                logger.info(f"[{context}] [Cloudflare WARP] Performing Non-Destructive Connection Reset...")
                 subprocess.run([str(WARP_CLI), "disconnect"], capture_output=True, text=True, timeout=8)
-
-                time.sleep(0.5)
-
-                subprocess.run([str(WARP_CLI), "registration", "delete"], capture_output=True, text=True, timeout=8)
-
-                time.sleep(0.5)
-
-                subprocess.run([str(WARP_CLI), "registration", "new"], capture_output=True, text=True, timeout=8)
-
-                time.sleep(0.5)
-
+                time.sleep(1.0)
                 subprocess.run([str(WARP_CLI), "connect"], capture_output=True, text=True, timeout=8)
 
                 ensure_delta_split_tunnel_exclusions()
@@ -645,18 +643,14 @@ LOCK_CONTENTION_SKIPS = 0
 
 # Eliminates starvation deadlocks between long sweeps (Footprint), fast sweeps (TV), and live order dispatch.
 
+CHROME_BROWSER_LOCK_FILE = LOCK_DIR / "chrome_browser_cdp.lock"
+
 COLLECTOR_LOCK_MAP = {
-
-    "TVLiquidationScraper": LOCK_DIR / "api_tv_collector.lock",
-
-    "FootprintScraper": LOCK_DIR / "api_footprint.lock",
-
-    "WhaleScraper": LOCK_DIR / "api_whales.lock",
-
-    "LiquidationScraper": LOCK_DIR / "api_liquidation.lock",
-
+    "TVLiquidationScraper": CHROME_BROWSER_LOCK_FILE,
+    "FootprintScraper": CHROME_BROWSER_LOCK_FILE,
+    "WhaleScraper": CHROME_BROWSER_LOCK_FILE,
+    "LiquidationScraper": CHROME_BROWSER_LOCK_FILE,
     "DeltaLiveExecution": LOCK_DIR / "order_execution_inflight.lock",
-
 }
 
 

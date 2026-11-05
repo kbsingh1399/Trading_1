@@ -1021,7 +1021,7 @@ class MultiPillarTradeEvaluator:
             p_dec = 8
 
         min_tick = 10.0 ** (-p_dec)
-        min_risk_dist = max(atr * 1.2, ref_price * 0.003, min_tick * 2.0)
+        min_risk_dist = max(atr * 1.2, ref_price * 0.004, min_tick * 10.0)
 
         defending_wall_price = None
         target_magnet_price = None
@@ -1039,7 +1039,7 @@ class MultiPillarTradeEvaluator:
                 candidate_sls.append(val_px * 0.998)
 
             if candidate_sls:
-                sl_price = max(candidate_sls)  # closest valid structural support
+                sl_price = min(candidate_sls)  # anchor behind true structural support
                 if (ref_price - sl_price) < min_risk_dist:
                     sl_price = ref_price - min_risk_dist
             else:
@@ -1077,7 +1077,7 @@ class MultiPillarTradeEvaluator:
                 candidate_sls.append(vah_px * 1.002)
 
             if candidate_sls:
-                sl_price = min(candidate_sls)  # closest valid structural resistance
+                sl_price = max(candidate_sls)  # anchor behind true structural resistance
                 if (sl_price - ref_price) < min_risk_dist:
                     sl_price = ref_price + min_risk_dist
             else:
@@ -1352,29 +1352,52 @@ class TrailingState:
     vwap_sigma2: float
     poc: float
     atr_15m: float
+    direction: str = "LONG"
     in_profit: bool = False
 
 
 class TrailingStopManager:
-    """Implements three-tier trailing stop migration (Z.ai Audit Domain 3, Listing 9)."""
+    """Implements three-tier trailing stop migration with strict LONG and SHORT direction branching."""
     def update(self, state: TrailingState, price: float) -> TrailingState:
-        # Tier 1: breakeven-plus-buffer
-        if price <= state.vwap_sigma1:
-            new_sl = state.sl_current
-        # Tier 2: trail +1sigma VWAP
-        elif price <= state.vwap_sigma2:
-            new_sl = max(state.sl_current, state.vwap_sigma1)
-            state.in_profit = True
-        # Tier 3: aggressive POC trailing
-        else:
-            new_sl = state.poc - 0.5 * state.atr_15m
-            state.in_profit = True
+        is_long = str(state.direction).upper() in ("LONG", "BUY", "1")
 
-        # Stop only ratchets forward (longs) or backward (shorts)
-        if state.entry > 0:  # long
-            state.sl_current = max(state.sl_current, new_sl)
-        else:  # short
-            state.sl_current = min(state.sl_current, new_sl)
+        if is_long:
+            # LONG TRADE
+            # Tier 1: Breakeven lock if price crosses +0.5 ATR above entry
+            if price >= state.entry + 0.5 * state.atr_15m:
+                breakeven_sl = state.entry + 0.1 * state.atr_15m
+                state.sl_current = max(state.sl_current, breakeven_sl)
+                state.in_profit = True
+
+            # Tier 2: Trail +1 sigma VWAP once price reaches +1 sigma
+            if price >= state.vwap_sigma1:
+                state.sl_current = max(state.sl_current, state.vwap_sigma1)
+                state.in_profit = True
+
+            # Tier 3: Aggressive trailing once price breaks beyond +2 sigma
+            if price >= state.vwap_sigma2:
+                aggressive_sl = max(state.vwap_sigma1, state.vwap_sigma2 - 0.5 * state.atr_15m)
+                state.sl_current = max(state.sl_current, aggressive_sl)
+                state.in_profit = True
+        else:
+            # SHORT TRADE
+            # Tier 1: Breakeven lock if price crosses -0.5 ATR below entry
+            if price <= state.entry - 0.5 * state.atr_15m:
+                breakeven_sl = state.entry - 0.1 * state.atr_15m
+                state.sl_current = min(state.sl_current, breakeven_sl)
+                state.in_profit = True
+
+            # Tier 2: Trail -1 sigma VWAP once price drops below -1 sigma
+            if price <= state.vwap_sigma1:
+                state.sl_current = min(state.sl_current, state.vwap_sigma1)
+                state.in_profit = True
+
+            # Tier 3: Aggressive trailing once price drops below -2 sigma
+            if price <= state.vwap_sigma2:
+                aggressive_sl = min(state.vwap_sigma1, state.vwap_sigma2 + 0.5 * state.atr_15m)
+                state.sl_current = min(state.sl_current, aggressive_sl)
+                state.in_profit = True
+
         return state
 
 

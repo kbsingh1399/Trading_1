@@ -120,32 +120,46 @@ def cleanup_scraper_orphaned_tabs(baseline_tab_ids: set, grace_s: float = TAB_GR
         logger.debug(f"Orchestrator tab cleanup check: {e}")
 
 
-def run_scraper(script_name: str, desc: str, flag: str = "--once") -> bool:
+def run_scraper(script_name: str, desc: str, flag: str = "--once", timeout_secs: float = 300.0) -> bool:
     script_path = ROOT_DIR / script_name
     if not script_path.exists():
         logger.error(f"Script not found: {script_path}")
         return False
 
     baseline_tabs = get_open_tabs_snapshot()
+    cleanup_scraper_orphaned_tabs(baseline_tabs)
     logger.info(f"==> Launching {desc} [{script_name}] at {to_ist_now()}...")
     t0 = time.time()
+    proc = None
     try:
         cmd = [sys.executable, str(script_path), flag]
-        res = subprocess.run(cmd, cwd=str(ROOT_DIR), capture_output=True, text=True, timeout=300)
+        proc = subprocess.Popen(cmd, cwd=str(ROOT_DIR), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        stdout, stderr = proc.communicate(timeout=timeout_secs)
         dur = time.time() - t0
-        if res.returncode == 0:
+        if proc.returncode == 0:
             logger.info(f"✅ Finished {desc} in {dur:.1f}s (Exit code 0).")
             return True
         else:
-            logger.warning(f"⚠️ {desc} exited with code {res.returncode} in {dur:.1f}s.")
-            if res.stderr:
-                logger.warning(f"STDERR snippet: {res.stderr[-300:]}")
+            logger.warning(f"⚠️ {desc} exited with code {proc.returncode} in {dur:.1f}s.")
+            if stderr:
+                logger.warning(f"STDERR snippet: {stderr[-300:]}")
             return False
     except subprocess.TimeoutExpired:
-        logger.error(f"❌ {desc} timed out after 300s.")
+        dur = time.time() - t0
+        logger.error(f"❌ {desc} timed out after {dur:.1f}s. Terminating process tree...")
+        if proc:
+            try:
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, timeout=5)
+            except Exception:
+                proc.kill()
         return False
     except Exception as e:
         logger.error(f"❌ Error running {desc}: {e}")
+        if proc:
+            try:
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, timeout=5)
+            except Exception:
+                proc.kill()
         return False
     finally:
         cleanup_scraper_orphaned_tabs(baseline_tabs)
@@ -215,6 +229,8 @@ def scheduler_daemon():
 
 
 def main():
+    from coinglass_common import acquire_singleton
+    acquire_singleton("run_pipeline", LOCKS_DIR)
     parser = argparse.ArgumentParser(description="CoinGlass Pipeline Master Orchestrator")
     parser.add_argument("--daemon", action="store_true", help="Run continuously on the TDMA schedule")
     parser.add_argument("--run-all-now", action="store_true", help="Run all 4 scrapers once sequentially and exit")

@@ -65,6 +65,15 @@ class CouncilDecision:
     confluence_score: float = 0.0
 
 
+def _safe_float(val: Any, default: float = 0.0) -> float:
+    try:
+        if val is None:
+            return default
+        return float(val)
+    except (ValueError, TypeError):
+        return default
+
+
 class BaseCouncilAgent:
     name: str = "BaseAgent"
     weight: float = 1.0
@@ -78,7 +87,7 @@ class QuantMicrostructureAgent(BaseCouncilAgent):
     weight = 1.2
 
     def vote(self, candidate: Dict[str, Any], evidence: Dict[str, Any]) -> Ballot:
-        score = float(candidate.get("confluence_score", 0.0))
+        score = _safe_float(candidate.get("confluence_score"), 0.0)
         regime = candidate.get("market_regime", "NORMAL")
         signals = candidate.get("contributing_signals", [])
         
@@ -120,10 +129,10 @@ class RiskGovernor(BaseCouncilAgent):
     weight = 1.0
 
     def vote(self, candidate: Dict[str, Any], evidence: Dict[str, Any]) -> Ballot:
-        entry = float(candidate.get("entry_price", 0.0))
-        sl = float(candidate.get("stop_loss", 0.0))
-        rr = float(candidate.get("risk_reward_ratio", 0.0))
-        risk_usd = float(candidate.get("risk_usd", 12.50))
+        entry = _safe_float(candidate.get("entry_price"), 0.0)
+        sl = _safe_float(candidate.get("stop_loss"), 0.0)
+        rr = _safe_float(candidate.get("risk_reward_ratio"), 0.0)
+        risk_usd = _safe_float(candidate.get("risk_usd"), 12.50)
         
         distance = abs(entry - sl)
         grounding = [entry, sl, rr, risk_usd, round(distance, 5)]
@@ -177,7 +186,7 @@ class AdversarialCritic(BaseCouncilAgent):
         direction = candidate.get("direction", "LONG").upper()
         symbol = candidate.get("symbol", "")
         opposing_wall = float(evidence.get("nearest_ask_wall" if direction == "LONG" else "nearest_bid_wall", 0.0))
-        entry = float(candidate.get("entry_price", 0.0))
+        entry = _safe_float(candidate.get("entry_price"), 0.0)
         entropy = float(evidence.get("direction_entropy", 0.50))
         
         grounding = [entropy, opposing_wall, entry]
@@ -258,11 +267,11 @@ class Arbiter(BaseCouncilAgent):
     weight = 1.0
 
     def vote(self, candidate: Dict[str, Any], evidence: Dict[str, Any]) -> Ballot:
-        score = float(candidate.get("confluence_score", 0.0))
+        score = _safe_float(candidate.get("confluence_score"), 0.0)
         grounding = [score]
         return Ballot(
             agent=self.name,
-            vote=Vote.YEA if score >= 75.0 else Vote.ABSTAIN,
+            vote=Vote.YEA if score >= 75.0 else Vote.NAY,
             confidence=0.80,
             veto=False,
             rationale=f"Arbiter certifies candidate score {score:.2f}.",
@@ -318,9 +327,13 @@ class AgentCouncil:
         ballots: List[Ballot] = []
         
         for agent in self.agents:
-            b = agent.vote(candidate, evidence)
-            self._validate_grounding(b)
-            ballots.append(b)
+            try:
+                b = agent.vote(candidate, evidence)
+                self._validate_grounding(b)
+                ballots.append(b)
+            except Exception as e:
+                logger.error(f"[{agent.name}] Error casting ballot: {e}")
+                ballots.append(Ballot(agent=agent.name, vote=Vote.NAY, confidence=0.5, veto=False, rationale=f"Agent exception during vote: {e}", grounding_results=[]))
 
         net_vote = sum(self._sign(b.vote) * b.confidence * getattr(agent, 'weight', 1.0) for b, agent in zip(ballots, self.agents))
         quorum = sum(1 for b in ballots if b.vote != Vote.ABSTAIN)

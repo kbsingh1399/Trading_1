@@ -371,23 +371,19 @@ def persist_key_levels(symbol: str, levels: List[dict]):
     # 4. Multi-tab Excel Workbook (.xlsx) with dedicated tabs per lookback
 
     xlsx_path = KEY_LEVELS_DIR / f"{symbol}_key_levels.xlsx"
-
+    tmp_xlsx = xlsx_path.with_suffix(".tmp.xlsx")
     try:
-
-        with pd.ExcelWriter(xlsx_path, engine='openpyxl') as writer:
-
+        with pd.ExcelWriter(tmp_xlsx, engine='openpyxl') as writer:
             df[lead_cols].to_excel(writer, sheet_name='All_Combinations', index=False)
-
             for tf_key, tf_label in [('3D', '3D · 1m'), ('7D', '7D · 3m'), ('30D', '30D · 15m')]:
-
                 sub_df = df[df['Time'] == tf_label]
-
                 if not sub_df.empty:
-
                     sub_df[exact_7_cols].to_excel(writer, sheet_name=tf_key, index=False)
-
+        try:
+            os.replace(tmp_xlsx, xlsx_path)
+        except PermissionError:
+            pass
     except Exception as e:
-
         logger.debug(f"Excel export notice: {e}")
 
 
@@ -472,17 +468,12 @@ def persist_liquidation_snapshots(snapshots: List[dict]):
 
 
 
-async def cdp_eval(ws, expr: str, msg_id: int = 1, await_promise: bool = False):
-
+async def cdp_eval(ws, expr: str, msg_id: int = 1, await_promise: bool = False, timeout: float = 15.0):
     return await cdp_result(ws, {
-
         "id": msg_id,
-
         "method": "Runtime.evaluate",
-
         "params": {"expression": expr, "returnByValue": True, "awaitPromise": await_promise}
-
-    })
+    }, timeout=timeout)
 
 
 
@@ -504,7 +495,7 @@ EXTRACTION_JS = r"""(() => {
 
     let last_price = null;
 
-    const p_match = text.match(/Last price\s*[\n\r]+\s*([\d,]+\.?\d*)/);
+    const p_match = text.match(/Last price[:\s]+([\d,]+\.?\d*)/i);
 
     if (p_match) {
 
@@ -650,7 +641,7 @@ EXTRACTION_JS = r"""(() => {
 
         for (const line of sm_lines) {
 
-            const sm = line.match(/^(\d+)\s+([\d,]+\.?\d*)\s*–\s*([\d,]+\.?\d*)\s+([+\-−–]?[\d\.]+%?)\s+([\d,]+)\s+([\d\.]+%?)/);
+            const sm = line.match(/^(\d+)\s+([\d,]+\.?\d*)\s*[\-–—]\s*([\d,]+\.?\d*)\s+([+\-−–]?[\d\.]+%?)\s+([\d,]+)\s+([\d\.]+%?)/);
 
             if (sm) {
 
@@ -1008,7 +999,7 @@ async def sweep_symbol_liquidation(ws, symbol: str) -> dict:
 
     harvest_code = HARVEST_ALL_COMBINATIONS_JS.replace('%SYMBOL%', symbol)
 
-    key_levels = await cdp_eval(ws, harvest_code, msg_id=3, await_promise=True) or []
+    key_levels = await cdp_eval(ws, harvest_code, msg_id=3, await_promise=True, timeout=35.0) or []
 
 
 
@@ -1087,17 +1078,13 @@ async def run_sweep(symbols: Optional[List[str]] = None) -> bool:
 
 
         tab_id, ws_url = open_liquidation_tab(target_symbols[0])
-
-        if not tab_id or not ws_url:
-
+        if not tab_id:
             logger.error("Could not open Liquidation tab via CDP.")
-
             return False
-
-
-
         try:
-
+            if not ws_url:
+                logger.error(f"Tab {tab_id} created but ws_url is missing.")
+                return False
             async with websockets.connect(ws_url, open_timeout=8, close_timeout=3, max_size=50_000_000, ping_interval=None) as ws:
 
                 snapshots = []

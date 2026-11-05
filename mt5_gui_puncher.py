@@ -37,12 +37,21 @@ def attach_desktop():
 
 
 def find_mt5_window():
-    """Find top-level MT5 window handle."""
+    """Find top-level MT5 window handle dynamically."""
     mt5_hwnd = None
+    account_login = None
+    if mt5.initialize():
+        info = mt5.account_info()
+        if info:
+            account_login = str(info.login)
+        mt5.shutdown()
+
     def cb(h, _):
         nonlocal mt5_hwnd
         t = win32gui.GetWindowText(h)
-        if "11808165 - FundedNext-Server" in t:
+        if account_login and account_login in t:
+            mt5_hwnd = h
+        elif ("FundedNext" in t or "MetaTrader 5" in t) and not mt5_hwnd:
             mt5_hwnd = h
         return True
     win32gui.EnumWindows(cb, None)
@@ -258,8 +267,12 @@ def punch_market_order(symbol: str, volume: str, sl: str, tp: str, order_type: s
             latest = positions[-1]
             logger.info(f"Position opened successfully: Ticket {latest.ticket}. Attaching SL/TP...")
             return modify_position_sltp(latest.ticket, sl, tp)
+        else:
+            logger.error(f"Verification failed: No open position found for {symbol} after order dispatch.")
+            return False
 
-    return True
+    logger.error("MT5 initialization failed during position verification.")
+    return False
 
 
 if __name__ == "__main__":

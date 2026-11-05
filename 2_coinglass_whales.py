@@ -25,6 +25,8 @@ Pillar 2 of 5 Standalone Crypto Pipeline:
 import sys
 import os
 import json
+import itertools
+_cdp_seq = itertools.count(1000)
 import time
 import logging
 import asyncio
@@ -79,7 +81,7 @@ def cleanup_orphan_tabs(keep_tab_id: Optional[str] = None):
             for t in tabs:
                 tid = t.get("id")
                 url = t.get("url", "").lower()
-                if tid != keep_tab_id and ("bot=whale_scraper" in url or "large-orderbook-statistics" in url):
+                if tid != keep_tab_id and "bot=whale_scraper" in url:
                     try:
                         urllib.request.urlopen(f"http://127.0.0.1:9222/json/close/{tid}", timeout=2)
                         logger.info(f"Reaped orphaned whale tab ({tid})")
@@ -154,7 +156,7 @@ def parse_duration_seconds(dur_str: Optional[str]) -> float:
     if d_m: total += float(d_m.group(1)) * 86400
     h_m = re.search(r'(\d+)\s*h', s)
     if h_m: total += float(h_m.group(1)) * 3600
-    m_m = re.search(r'(\d+)\s*m', s)
+    m_m = re.search(r'(\d+)\s*m(?!o)', s)
     if m_m: total += float(m_m.group(1)) * 60
     s_m = re.search(r'(\d+)\s*s', s)
     if s_m: total += float(s_m.group(1))
@@ -230,8 +232,7 @@ async def cdp_eval(ws, expr: str, msg_id: int = 1, await_promise: bool = False):
 async def harvest_whale_orders_for_symbol(ws, symbol: str) -> dict:
     url = f"https://www.coinglass.com/large-orderbook-statistics?symbol={symbol}&bot=whale_scraper"
     logger.info(f"[{symbol}] Navigating to {url}...")
-    await ws.send(json.dumps({"id": 100, "method": "Page.navigate", "params": {"url": url}}))
-    await ws.recv()
+    await cdp_result(ws, {"id": next(_cdp_seq), "method": "Page.navigate", "params": {"url": url}}, timeout=10.0)
     await asyncio.sleep(3.5)
 
     # 1. Macro Indicators
@@ -271,10 +272,10 @@ async def harvest_whale_orders_for_symbol(ws, symbol: str) -> dict:
             ask_walls_total: askWallsTotal,
             wall_structure: wallStructure
         };
-    })()''', msg_id=101) or {}
+    })()''', msg_id=next(_cdp_seq)) or {}
 
     # Scroll down to Table 2 virtual container
-    await cdp_eval(ws, 'window.scrollTo(0, 1600);', msg_id=102)
+    await cdp_eval(ws, 'window.scrollTo(0, 1600);', msg_id=next(_cdp_seq))
     await asyncio.sleep(0.5)
 
     # Ensure Open Orders Tab is selected
@@ -282,7 +283,7 @@ async def harvest_whale_orders_for_symbol(ws, symbol: str) -> dict:
         const tabs = Array.from(document.querySelectorAll('.tab-inner-label'));
         const openTab = tabs.find(t => (t.innerText || '').startsWith('Open'));
         if (openTab) openTab.click();
-    })()''', msg_id=103)
+    })()''', msg_id=next(_cdp_seq))
     await asyncio.sleep(0.6)
 
     # 2. Harvest Open Orders Virtual Table
@@ -297,7 +298,7 @@ async def harvest_whale_orders_for_symbol(ws, symbol: str) -> dict:
         let steps = 0;
         while (currentScroll <= maxScroll + 850 && steps < 60) {
             container.scrollTop = currentScroll;
-            await new Promise(r => setTimeout(r, 35));
+            await new Promise(r => setTimeout(r, 85));
             const trs = Array.from(container.querySelectorAll('table tbody tr'));
             for (const tr of trs) {
                 const tds = Array.from(tr.querySelectorAll('td')).map(td => td.innerText.trim().replace(/\\n/g, ' '));
@@ -310,14 +311,14 @@ async def harvest_whale_orders_for_symbol(ws, symbol: str) -> dict:
             steps++;
         }
         return Array.from(seen.values());
-    })()''', msg_id=104, await_promise=True) or []
+    })()''', msg_id=next(_cdp_seq), await_promise=True) or []
 
     # 3. Harvest History Orders Tab
     await cdp_eval(ws, '''(() => {
         const tabs = Array.from(document.querySelectorAll('.tab-inner-label'));
         const histTab = tabs.find(t => (t.innerText || '').startsWith('History'));
         if (histTab) histTab.click();
-    })()''', msg_id=105)
+    })()''', msg_id=next(_cdp_seq))
     await asyncio.sleep(0.6)
 
     raw_history = await cdp_eval(ws, '''(async () => {
@@ -331,7 +332,7 @@ async def harvest_whale_orders_for_symbol(ws, symbol: str) -> dict:
         let steps = 0;
         while (currentScroll <= maxScroll + 850 && steps < 60) {
             container.scrollTop = currentScroll;
-            await new Promise(r => setTimeout(r, 35));
+            await new Promise(r => setTimeout(r, 85));
             const trs = Array.from(container.querySelectorAll('table tbody tr'));
             for (const tr of trs) {
                 const tds = Array.from(tr.querySelectorAll('td')).map(td => td.innerText.trim().replace(/\\n/g, ' '));
@@ -344,7 +345,7 @@ async def harvest_whale_orders_for_symbol(ws, symbol: str) -> dict:
             steps++;
         }
         return Array.from(seen.values());
-    })()''', msg_id=106, await_promise=True) or []
+    })()''', msg_id=next(_cdp_seq), await_promise=True) or []
 
     # Parse open orders with accurate column offsets
     open_orders = []
