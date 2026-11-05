@@ -92,7 +92,7 @@ class FileMutex:
 
 
 @contextmanager
-def writer_lock(path):
+def writer_lock(path, timeout=5.0):
     p = Path(path).resolve()
     db_dir = Path(__file__).resolve().parent / "Database"
     try:
@@ -104,7 +104,7 @@ def writer_lock(path):
     except ValueError:
         lock_path = Path(str(p) + ".writer.lock")
 
-    with FileMutex(str(lock_path)) as lock:
+    with FileMutex(str(lock_path), timeout=timeout) as lock:
         if not lock.acquired:
             raise TimeoutError(f'Writer busy: {path}')
         yield

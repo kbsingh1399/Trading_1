@@ -102,12 +102,14 @@ def cleanup_scraper_orphaned_tabs(baseline_tab_ids: set):
             for t in tabs:
                 tid = t.get("id")
                 url = t.get("url", "").lower()
-                # If tab was created during this scraper run AND is a CoinGlass route
-                if tid and tid not in baseline_tab_ids:
-                    if any(k in url for k in ["coinglass.com/large-orderbook", "coinglass.com/liquidation-levels", "coinglass.com/tv/", "coinglass.com/footprint", "bot="]):
+                # If tab was created during this scraper run AND is a CoinGlass route OR blank/failed tab
+                if tid and tid not in baseline_tab_ids and t.get("type") == "page":
+                    is_cg = any(k in url for k in ["coinglass.com/large-orderbook", "coinglass.com/liquidation-levels", "coinglass.com/tv/", "coinglass.com/footprint", "bot="])
+                    is_blank = url in ("about:blank", "", "chrome-error://chromewebdata/")
+                    if is_cg or is_blank:
                         try:
                             urllib.request.urlopen(f"http://127.0.0.1:9222/json/close/{tid}", timeout=2)
-                            logger.info(f"🧹 Orchestrator cleaned up orphaned scraper tab ({tid}): {t.get('title')}")
+                            logger.info(f"🧹 Orchestrator cleaned up orphaned scraper tab ({tid}): {t.get('title') or url}")
                         except Exception:
                             pass
     except Exception as e:

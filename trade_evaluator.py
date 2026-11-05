@@ -111,8 +111,108 @@ def calculate_shannon_entropy(labels: List[str]) -> float:
     return float(entropy)
 
 def safe_float(val: Any, default: Optional[float] = None) -> Optional[float]:
-    if val is None or pd.isna(val):
+    if val is None:
         return default
+    try:
+        if pd.isna(val):
+            return default
+    except Exception:
+        pass
+    try:
+        f = float(val)
+        return default if (math.isnan(f) or math.isinf(f)) else f
+    except (ValueError, TypeError):
+        return default
+
+
+# ========================================================================================
+# Canonical Polars & DuckDB Schema Definitions for Zero-Copy Analytic Queries
+# ========================================================================================
+import polars as pl
+import duckdb
+
+TRADE_SETUPS_POLARS_SCHEMA = {
+    "setup_id": pl.Utf8,
+    "symbol": pl.Utf8,
+    "status": pl.Utf8,
+    "direction": pl.Utf8,
+    "signal_count": pl.Int64,
+    "primary_signal": pl.Utf8,
+    "confluence_score": pl.Float64,
+    "w1_footprint": pl.Float64,
+    "w2_auction": pl.Float64,
+    "w3_whales": pl.Float64,
+    "w4_magnets": pl.Float64,
+    "w5_tv_liquidations": pl.Float64,
+    "entry_price": pl.Float64,
+    "stop_loss": pl.Float64,
+    "take_profit": pl.Float64,
+    "risk_reward_ratio": pl.Float64,
+    "risk_amount": pl.Float64,
+    "reward_amount": pl.Float64,
+    "atr_15m": pl.Float64,
+    "auction_bias": pl.Utf8,
+    "htf_trend": pl.Utf8,
+    "defending_wall_price": pl.Float64,
+    "magnet_target_price": pl.Float64,
+    "time_ms": pl.Int64,
+    "time_ist": pl.Utf8,
+    "created_at_ms": pl.Int64,
+    "created_at_us": pl.Int64,
+    "created_at_utc": pl.Utf8,
+    "created_at_ist": pl.Utf8,
+    "queue_snapshot_json": pl.Utf8,
+    "evaluation_metrics_json": pl.Utf8,
+}
+
+SIGNALS_POLARS_SCHEMA = {
+    "sig_id": pl.Utf8,
+    "symbol": pl.Utf8,
+    "sig_code": pl.Utf8,
+    "sig_name": pl.Utf8,
+    "direction": pl.Utf8,
+    "side": pl.Utf8,
+    "price": pl.Float64,
+    "bar_type": pl.Utf8,
+    "bar_label": pl.Utf8,
+    "time_ms": pl.Int64,
+    "time_ist": pl.Utf8,
+    "priority": pl.Int64,
+    "delta": pl.Float64,
+    "delta_pct": pl.Float64,
+    "cvd": pl.Float64,
+    "poc_price": pl.Float64,
+    "arrived_at_ms": pl.Int64,
+    "arrived_at_ist": pl.Utf8,
+}
+
+def load_trade_setups_polars(pattern: str = "*_setups.jsonl", status: Optional[str] = None) -> pl.DataFrame:
+    """Zero-copy multi-file loader using explicit schema to avoid Polars Null-inference collapse."""
+    path = str(SETUPS_DIR / pattern)
+    df = pl.read_ndjson(path, schema=TRADE_SETUPS_POLARS_SCHEMA)
+    if status:
+        df = df.filter(pl.col("status") == status)
+    return df
+
+def scan_trade_setups_polars(pattern: str = "*_setups.jsonl") -> pl.LazyFrame:
+    """Lazy zero-copy scanner for streaming analytical queries across all assets."""
+    path = str(SETUPS_DIR / pattern)
+    return pl.scan_ndjson(path, schema=TRADE_SETUPS_POLARS_SCHEMA)
+
+def query_trade_setups_duckdb(sql_query: str) -> duckdb.DuckDBPyRelation:
+    """Executes SQL query over Trade_Setups with union_by_name=true schema stability."""
+    pattern = str(SETUPS_DIR / "*_setups.jsonl").replace("\\", "/")
+    table_view = f"read_json_auto('{pattern}', union_by_name=true)"
+    query = sql_query.replace("trade_setups", table_view)
+    return duckdb.sql(query)
+
+def load_signals_polars(pattern: str = "*_signals.jsonl", symbol: Optional[str] = None) -> pl.DataFrame:
+    """Zero-copy multi-file signal loader across all asset ledgers."""
+    path = str(QUEUE_DIR / pattern)
+    df = pl.read_ndjson(path, schema=SIGNALS_POLARS_SCHEMA)
+    if symbol:
+        df = df.filter(pl.col("symbol") == symbol.upper().strip())
+    return df
     try:
         f = float(val)
         return default if math.isnan(f) or math.isinf(f) else f
@@ -147,7 +247,7 @@ class SignalQueueManager:
         return cls.load_all_signals(symbol)
 
     @classmethod
-    def load_all_signals(cls, symbol: str) -> List[dict]:
+    def load_all_signals(cls, symbol: str, migrate: bool = True) -> List[dict]:
         """Loads all appended signals from the asset's append-only ledger."""
         p_jsonl = cls.get_signals_jsonl_path(symbol)
         p_legacy = cls.get_legacy_json_path(symbol)
@@ -155,7 +255,7 @@ class SignalQueueManager:
         signals = []
         if p_jsonl.exists():
             try:
-                with open(p_jsonl, "r", encoding="utf-8") as f:
+                with open(p_jsonl, "r", encoding="utf-8", errors="replace") as f:
                     for line in f:
                         line = line.strip()
                         if line:
@@ -170,13 +270,14 @@ class SignalQueueManager:
         # If jsonl does not exist yet, check legacy queue.json and migrate
         if p_legacy.exists():
             try:
-                content = p_legacy.read_text(encoding="utf-8").strip()
+                content = p_legacy.read_text(encoding="utf-8", errors="replace").strip()
                 if content:
                     parsed = json.loads(content)
                     if isinstance(parsed, list):
                         signals = parsed
-                        # Auto-migrate into jsonl append format
-                        cls.append_signals(symbol, signals)
+                        # Auto-migrate into jsonl append format only if requested (avoids recursive self-lock)
+                        if migrate and signals:
+                            cls.append_signals(symbol, signals, _is_migration=True)
             except Exception as e:
                 logger.warning(f"[{symbol}] Failed reading legacy queue {p_legacy.name}: {e}")
 
@@ -195,7 +296,8 @@ class SignalQueueManager:
     def append_signals(
         cls,
         symbol: str,
-        new_signals: List[dict]
+        new_signals: List[dict],
+        _is_migration: bool = False
     ) -> Tuple[List[dict], List[dict]]:
         """
         Permanently appends newly harvested signals into Database/Signals/Signal_Queues/<SYM>_signals.jsonl.
@@ -210,7 +312,7 @@ class SignalQueueManager:
         p_legacy = cls.get_legacy_json_path(symbol)
 
         with writer_lock(p_jsonl):
-            existing = cls.load_all_signals(symbol)
+            existing = [] if _is_migration else cls.load_all_signals(symbol, migrate=False)
             existing_keys = {
                 (
                     str(s.get("sig_code", "")).lower(),
@@ -277,13 +379,29 @@ class SignalQueueManager:
                 lines_to_append.append(json.dumps(pruned_sig, ensure_ascii=True, allow_nan=False))
 
             if lines_to_append:
+                # Defensive check: ensure prior line was terminated with a newline to prevent line mangling
+                if p_jsonl.exists() and p_jsonl.stat().st_size > 0:
+                    try:
+                        with open(p_jsonl, "rb+") as f_chk:
+                            f_chk.seek(-1, os.SEEK_END)
+                            if f_chk.read(1) != b"\n":
+                                f_chk.write(b"\n")
+                                f_chk.flush()
+                    except Exception:
+                        pass
+
                 with open(p_jsonl, "a", encoding="utf-8") as f:
                     for l in lines_to_append:
                         f.write(l + "\n")
+                    f.flush()
+                    try:
+                        os.fsync(f.fileno())
+                    except OSError:
+                        pass
 
                 # Also update legacy json with full history for seamless backward compatibility
                 try:
-                    atomic_json(p_legacy, existing)
+                    atomic_json(p_legacy, existing[-5:] if len(existing) > 5 else existing)
                 except Exception:
                     pass
 
@@ -542,13 +660,14 @@ class MultiPillarTradeEvaluator:
 
         # Load context across all 5 pillars
         candle_ctx = cls.load_candle_context(symbol)
-        ref_price = (
+        raw_candidate = (
             safe_float(current_price)
-            or candle_ctx.get("latest_close")
-            or primary_trigger.get("price")
+            or safe_float(candle_ctx.get("latest_close"))
+            or safe_float(primary_trigger.get("price"))
             or 0.0
         )
-        if ref_price <= 0:
+        ref_price = safe_float(raw_candidate, 0.0)
+        if not ref_price or ref_price <= 0.0 or math.isnan(ref_price) or math.isinf(ref_price):
             logger.warning(f"[{symbol}] Cannot evaluate: invalid reference price {ref_price}")
             return None
 
@@ -743,8 +862,21 @@ class MultiPillarTradeEvaluator:
         # -------------------------------------------------------------------------
         # Dynamic Risk Management & Levels Formulation
         # -------------------------------------------------------------------------
-        atr = candle_ctx.get("atr_14") or (ref_price * 0.008)
-        min_risk_dist = max(atr * 1.2, ref_price * 0.003)
+        atr_raw = safe_float(candle_ctx.get("atr_14"))
+        atr = atr_raw if (atr_raw is not None and atr_raw > 0) else (ref_price * 0.008)
+
+        # Dynamic precision based on price magnitude (e.g. BTC vs PEPE sub-cent meme tokens)
+        if ref_price >= 1000.0:
+            p_dec = 2
+        elif ref_price >= 1.0:
+            p_dec = 4
+        elif ref_price >= 0.01:
+            p_dec = 6
+        else:
+            p_dec = 8
+
+        min_tick = 10.0 ** (-p_dec)
+        min_risk_dist = max(atr * 1.2, ref_price * 0.003, min_tick * 2.0)
 
         defending_wall_price = None
         target_magnet_price = None
@@ -769,7 +901,7 @@ class MultiPillarTradeEvaluator:
                 sl_price = ref_price - min_risk_dist
 
             risk_dist = ref_price - sl_price
-            if risk_dist <= 0:
+            if risk_dist < min_risk_dist:
                 sl_price = ref_price - min_risk_dist
                 risk_dist = min_risk_dist
 
@@ -807,7 +939,7 @@ class MultiPillarTradeEvaluator:
                 sl_price = ref_price + min_risk_dist
 
             risk_dist = sl_price - ref_price
-            if risk_dist <= 0:
+            if risk_dist < min_risk_dist:
                 sl_price = ref_price + min_risk_dist
                 risk_dist = min_risk_dist
 
@@ -825,26 +957,35 @@ class MultiPillarTradeEvaluator:
             elif target_val and target_val < ref_price and target_val <= min_tp:
                 tp_price = target_val
 
-        # Exact calculated Risk-Reward Ratio
-        reward_dist = abs(tp_price - ref_price)
-        calc_rr = round(reward_dist / max(risk_dist, 1e-9), 2)
-
-        # Quantize prices according to scale
-        if ref_price >= 1000.0:
-            p_dec = 2
-        elif ref_price >= 1.0:
-            p_dec = 4
-        else:
-            p_dec = 6
-
+        # Quantize prices according to scale and enforce strictly non-zero spacing
         entry_final = round(ref_price, p_dec)
         sl_final = round(sl_price, p_dec)
         tp_final = round(tp_price, p_dec)
 
+        if target_direction == "LONG":
+            if sl_final >= entry_final:
+                sl_final = round(entry_final - max(min_risk_dist, min_tick), p_dec)
+            if tp_final <= entry_final:
+                tp_final = round(entry_final + (2.0 * abs(entry_final - sl_final)), p_dec)
+        else:  # SHORT
+            if sl_final <= entry_final:
+                sl_final = round(entry_final + max(min_risk_dist, min_tick), p_dec)
+            if tp_final >= entry_final:
+                tp_final = round(entry_final - (2.0 * abs(entry_final - sl_final)), p_dec)
+
+        # Exact calculated Risk-Reward Ratio on quantized execution prices
+        actual_risk = round(abs(entry_final - sl_final), p_dec)
+        actual_reward = round(abs(tp_final - entry_final), p_dec)
+        invalid_risk = (actual_risk <= 0.0)
+
+        calc_rr = round(actual_reward / max(actual_risk, 1e-9), 2) if not invalid_risk else 0.0
+
         # -------------------------------------------------------------------------
         # Pass Condition Checks
         # -------------------------------------------------------------------------
-        if contradiction_veto:
+        if invalid_risk:
+            status = "PASS_INVALID_RISK"
+        elif contradiction_veto:
             status = "PASS_CONTRADICTION"
         elif calc_rr < 2.0:
             status = "PASS_RR_BELOW_2"
@@ -943,7 +1084,26 @@ class MultiPillarTradeEvaluator:
         if not is_duplicate:
             atomic_append_jsonl(asset_ledger_path, setup_record)
             if status == "ACTIVE":
-                atomic_append_jsonl(MASTER_SETUPS_PATH, setup_record)
+                master_is_dup = False
+                if MASTER_SETUPS_PATH.exists():
+                    try:
+                        with open(MASTER_SETUPS_PATH, "r", encoding="utf-8", errors="replace") as mf:
+                            for ml in mf:
+                                ml = ml.strip()
+                                if ml:
+                                    mrec = json.loads(ml)
+                                    if (
+                                        mrec.get("symbol") == symbol.upper()
+                                        and mrec.get("time_ms") == candle_t_ms
+                                        and mrec.get("direction") == target_direction
+                                        and mrec.get("primary_signal") == str(p_code)
+                                    ):
+                                        master_is_dup = True
+                                        break
+                    except Exception:
+                        pass
+                if not master_is_dup:
+                    atomic_append_jsonl(MASTER_SETUPS_PATH, setup_record)
                 logger.info(
                     f"🎯 [ACTIVE SETUP] {symbol} {target_direction} | Score: {confluence_score}/100 "
                     f"| Entry: {entry_final} | SL: {sl_final} | TP: {tp_final} | R:R: {calc_rr}"
