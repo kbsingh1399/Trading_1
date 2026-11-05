@@ -1596,6 +1596,16 @@ class RealtimeSignalEvaluator:
 
             "symbol": sym,
 
+            "bar_type": bar_type,
+
+            "bar_label": sig.get("bar_label") or ("15m" if bar_type == "time" else bar_type),
+
+            "bar_variant": sig.get("bar_variant") or sig.get("bar_label") or "",
+
+            "time_ms": sig_time_ms,
+
+            "close_time_ms": int(sig.get("close_time_ms") or (sig_time_ms + bar_interval if bar_type == "time" else sig_time_ms)),
+
             "mt5_symbol": mt5_sym,
 
             "delta_product_symbol": delta_prod.get("symbol") if delta_prod else None,

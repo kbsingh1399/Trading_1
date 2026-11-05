@@ -19,28 +19,40 @@ class FileMutex:
     def __enter__(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.handle = self.path.open('a+b')
-        if self.path.stat().st_size == 0:
-            self.handle.write(b'0')
-            self.handle.flush()
-        deadline = time.monotonic() + self.timeout
-        while True:
-            try:
-                self.handle.seek(0)
-                if os.name == 'nt':
-                    import msvcrt
-                    msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
-                else:
-                    import fcntl
-                    fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                self.acquired = True
-                return self
-            except OSError:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    self.handle.close()
-                    self.handle = None
+        try:
+            if self.path.stat().st_size == 0:
+                try:
+                    self.handle.write(b'0')
+                    self.handle.flush()
+                except (OSError, PermissionError):
+                    pass
+            deadline = time.monotonic() + self.timeout
+            while True:
+                try:
+                    self.handle.seek(0)
+                    if os.name == 'nt':
+                        import msvcrt
+                        msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    else:
+                        import fcntl
+                        fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    self.acquired = True
                     return self
-                time.sleep(min(0.02, remaining))
+                except (OSError, PermissionError):
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        self.handle.close()
+                        self.handle = None
+                        return self
+                    time.sleep(min(0.02, remaining))
+        except BaseException:
+            if self.handle is not None:
+                try:
+                    self.handle.close()
+                except Exception:
+                    pass
+                self.handle = None
+            raise
 
     def __exit__(self, *args):
         if self.handle is not None:

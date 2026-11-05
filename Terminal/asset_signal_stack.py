@@ -80,7 +80,7 @@ LOCK_DIR.mkdir(parents=True, exist_ok=True)
 
 
 
-from Terminal.runtime_io import atomic_json, atomic_parquet, FileMutex, writer_lock
+from Terminal.runtime_io import atomic_json, atomic_parquet, FileMutex, writer_lock, atomic_append_jsonl
 
 from Terminal.universal_footprint_engine import utc_ms_to_ist_str, IST_OFFSET_MS
 
@@ -153,6 +153,30 @@ class EvaluatedSignalsLedger:
         self._evaluated: Dict[str, Dict[str, Any]] = {}
 
         self.load()
+        self._last_mtime: float = 0.0
+        self._cooldowns: Dict[str, float] = {}
+
+    def set_cooldown(self, symbol: str, duration_sec: float = 3600.0, reason: str = ''):
+        self._cooldowns[symbol.upper()] = time.time() + max(0.0, float(duration_sec))
+        logger.info(f'[{symbol.upper()}] Cooldown activated for {duration_sec:.0f}s ({reason})')
+
+    def is_in_cooldown(self, symbol: str) -> Tuple[bool, float]:
+        exp = self._cooldowns.get(symbol.upper(), 0.0)
+        remaining = exp - time.time()
+        if remaining > 0:
+            return True, remaining
+        return False, 0.0
+
+    def _sync_disk(self):
+        jsonl_path = self.path if str(self.path).endswith('.jsonl') else self.path.with_suffix('.jsonl')
+        if jsonl_path.exists():
+            try:
+                cur_mtime = jsonl_path.stat().st_mtime
+                if cur_mtime > self._last_mtime:
+                    self.load()
+            except Exception:
+                pass
+
 
 
 
@@ -191,6 +215,7 @@ class EvaluatedSignalsLedger:
         if jsonl_path.exists():
 
             recs = {}
+            self._last_mtime = jsonl_path.stat().st_mtime
 
             try:
 
@@ -251,6 +276,7 @@ class EvaluatedSignalsLedger:
     def is_evaluated(self, symbol: str, open_time_ms: int, bar_type: str = "time", bar_variant: str = "") -> bool:
 
         """Returns True if this exact candle (bar_type + variant) has already undergone evaluation."""
+        self._sync_disk()
 
         if self._key(symbol, open_time_ms, bar_type, bar_variant) in self._evaluated:
 
@@ -346,30 +372,16 @@ class EvaluatedSignalsLedger:
 
 
 
-        # Persist to .jsonl
-
+        # Persist to .jsonl via atomic append
         try:
-
-            tmp_jsonl = jsonl_path.with_suffix(".jsonl.tmp")
-
-            with open(tmp_jsonl, "w", encoding="utf-8") as f:
-
-                for rec in self._evaluated.values():
-
-                    f.write(json.dumps(rec) + "\n")
-
-            os.replace(str(tmp_jsonl), str(jsonl_path))
-
+            atomic_append_jsonl(jsonl_path, [record])
+            if jsonl_path.exists():
+                self._last_mtime = jsonl_path.stat().st_mtime
         except Exception as e:
-
-            logger.error(f"Error saving evaluated signals jsonl ledger: {e}")
-
-
+            logger.error(f"Error atomic appending to evaluated signals jsonl ledger: {e}")
 
         # Also sync to .json
-
         try:
-
             atomic_json(json_path, self._evaluated)
 
         except Exception as e:

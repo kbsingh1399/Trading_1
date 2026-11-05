@@ -582,6 +582,17 @@ class DeltaExchangeTrader:
                 logger.debug(f"Fill confirmation poll error: {exc}")
             time.sleep(0.3)
 
+        # 2.5) check verified position entry price from open positions
+        try:
+            positions = self.get_active_positions() or []
+            for p in positions:
+                if int(p.get("product_id", -1)) == int(product_id):
+                    ep = float(p.get("entry_price") or 0.0)
+                    if ep > 0:
+                        return ep, "POSITION_ENTRY_PRICE"
+        except Exception:
+            pass
+
         # 3) If order was explicitly cancelled and no fill was recorded, do NOT fall back to mark
         if str(order_info.get("state", "")).lower() == "cancelled":
             return 0.0, "ORDER_CANCELLED_NO_FILL"
@@ -662,6 +673,25 @@ class DeltaExchangeTrader:
         dir_mult = 1.0 if pos_direction == "BUY" else -1.0
         size = int(tp_order.get("size", 1))
 
+        # Inspect current mark price to ensure price did not breach SL during wait
+        current_mark = self.get_live_mark_price(symbol)
+        if current_mark and current_mark > 0:
+            mark_stop_dist = (current_mark - sl_price) * dir_mult
+            if mark_stop_dist <= 0:
+                logger.error(
+                    f"[{symbol}] MARK BREACHED STOP LOSS: live mark {current_mark} breached SL {sl_price} "
+                    f"for {pos_direction} position (dist={mark_stop_dist}). Closing immediately fail-closed."
+                )
+                close_res = self.close_position(symbol)
+                _cancel_brackets()
+                return {
+                    "ok": False,
+                    "status": "MARK_BREACHED_STOP_LOSS",
+                    "reason": f"Live mark {current_mark} slipped past SL {sl_price} in direction {pos_direction}",
+                    "position_closed": True,
+                    "close_res": close_res
+                }
+
         # Check for catastrophic adverse slippage beyond stop loss
         directional_stop_dist = (fill_price - sl_price) * dir_mult
         if directional_stop_dist <= 0:
@@ -684,17 +714,19 @@ class DeltaExchangeTrader:
         from Terminal.risk_envelope import MAX_RISK_USD
         max_allowed_risk_usd = MAX_RISK_USD
 
-        # Check if slippage inflated dollar risk beyond MAX_RISK_USD
-        realized_risk_usd = actual_risk * size * contract_val
+        # Solve fee-aware discrete grid using actual fill price to strictly enforce $25.00 ceiling
+        fee_grid = solve_fee_aware_grid(
+            entry=fill_price,
+            stop_loss=sl_price,
+            contract_value=contract_val,
+            cap_usd=max_allowed_risk_usd
+        )
+        allowed_size = int(fee_grid.get("size", 0) or 0)
         calibrated_sl = sl_price
         tick_size = float(prod.get("tick_size", 0.01) or 0.01)
-        if realized_risk_usd > max_allowed_risk_usd:
-            # DO NOT tighten stop loss distance closer to entry (never compress SL into market noise).
-            # Instead, shed excess contracts via a reduce-only market order to fit the $25 cap.
-            loss_per_contract = actual_risk * contract_val
-            allowed_size = math.floor(round(max_allowed_risk_usd / max(1e-9, loss_per_contract), 8))
-            shed_contracts = size - allowed_size
 
+        if allowed_size < size:
+            shed_contracts = size - allowed_size
             if allowed_size >= 1 and shed_contracts > 0:
                 shed_side = "sell" if pos_direction == "BUY" else "buy"
                 shed_body = {
@@ -706,7 +738,7 @@ class DeltaExchangeTrader:
                 }
                 logger.warning(
                     f"[{symbol}] SLIPPAGE RISK BREACH: fill {fill_price} vs planned SL {sl_price} inflated "
-                    f"risk to ${realized_risk_usd:.2f} > ${max_allowed_risk_usd:.2f} cap. Preserving structural SL distance "
+                    f"fee-inclusive risk beyond ${max_allowed_risk_usd:.2f} cap. Preserving structural SL distance "
                     f"({actual_risk:.6f}) and shedding {shed_contracts} excess contracts (size {size} -> {allowed_size})."
                 )
                 shed_res = self.request("POST", "/v2/orders", body=shed_body)
@@ -724,7 +756,7 @@ class DeltaExchangeTrader:
                         "close_res": close_res
                     }
                 size = int(allowed_size)
-                realized_risk_usd = actual_risk * size * contract_val
+                realized_risk_usd = float(fee_grid.get("realized_risk_usd") or (actual_risk * size * contract_val))
                 if sl_order:
                     sl_edit_res = self.edit_order(
                         order_id=sl_order["id"],
@@ -742,9 +774,9 @@ class DeltaExchangeTrader:
                             "reason": f"Failed to edit SL order size: {sl_edit_res.get('error', 'UNKNOWN')}",
                             "edit_res": sl_edit_res
                         }
-            elif allowed_size < 1:
+            else:
                 logger.error(
-                    f"[{symbol}] SLIPPAGE EXCEEDS MIN LOT RISK: 1 contract risk ${loss_per_contract:.2f} > ${max_allowed_risk_usd:.2f} cap. "
+                    f"[{symbol}] SLIPPAGE EXCEEDS MIN LOT RISK: fee-inclusive 1 contract risk exceeds ${max_allowed_risk_usd:.2f} cap. "
                     f"Cannot shed to fit cap. Triggering close_position fail-closed."
                 )
                 close_res = self.close_position(symbol)
@@ -752,10 +784,12 @@ class DeltaExchangeTrader:
                 return {
                     "ok": False,
                     "status": "SLIPPAGE_EXCEEDS_SINGLE_CONTRACT_CAP",
-                    "reason": f"1 contract risk ${loss_per_contract:.2f} exceeds ${max_allowed_risk_usd:.2f} cap; position closed fail-closed.",
+                    "reason": f"1 contract fee-inclusive risk exceeds ${max_allowed_risk_usd:.2f} cap; position closed fail-closed.",
                     "position_closed": True,
                     "close_res": close_res
                 }
+        else:
+            realized_risk_usd = float(fee_grid.get("realized_risk_usd") or (actual_risk * size * contract_val))
 
         # PATCH D4: guarantee at least min_rr:1 with a WIDEN-ONLY ratchet.
         # The evaluator frequently extends TP1 to a liquidation magnet (2.4-3.0R+).
@@ -788,17 +822,22 @@ class DeltaExchangeTrader:
             initial_tp=effective_tp,
             size=size,
             initial_risk_dist=actual_risk,
-            contract_val=contract_val
+            contract_value=contract_val
         )
 
         needs_edit = (current_rr < min_rr) or (abs(effective_tp - current_tp) > tick_size * 0.5) or (int(tp_order.get("size", 1)) != size)
         if needs_edit:
-            edit_res = self.edit_order(
-                order_id=tp_order["id"],
-                product_id=prod_id,
-                size=size,
-                stop_price=effective_tp
-            )
+            tp_is_limit = tp_order.get("order_type") == "limit_order" or not tp_order.get("stop_order_type")
+            edit_kwargs = {
+                "order_id": tp_order["id"],
+                "product_id": prod_id,
+                "size": size,
+            }
+            if tp_is_limit:
+                edit_kwargs["limit_price"] = effective_tp
+            else:
+                edit_kwargs["stop_price"] = effective_tp
+            edit_res = self.edit_order(**edit_kwargs)
             is_success = bool(edit_res.get("success", False) or edit_res.get("result") or edit_res.get("id"))
             if not is_success:
                 logger.error(f"[{symbol}] Failed to re-anchor TP to {effective_tp}: {edit_res}")
@@ -1005,7 +1044,7 @@ class DeltaExchangeTrader:
                     cur_sl_price=0.0,
                     cur_tp_price=cur_tp_price,
                     size=abs(size),
-                    contract_val=contract_val,
+                    contract_value=contract_val,
                     max_risk_usd=MAX_RISK_USD
                 )
                 r0 = float(anchor.get("initial_risk_dist", 0.0))
@@ -1072,7 +1111,7 @@ class DeltaExchangeTrader:
                 cur_sl_price=cur_sl_price,
                 cur_tp_price=cur_tp_price,
                 size=abs(size),
-                contract_val=contract_val,
+                contract_value=contract_val,
                 max_risk_usd=MAX_RISK_USD
             )
             r0 = float(anchor.get("initial_risk_dist", 0.0))
@@ -1195,39 +1234,50 @@ class DeltaExchangeTrader:
 
     def close_position(self, symbol: str) -> Dict[str, Any]:
         """
-        Market closes any active open position for the given symbol (reduce-only).
-        PATCH D2: unverifiable position book fails closed with an explicit error
-        (never silently reports NOT_FOUND on an API failure).
+        Market closes any active open position for the given symbol (reduce-only)
+        under DELTA_MGMT_LOCK_FILE mutex, and cancels all open bracket orders for the product.
         """
         clean = symbol.upper().replace(".PI", "").replace("USDT", "").replace("USD", "").strip()
-        active = self.get_active_positions()
-        if active is None:
-            logger.error(f"[EMERGENCY CLOSE] [{symbol}] Position book UNAVAILABLE — cannot verify/close position. Retry recommended.")
-            return {"ok": False, "status": "POSITION_BOOK_UNAVAILABLE", "reason": f"API failure while closing {symbol} — RETRY"}
-        for p in active:
-            p_sym = p.get("product_symbol", "")
-            p_clean = p_sym.upper().replace(".PI", "").replace("USDT", "").replace("USD", "").strip()
-            if clean == p_clean or p_sym.upper() == symbol.upper():
-                prod = self.resolve_product(p_sym)
-                prod_id = int(p.get("product_id") or (prod["id"] if prod else 0))
-                if not prod_id:
-                    continue
-                size = abs(int(p.get("size", 0)))
-                if size <= 0:
-                    continue
-                # Opposing side to close
-                cur_size = int(p.get("size", 0))
-                close_side = "sell" if cur_size > 0 else "buy"
-                body = {
-                    "product_id": prod_id,
-                    "size": size,
-                    "side": close_side,
-                    "order_type": "market_order",
-                    "reduce_only": True
-                }
-                logger.info(f"🚨 [EMERGENCY CLOSE] Closing Delta position for {p_sym}: {close_side} {size} contracts")
-                return self.request("POST", "/v2/orders", body=body)
-        return {"ok": False, "status": "NOT_FOUND", "reason": f"No open position found for {symbol}"}
+        with FileMutex(str(DELTA_MGMT_LOCK_FILE), timeout=5.0) as mgmt_lock:
+            active = self.get_active_positions()
+            if active is None:
+                logger.error(f"[EMERGENCY CLOSE] [{symbol}] Position book UNAVAILABLE — cannot verify/close position. Retry recommended.")
+                return {"ok": False, "status": "POSITION_BOOK_UNAVAILABLE", "reason": f"API failure while closing {symbol} — RETRY"}
+            for p in active:
+                p_sym = p.get("product_symbol", "")
+                p_clean = p_sym.upper().replace(".PI", "").replace("USDT", "").replace("USD", "").strip()
+                if clean == p_clean or p_sym.upper() == symbol.upper():
+                    prod = self.resolve_product(p_sym)
+                    prod_id = int(p.get("product_id") or (prod["id"] if prod else 0))
+                    if not prod_id:
+                        continue
+                    size = abs(int(p.get("size", 0)))
+                    if size <= 0:
+                        continue
+                    # Opposing side to close
+                    cur_size = int(p.get("size", 0))
+                    close_side = "sell" if cur_size > 0 else "buy"
+                    body = {
+                        "product_id": prod_id,
+                        "size": size,
+                        "side": close_side,
+                        "order_type": "market_order",
+                        "reduce_only": True
+                    }
+                    logger.info(f"🚨 [EMERGENCY CLOSE] Closing Delta position for {p_sym}: {close_side} {size} contracts")
+                    res = self.request("POST", "/v2/orders", body=body)
+
+                    # Cancel lingering bracket orders to prevent orphan execution
+                    try:
+                        open_orders = self.get_open_orders() or []
+                        for o in open_orders:
+                            if int(o.get("product_id", 0)) == prod_id:
+                                self.cancel_order(o["id"], prod_id)
+                    except Exception as oe:
+                        logger.warning(f"[{symbol}] Error cancelling bracket orders after emergency close: {oe}")
+
+                    return res
+            return {"ok": False, "status": "NOT_FOUND", "reason": f"No open position found for {symbol}"}
 
     def get_fills(self, symbol: Optional[str] = None, limit: int = 20) -> List[Dict[str, Any]]:
         """Retrieves fill history from broker for exact realized PnL post-mortem reconciliation."""
@@ -1262,32 +1312,20 @@ class DeltaExchangeTrader:
         Validates signal parameters, checks Delta position limits, and punches live order
         with attached bracket Stop-Loss and Take-Profit.
         """
-        if not LIVE_DISPATCH_ENABLED:
-            if PAPER_TRADING_ENABLED:
-                logger.info("Delta Paper Trading active: routing order to Shadow Paper Trading Engine (Option 1)...")
-                try:
-                    from Terminal.paper_trading_engine import paper_engine
-                    return paper_engine.execute_paper_order(signal, self)
-                except Exception as e:
-                    logger.error(f"Paper trading execution failed: {e}")
-                    return {"ok": False, "status": "PAPER_EXECUTION_ERROR", "reason": str(e)}
-            logger.warning("Delta live dispatch blocked: LIVE_DISPATCH_ENABLED is False (fail-closed operator safety gate).")
-            return {"ok": False, "status": "BLOCKED_BY_SAFETY_GATE", "reason": "LIVE_DISPATCH_ENABLED_IS_FALSE"}
-
-        # Strict Bar Completion & Confluence Invariants (Delta Exchange Live Execution)
+        # Strict Bar Completion & Confluence Invariants (Enforced for both Live and Paper)
         bar_type = str(signal.get("bar_type") or "").lower()
         if bar_type != "time":
-            logger.warning(f"Live order blocked: non-time bar type '{bar_type}' prohibited from live execution.")
+            logger.warning(f"Order blocked: non-time bar type '{bar_type}' prohibited from execution.")
             return {"ok": False, "status": "REJECTED", "reason": f"NON_TIME_BAR_EXECUTION_PROHIBITED: {bar_type or 'MISSING'}"}
         
-        bar_label = str(signal.get("bar_label") or "15m").lower()
-        if bar_label.startswith("5m") or ("15m" not in bar_label and bar_label != ""):
-            logger.warning(f"Live order blocked: non-15m bar label '{bar_label}' prohibited from live execution.")
-            return {"ok": False, "status": "REJECTED", "reason": f"NON_15M_INTERVAL_PROHIBITED: {bar_label}"}
+        bar_label = str(signal.get("bar_label") or "").lower()
+        if bar_label != "15m":
+            logger.warning(f"Order blocked: non-15m bar label '{bar_label}' prohibited from execution (fail-closed).")
+            return {"ok": False, "status": "REJECTED", "reason": f"NON_15M_INTERVAL_PROHIBITED: {bar_label or 'MISSING'}"}
 
         sig_time_ms = int(signal.get("time_ms") or signal.get("open_time_ms") or 0)
         if sig_time_ms <= 0 or (sig_time_ms % 900_000 != 0):
-            logger.warning(f"Live order blocked: signal timestamp {sig_time_ms} is not on a valid 15m candle boundary.")
+            logger.warning(f"Order blocked: signal timestamp {sig_time_ms} is not on a valid 15m candle boundary.")
             return {"ok": False, "status": "REJECTED", "reason": f"NON_15M_INTERVAL_PROHIBITED: {sig_time_ms}"}
 
         score = float(signal.get("confluence_score", 0.0) or 0.0)
@@ -1306,6 +1344,18 @@ class DeltaExchangeTrader:
         prod = self.resolve_product(sym)
         if not prod:
             return {"ok": False, "status": "REJECTED", "reason": f"SYMBOL_NOT_ON_DELTA_INDIA: {sym}"}
+
+        if not LIVE_DISPATCH_ENABLED:
+            if PAPER_TRADING_ENABLED:
+                logger.info("Delta Paper Trading active: routing order to Shadow Paper Trading Engine (Option 1)...")
+                try:
+                    from Terminal.paper_trading_engine import paper_engine
+                    return paper_engine.execute_paper_order(signal, self)
+                except Exception as e:
+                    logger.error(f"Paper trading execution failed: {e}")
+                    return {"ok": False, "status": "PAPER_EXECUTION_ERROR", "reason": str(e)}
+            logger.warning("Delta live dispatch blocked: LIVE_DISPATCH_ENABLED is False (fail-closed operator safety gate).")
+            return {"ok": False, "status": "BLOCKED_BY_SAFETY_GATE", "reason": "LIVE_DISPATCH_ENABLED_IS_FALSE"}
 
         with FileMutex(str(DELTA_MGMT_LOCK_FILE), timeout=10.0) as mgmt_lock:
             if not mgmt_lock.acquired:
@@ -1397,9 +1447,19 @@ class DeltaExchangeTrader:
         institutional_pos = []
         for p in active_pos:
             sz = abs(int(float(p.get("size", 0) or 0)))
-            c_val = float(p.get("contract_value") or prod.get("contract_value") or 1.0)
+            if sz == 0:
+                continue
+            pos_c_val = p.get("contract_value")
+            if not pos_c_val:
+                p_sym = p.get("product_symbol") or (p.get("product", {}).get("symbol") if isinstance(p.get("product"), dict) else None)
+                pos_prod = self.resolve_product(p_sym) if p_sym else None
+                if not pos_prod and p.get("product_id"):
+                    pos_prod = self._products_by_id.get(p.get("product_id"))
+                pos_c_val = float(pos_prod.get("contract_value") if pos_prod else 1.0)
+            else:
+                pos_c_val = float(pos_c_val)
             px = float(p.get("mark_price", 0.0) or p.get("entry_price", 0.0) or 0.0)
-            if (sz * c_val * px) >= 1.0:
+            if (sz * pos_c_val * px) >= 1.0:
                 institutional_pos.append(p)
         effective_positions = len(institutional_pos) + len(self._inflight_orders)
         if effective_positions >= MAX_DELTA_CONCURRENT_POSITIONS:
@@ -1548,12 +1608,15 @@ class DeltaExchangeTrader:
         try:
             tick_size = float(prod.get("tick_size", 0.01) or 0.01)
             if live_mark_price > 0:
+                r0 = abs(entry - sl) if sl and entry > 0 else 0.0
                 if dir_norm == "BUY":
                     ref_px = best_ask if best_ask > 0 else live_mark_price
-                    limit_px = ref_px + (5.0 * tick_size)
+                    buffer_amt = max(5.0 * tick_size, min(0.0010 * ref_px, 0.15 * r0 if r0 > 0 else 5.0 * tick_size))
+                    limit_px = ref_px + buffer_amt
                 else:
                     ref_px = best_bid if best_bid > 0 else live_mark_price
-                    limit_px = ref_px - (5.0 * tick_size)
+                    buffer_amt = max(5.0 * tick_size, min(0.0010 * ref_px, 0.15 * r0 if r0 > 0 else 5.0 * tick_size))
+                    limit_px = ref_px - buffer_amt
                 order_type = "limit_order"
                 time_in_force = "ioc"
             else:

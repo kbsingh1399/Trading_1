@@ -29,6 +29,7 @@ import sys
 import json
 
 import logging
+import threading
 
 import re
 
@@ -96,6 +97,8 @@ class OlapEngine:
 
     def __init__(self):
 
+        self._lock = threading.Lock()
+
         self.con = duckdb.connect(database=":memory:")
 
         self._init_views()
@@ -105,36 +108,37 @@ class OlapEngine:
     def _init_views(self):
 
         """Register parquet files as virtual DuckDB tables."""
+        with getattr(self, "_lock", threading.Lock()):
 
-        if SIGNALS_PARQUET.exists():
+            if SIGNALS_PARQUET.exists():
 
-            try:
+                try:
 
-                self.con.execute(f"CREATE OR REPLACE VIEW footprint_signals AS SELECT * FROM read_parquet('{SIGNALS_PARQUET.as_posix()}')")
+                    self.con.execute(f"CREATE OR REPLACE VIEW footprint_signals AS SELECT * FROM read_parquet('{SIGNALS_PARQUET.as_posix()}')")
 
-            except Exception as e:
+                except Exception as e:
 
-                logger.warning(f"Could not initialize footprint_signals view: {e}")
+                    logger.warning(f"Could not initialize footprint_signals view: {e}")
 
-        if WHALE_SNAPSHOTS.exists():
+            if WHALE_SNAPSHOTS.exists():
 
-            try:
+                try:
 
-                self.con.execute(f"CREATE OR REPLACE VIEW whale_snapshots AS SELECT * FROM read_parquet('{WHALE_SNAPSHOTS.as_posix()}')")
+                    self.con.execute(f"CREATE OR REPLACE VIEW whale_snapshots AS SELECT * FROM read_parquet('{WHALE_SNAPSHOTS.as_posix()}')")
 
-            except Exception as e:
+                except Exception as e:
 
-                logger.warning(f"Could not initialize whale_snapshots view: {e}")
+                    logger.warning(f"Could not initialize whale_snapshots view: {e}")
 
-        if LIQ_SNAPSHOTS.exists():
+            if LIQ_SNAPSHOTS.exists():
 
-            try:
+                try:
 
-                self.con.execute(f"CREATE OR REPLACE VIEW liquidation_snapshots AS SELECT * FROM read_parquet('{LIQ_SNAPSHOTS.as_posix()}')")
+                    self.con.execute(f"CREATE OR REPLACE VIEW liquidation_snapshots AS SELECT * FROM read_parquet('{LIQ_SNAPSHOTS.as_posix()}')")
 
-            except Exception as e:
+                except Exception as e:
 
-                logger.warning(f"Could not initialize liquidation_snapshots view: {e}")
+                    logger.warning(f"Could not initialize liquidation_snapshots view: {e}")
 
 
 

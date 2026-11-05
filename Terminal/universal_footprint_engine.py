@@ -656,7 +656,8 @@ class UniversalFootprintEngine:
         # Metadata
         df["symbol"] = symbol
         df["mt5_symbol"] = mt5_sym
-        df["timeframe"] = "15m"
+        if "timeframe" not in df.columns or df["timeframe"].isna().all():
+            df["timeframe"] = "15m"
         df["asset_class"] = asset_class
 
         # Rolling 20 SMA of volume
@@ -875,7 +876,9 @@ class UniversalFootprintEngine:
         # Rolling median |delta| (CVD magnitude scale for sdiv)
         abs_delta = df["delta"].abs()
         med_win = cal.sdiv_cvd_mag_window
-        cvd_mag = abs_delta.rolling(window=med_win, min_periods=20).median().bfill().to_numpy(dtype=float)
+        min_p = max(3, min(20, len(df)))
+        def_median = float(abs_delta.median()) if len(abs_delta) > 0 and not abs_delta.isna().all() else 1.0
+        cvd_mag = abs_delta.rolling(window=med_win, min_periods=min_p).median().bfill().fillna(def_median).to_numpy(dtype=float)
 
         return {
             "prior10_high": prior10_high,
@@ -1086,7 +1089,7 @@ class UniversalFootprintEngine:
             pivot_cvd = float(df.at[p_hi, "cumulative_delta"])
             if h > pivot_high:
                 cvd_drop = pivot_cvd - cvd
-                if cvd_drop >= cal.sdiv_cvd_mag_mult * max(cvd_mag, 1e-9):
+                if cvd_mag > 1e-4 and cvd_drop >= cal.sdiv_cvd_mag_mult * cvd_mag:
                     pivot_ist = datetime.fromtimestamp(
                         (int(df.at[p_hi, "open_time_ms"]) + IST_OFFSET_MS) / 1000.0, timezone.utc
                     ).strftime("%m-%d %H:%M")
@@ -1108,7 +1111,7 @@ class UniversalFootprintEngine:
             pivot_cvd = float(df.at[p_lo, "cumulative_delta"])
             if l < pivot_low:
                 cvd_rise = cvd - pivot_cvd
-                if cvd_rise >= cal.sdiv_cvd_mag_mult * max(cvd_mag, 1e-9):
+                if cvd_mag > 1e-4 and cvd_rise >= cal.sdiv_cvd_mag_mult * cvd_mag:
                     pivot_ist = datetime.fromtimestamp(
                         (int(df.at[p_lo, "open_time_ms"]) + IST_OFFSET_MS) / 1000.0, timezone.utc
                     ).strftime("%m-%d %H:%M")

@@ -67,7 +67,7 @@ from Terminal.universal_footprint_engine import (
     synthesize_range_bars,
     synthesize_volume_bars
 )
-from Terminal.runtime_io import acquire_singleton, writer_lock, atomic_parquet, upsert_parquet
+from Terminal.runtime_io import acquire_singleton, writer_lock, atomic_parquet, upsert_parquet, atomic_append_jsonl
 from Terminal.realtime_signal_evaluator import RealtimeSignalEvaluator
 from Terminal.asset_signal_stack import EvaluatedSignalsLedger
 from Terminal.auction_indicators import update_all_auction_profiles
@@ -556,6 +556,9 @@ class UnifiedAPIFootprintEngine:
                 else:
                     combined_df = new_df
 
+                if len(combined_df) > 25000:
+                    combined_df = combined_df.iloc[-25000:].reset_index(drop=True)
+
                 atomic_parquet(combined_df, SIGNALS_PARQUET)
                 # Deduplication keys marked as known only after verified successful append
                 now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
@@ -565,9 +568,7 @@ class UnifiedAPIFootprintEngine:
                 logger.info(f"Appended {len(new_signals)} new footprint signals to {SIGNALS_PARQUET.name} (Total: {len(combined_df)})")
                 try:
                     footprint_jsonl = SIGNALS_DIR / "footprint_signals.jsonl"
-                    with open(footprint_jsonl, "a", encoding="utf-8") as jf:
-                        for s in new_signals:
-                            jf.write(json.dumps(s) + "\n")
+                    atomic_append_jsonl(footprint_jsonl, new_signals)
                 except Exception as je:
                     logger.debug(f"Could not append to footprint_signals.jsonl: {je}")
             except Exception as e:

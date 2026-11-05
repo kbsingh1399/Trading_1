@@ -2878,7 +2878,7 @@ class FootprintSignalSentinel:
 
 
 
-            s_var = str(s.get("bar_label") or s.get("bar_variant") or "").strip() if s_bt != "time" else ""
+            s_var = str(s.get("bar_label") or s.get("bar_variant") or ("15m" if s_bt == "time" else "")).strip()
 
 
 
@@ -2943,22 +2943,8 @@ class FootprintSignalSentinel:
 
 
                 if bar_type in ("range", "vol", "volume"):
-
-
-
-
-
-
-
                     open_ms = t_ms
-
-
-
-
-
-
-
-                    close_ms = t_ms
+                    close_ms = int(s.get("close_time_ms") or s.get("detection_time_ms") or (time.time() * 1000))
 
 
 
@@ -4831,7 +4817,8 @@ class FootprintSignalSentinel:
 
 
                     # Strict Bar Completion Invariant: Live execution restricted to 15m time candles
-                    if bar_type != "time" or str(bar_variant).startswith("5m") or (t_ms > 0 and t_ms % 900_000 != 0):
+                    cand_label = str(s.get("bar_label") or bar_variant or "").lower()
+                    if bar_type != "time" or cand_label != "15m" or (t_ms > 0 and t_ms % 900_000 != 0):
                         if is_actionable:
                             logger.info(f"[{sym}] Suppressing live execution for {bar_type} bar (t_ms={t_ms}): strictly restricted to closed 15m time bars.")
                             is_actionable = False
@@ -5116,7 +5103,14 @@ class FootprintSignalSentinel:
 
 
 
-                if is_bar_closed and final_action not in ("PARKED_IN_FLIGHT_FORMING", "FORMING_BAR_UNQUALIFIED"):
+                TRANSIENT_RETRYABLE_ACTIONS = (
+                    "PARKED_IN_FLIGHT_FORMING",
+                    "FORMING_BAR_UNQUALIFIED",
+                    "REJECTED_POSITION_MANAGEMENT_MUTEX_CONTENTION",
+                    "REJECTED_DISPATCH_LOCK_TIMEOUT",
+                    "REJECTED_DELTA_ORDER_SUBMISSION_TIMEOUT",
+                )
+                if is_bar_closed and final_action not in TRANSIENT_RETRYABLE_ACTIONS:
 
 
 
@@ -5508,7 +5502,8 @@ class FootprintSignalSentinel:
 
 
 
-        if now - self.last_pos_check_ts < 15.0:
+        poll_interval = 2.0 if bool(self.active_positions_tracker) else 15.0
+        if now - self.last_pos_check_ts < poll_interval:
 
 
 
