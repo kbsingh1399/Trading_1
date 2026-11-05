@@ -948,16 +948,16 @@ class MultiPillarTradeEvaluator:
                     f"🎯 [ACTIVE SETUP] {symbol} {target_direction} | Score: {confluence_score}/100 "
                     f"| Entry: {entry_final} | SL: {sl_final} | TP: {tp_final} | R:R: {calc_rr}"
                 )
+            else:
+                logger.info(
+                    f"[{symbol}] Setup evaluated: {status} | Score: {confluence_score}/100 | Direction: {target_direction}"
+                )
         else:
             if status == "ACTIVE":
                 logger.info(
                     f"🎯 [EXISTING ACTIVE SETUP] {symbol} {target_direction} | Score: {confluence_score}/100 "
                     f"| Entry: {entry_final} | SL: {sl_final} | TP: {tp_final} | R:R: {calc_rr}"
                 )
-        else:
-            logger.info(
-                f"[{symbol}] Setup evaluated: {status} | Score: {confluence_score}/100 | Direction: {target_direction}"
-            )
 
         return setup_record
 
