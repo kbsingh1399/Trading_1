@@ -1,6 +1,18 @@
 """
 Pytest configuration and compatibility hook for socket isolation and offline test execution.
 """
+import sys
+from pathlib import Path
+
+# Guarantee repository root and archived legacy scrapers are on sys.path for all tests
+ROOT_DIR = Path(__file__).resolve().parent.parent
+LEGACY_DIR = ROOT_DIR / "legacy_archive" / "cdp_scrapers"
+
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+if str(LEGACY_DIR) not in sys.path:
+    sys.path.insert(0, str(LEGACY_DIR))
+
 
 def pytest_addoption(parser):
     """

@@ -546,10 +546,7 @@ def _mock_range_signal(sym, t_offset, price=100.0):
 
 
 def _build_sentinel():
-    import importlib
-    sentinel_mod = importlib.import_module("5_wake_on_footprint_signal") \
-        if False else importlib.import_module("Terminal.test_review_fixes")._load_wake_module()
-    return sentinel_mod
+    return _load_wake_module()
 
 
 def _load_wake_module():

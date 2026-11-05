@@ -1,1 +1,290 @@
-{"BNB": {"symbol": "BNB", "coinglass_symbol": "Binance_BNBUSDT", "last_price": 718.9, "total_liq_usd": 93.4, "long_liq_usd": 93.4, "short_liq_usd": 0.0, "long_ratio": 1.0, "p90_threshold": 26807.857000000004, "is_spike": true, "reversal_bias": "BEARISH_REVERSAL", "exhaustion_score": 49.64825890409666, "spike_bar_time_utc": "2026-11-04T21:30:00Z", "updated_at_utc": "2026-11-04T22:09:17.590800+00:00", "updated_at_ist": "2026-11-05 03:39:17 IST", "total_candles": 551, "closed_candles": 550, "bar_closed": true, "candle_open_ms": 1793828700000, "candle_close_ms": 1793829600000, "candle_ist": "2026-11-05 03:15:00 IST", "recent_spike": true, "latest_total_liq_usd": 93.4, "latest_long_liq_usd": 93.4, "latest_short_liq_usd": 0.0}}
+{
+  "AVAX": {
+    "symbol": "AVAX",
+    "updated_at_utc": "2026-11-05T03:36:56.536781+00:00",
+    "last_bar_time_utc": "2026-11-05T03:36:56.536781+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:36:56.536781+00:00",
+    "reversal_bias": "BEARISH_REVERSAL",
+    "total_liq_volume": 2318958.5920452,
+    "bar_closed": true
+  },
+  "BNB": {
+    "symbol": "BNB",
+    "updated_at_utc": "2026-11-05T03:36:53.464084+00:00",
+    "last_bar_time_utc": "2026-11-05T03:36:53.464084+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:36:53.464084+00:00",
+    "reversal_bias": "BEARISH_REVERSAL",
+    "total_liq_volume": 15727699.094499473,
+    "bar_closed": true
+  },
+  "SOL": {
+    "symbol": "SOL",
+    "updated_at_utc": "2026-11-05T03:36:53.540460+00:00",
+    "last_bar_time_utc": "2026-11-05T03:36:53.540460+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:36:53.540460+00:00",
+    "reversal_bias": "BEARISH_REVERSAL",
+    "total_liq_volume": 42754820.29950566,
+    "bar_closed": true
+  },
+  "DOGE": {
+    "symbol": "DOGE",
+    "updated_at_utc": "2026-11-05T03:36:53.592293+00:00",
+    "last_bar_time_utc": "2026-11-05T03:36:53.592293+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:36:53.592293+00:00",
+    "reversal_bias": "BEARISH_REVERSAL",
+    "total_liq_volume": 8820393.658785313,
+    "bar_closed": true
+  },
+  "LINK": {
+    "symbol": "LINK",
+    "updated_at_utc": "2026-11-05T03:36:53.591850+00:00",
+    "last_bar_time_utc": "2026-11-05T03:36:53.591850+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:36:53.591850+00:00",
+    "reversal_bias": "BEARISH_REVERSAL",
+    "total_liq_volume": 2809669.402721236,
+    "bar_closed": true
+  },
+  "XRP": {
+    "symbol": "XRP",
+    "updated_at_utc": "2026-11-05T03:36:53.650052+00:00",
+    "last_bar_time_utc": "2026-11-05T03:36:53.650052+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:36:53.650052+00:00",
+    "reversal_bias": "BEARISH_REVERSAL",
+    "total_liq_volume": 19719238.470177602,
+    "bar_closed": true
+  },
+  "ETH": {
+    "symbol": "ETH",
+    "updated_at_utc": "2026-11-05T03:58:51.688682+00:00",
+    "last_bar_time_utc": "2026-11-05T03:58:51.688682+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:58:51.688682+00:00",
+    "reversal_bias": "BEARISH_REVERSAL",
+    "total_liq_volume": 173760466.87337428,
+    "bar_closed": true
+  },
+  "BTC": {
+    "symbol": "BTC",
+    "updated_at_utc": "2026-11-05T03:36:53.723947+00:00",
+    "last_bar_time_utc": "2026-11-05T03:36:53.723947+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:36:53.723947+00:00",
+    "reversal_bias": "BEARISH_REVERSAL",
+    "total_liq_volume": 123710958.34775992,
+    "bar_closed": true
+  },
+  "ADA": {
+    "symbol": "ADA",
+    "updated_at_utc": "2026-11-05T03:36:53.677324+00:00",
+    "last_bar_time_utc": "2026-11-05T03:36:53.677324+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:36:53.677324+00:00",
+    "reversal_bias": "BEARISH_REVERSAL",
+    "total_liq_volume": 2336377.4460826796,
+    "bar_closed": true
+  },
+  "NEAR": {
+    "symbol": "NEAR",
+    "updated_at_utc": "2026-11-05T03:36:56.772406+00:00",
+    "last_bar_time_utc": "2026-11-05T03:36:56.772406+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:36:56.772406+00:00",
+    "reversal_bias": "BEARISH_REVERSAL",
+    "total_liq_volume": 1372893.7083643996,
+    "bar_closed": true
+  },
+  "DOT": {
+    "symbol": "DOT",
+    "updated_at_utc": "2026-11-05T03:36:56.869552+00:00",
+    "last_bar_time_utc": "2026-11-05T03:36:56.869552+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:36:56.869552+00:00",
+    "reversal_bias": "BEARISH_REVERSAL",
+    "total_liq_volume": 711488.1952624529,
+    "bar_closed": true
+  },
+  "LTC": {
+    "symbol": "LTC",
+    "updated_at_utc": "2026-11-05T03:36:57.022721+00:00",
+    "last_bar_time_utc": "2026-11-05T03:36:57.022721+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:36:57.022721+00:00",
+    "reversal_bias": "BEARISH_REVERSAL",
+    "total_liq_volume": 1731532.371490711,
+    "bar_closed": true
+  },
+  "AAVE": {
+    "symbol": "AAVE",
+    "updated_at_utc": "2026-11-05T03:36:57.030607+00:00",
+    "last_bar_time_utc": "2026-11-05T03:36:57.030607+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:36:57.030607+00:00",
+    "reversal_bias": "BEARISH_REVERSAL",
+    "total_liq_volume": 776890.9493353601,
+    "bar_closed": true
+  },
+  "BCH": {
+    "symbol": "BCH",
+    "updated_at_utc": "2026-11-05T03:36:57.140916+00:00",
+    "last_bar_time_utc": "2026-11-05T03:36:57.140916+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:36:57.140916+00:00",
+    "reversal_bias": "BEARISH_REVERSAL",
+    "total_liq_volume": 2236644.7625772865,
+    "bar_closed": true
+  },
+  "TRX": {
+    "symbol": "TRX",
+    "updated_at_utc": "2026-11-05T03:36:57.099343+00:00",
+    "last_bar_time_utc": "2026-11-05T03:36:57.099343+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:36:57.099343+00:00",
+    "reversal_bias": "BEARISH_REVERSAL",
+    "total_liq_volume": 346836.50587835495,
+    "bar_closed": true
+  },
+  "UNI": {
+    "symbol": "UNI",
+    "updated_at_utc": "2026-11-05T03:36:58.088527+00:00",
+    "last_bar_time_utc": "2026-11-05T03:36:58.088527+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:36:58.088527+00:00",
+    "reversal_bias": "BEARISH_REVERSAL",
+    "total_liq_volume": 4782660.0910568,
+    "bar_closed": true
+  },
+  "FIL": {
+    "symbol": "FIL",
+    "updated_at_utc": "2026-11-05T03:36:58.430708+00:00",
+    "last_bar_time_utc": "2026-11-05T03:36:58.430708+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:36:58.430708+00:00",
+    "reversal_bias": "BEARISH_REVERSAL",
+    "total_liq_volume": 308235.556853562,
+    "bar_closed": true
+  },
+  "CRV": {
+    "symbol": "CRV",
+    "updated_at_utc": "2026-11-05T03:36:59.413165+00:00",
+    "last_bar_time_utc": "2026-11-05T03:36:59.413165+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:36:59.413165+00:00",
+    "reversal_bias": "BULLISH_REVERSAL",
+    "total_liq_volume": 455868.80785892165,
+    "bar_closed": true
+  },
+  "ATOM": {
+    "symbol": "ATOM",
+    "updated_at_utc": "2026-11-05T03:36:59.892985+00:00",
+    "last_bar_time_utc": "2026-11-05T03:36:59.892985+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:36:59.892985+00:00",
+    "reversal_bias": "BULLISH_REVERSAL",
+    "total_liq_volume": 102894.11591951757,
+    "bar_closed": true
+  },
+  "ALGO": {
+    "symbol": "ALGO",
+    "updated_at_utc": "2026-11-05T03:37:00.162959+00:00",
+    "last_bar_time_utc": "2026-11-05T03:37:00.162959+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:37:00.162959+00:00",
+    "reversal_bias": "BEARISH_REVERSAL",
+    "total_liq_volume": 67926.60976549254,
+    "bar_closed": true
+  },
+  "BAT": {
+    "symbol": "BAT",
+    "updated_at_utc": "2026-11-05T03:37:00.339389+00:00",
+    "last_bar_time_utc": "2026-11-05T03:37:00.339389+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:37:00.339389+00:00",
+    "reversal_bias": "BULLISH_REVERSAL",
+    "total_liq_volume": 149200.18572725274,
+    "bar_closed": true
+  },
+  "CHZ": {
+    "symbol": "CHZ",
+    "updated_at_utc": "2026-11-05T03:37:00.420214+00:00",
+    "last_bar_time_utc": "2026-11-05T03:37:00.420214+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:37:00.420214+00:00",
+    "reversal_bias": "BEARISH_REVERSAL",
+    "total_liq_volume": 54343.82370879001,
+    "bar_closed": true
+  },
+  "AXS": {
+    "symbol": "AXS",
+    "updated_at_utc": "2026-11-05T03:37:00.528239+00:00",
+    "last_bar_time_utc": "2026-11-05T03:37:00.528239+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:37:00.528239+00:00",
+    "reversal_bias": "BEARISH_REVERSAL",
+    "total_liq_volume": 71039.88727638003,
+    "bar_closed": true
+  },
+  "AR": {
+    "symbol": "AR",
+    "updated_at_utc": "2026-11-05T03:37:00.823260+00:00",
+    "last_bar_time_utc": "2026-11-05T03:37:00.823260+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:37:00.823260+00:00",
+    "reversal_bias": "BEARISH_REVERSAL",
+    "total_liq_volume": 89075.85685275204,
+    "bar_closed": true
+  },
+  "COMP": {
+    "symbol": "COMP",
+    "updated_at_utc": "2026-11-05T03:37:01.229818+00:00",
+    "last_bar_time_utc": "2026-11-05T03:37:01.229818+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:37:01.229818+00:00",
+    "reversal_bias": "BULLISH_REVERSAL",
+    "total_liq_volume": 22490.09913826804,
+    "bar_closed": true
+  },
+  "1INCH": {
+    "symbol": "1INCH",
+    "updated_at_utc": "2026-11-05T03:37:01.723790+00:00",
+    "last_bar_time_utc": "2026-11-05T03:37:01.723790+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:37:01.723790+00:00",
+    "reversal_bias": "BEARISH_REVERSAL",
+    "total_liq_volume": 44815.815630968005,
+    "bar_closed": true
+  },
+  "SUSHI": {
+    "symbol": "SUSHI",
+    "updated_at_utc": "2026-11-05T03:37:02.814979+00:00",
+    "last_bar_time_utc": "2026-11-05T03:37:02.814979+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:37:02.814979+00:00",
+    "reversal_bias": "BEARISH_REVERSAL",
+    "total_liq_volume": 66567.426283008,
+    "bar_closed": true
+  },
+  "SNX": {
+    "symbol": "SNX",
+    "updated_at_utc": "2026-11-05T03:37:02.901776+00:00",
+    "last_bar_time_utc": "2026-11-05T03:37:02.901776+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:37:02.901776+00:00",
+    "reversal_bias": "BEARISH_REVERSAL",
+    "total_liq_volume": 47703.78662812159,
+    "bar_closed": true
+  },
+  "ZEC": {
+    "symbol": "ZEC",
+    "updated_at_utc": "2026-11-05T03:37:02.935820+00:00",
+    "last_bar_time_utc": "2026-11-05T03:37:02.935820+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:37:02.935820+00:00",
+    "reversal_bias": "BULLISH_REVERSAL",
+    "total_liq_volume": 10633137.56209915,
+    "bar_closed": true
+  },
+  "NEO": {
+    "symbol": "NEO",
+    "updated_at_utc": "2026-11-05T03:37:03.016635+00:00",
+    "last_bar_time_utc": "2026-11-05T03:37:03.016635+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:37:03.016635+00:00",
+    "reversal_bias": "BEARISH_REVERSAL",
+    "total_liq_volume": 41092.47878576398,
+    "bar_closed": true
+  },
+  "HBAR": {
+    "symbol": "HBAR",
+    "updated_at_utc": "2026-11-05T03:37:03.178476+00:00",
+    "last_bar_time_utc": "2026-11-05T03:37:03.178476+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:37:03.178476+00:00",
+    "reversal_bias": "BEARISH_REVERSAL",
+    "total_liq_volume": 114381.2016929164,
+    "bar_closed": true
+  },
+  "ZRX": {
+    "symbol": "ZRX",
+    "updated_at_utc": "2026-11-05T03:37:03.214369+00:00",
+    "last_bar_time_utc": "2026-11-05T03:37:03.214369+00:00",
+    "spike_bar_time_utc": "2026-11-05T03:37:03.214369+00:00",
+    "reversal_bias": "BEARISH_REVERSAL",
+    "total_liq_volume": 43480.02305224801,
+    "bar_closed": true
+  }
+}

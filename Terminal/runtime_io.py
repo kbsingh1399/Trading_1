@@ -133,7 +133,11 @@ def atomic_append_jsonl(path, records):
 
 
 def atomic_parquet(frame, path, compression='snappy'):
-    _publish(path, lambda p: frame.to_parquet(p, index=False, engine='pyarrow', compression=compression))
+    if hasattr(frame, 'to_parquet'):
+        _publish(path, lambda p: frame.to_parquet(p, index=False, engine='pyarrow', compression=compression))
+    else:
+        import pyarrow.parquet as pq
+        _publish(path, lambda p: pq.write_table(frame, p, compression=compression))
 
 
 def upsert_parquet(frame, path, keys, sort_by=None, limit=None, compression='snappy'):

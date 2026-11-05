@@ -61,6 +61,256 @@ def safe_int(val: Any, default: int = 0) -> int:
         return default
 
 
+def format_vol_display(v: float) -> str:
+    """Formats numeric volume in clean CoinGlass notation (e.g. 27K, 2.9M, 500, 2.0K)."""
+    abs_v = abs(float(v or 0.0))
+    sign = "-" if float(v or 0.0) < 0 else ""
+    if abs_v >= 1_000_000:
+        if abs_v >= 10_000_000:
+            val_str = f"{round(abs_v / 1_000_000)}M"
+        else:
+            val_str = f"{abs_v / 1_000_000:.1f}M"
+    elif abs_v >= 1_000:
+        if abs_v < 10_000:
+            val_str = f"{abs_v / 1_000:.1f}K"
+        else:
+            val_str = f"{round(abs_v / 1_000)}K"
+    else:
+        val_str = f"{int(round(abs_v)):,}"
+    return f"{sign}{val_str}"
+
+
+# CoinGlass Multi-Bar Standard Parameters per Asset
+COINGLASS_BAR_CONFIGS: Dict[str, Dict[str, Any]] = {
+    "ETH": {
+        "range": [{"label": "Range 10", "size": 10.0}],
+        "vol": [{"label": "Volume 50K ETH", "threshold": 50_000.0}, {"label": "Volume 25K ETH", "threshold": 25_000.0}]
+    },
+    "BTC": {
+        "range": [{"label": "Range 200", "size": 200.0}, {"label": "Range 100", "size": 100.0}],
+        "vol": [{"label": "Volume 2.0K BTC", "threshold": 2_000.0}, {"label": "Volume 2.5K BTC", "threshold": 2_500.0}, {"label": "Volume 500 BTC", "threshold": 500.0}]
+    },
+    "SOL": {
+        "range": [{"label": "Range 0.25", "size": 0.25}],
+        "vol": [{"label": "Volume 200K SOL", "threshold": 200_000.0}, {"label": "Volume 250K SOL", "threshold": 250_000.0}]
+    },
+    "XRP": {
+        "range": [{"label": "Range 0.005", "size": 0.005}],
+        "vol": [{"label": "Volume 5.0M XRP", "threshold": 5_000_000.0}]
+    },
+    "DOGE": {
+        "range": [{"label": "Range 0.0002", "size": 0.0002}],
+        "vol": [{"label": "Volume 50M DOGE", "threshold": 50_000_000.0}, {"label": "Volume 25M DOGE", "threshold": 25_000_000.0}]
+    },
+    "BNB": {
+        "range": [{"label": "Range 2.0", "size": 2.0}],
+        "vol": [{"label": "Volume 20K BNB", "threshold": 20_000.0}]
+    },
+    "ADA": {
+        "range": [{"label": "Range 0.002", "size": 0.002}],
+        "vol": [{"label": "Volume 25M ADA", "threshold": 25_000_000.0}]
+    },
+    "LINK": {
+        "range": [{"label": "Range 0.05", "size": 0.05}],
+        "vol": [{"label": "Volume 500K LINK", "threshold": 500_000.0}]
+    },
+    "AVAX": {
+        "range": [{"label": "Range 0.1", "size": 0.1}],
+        "vol": [{"label": "Volume 500K AVAX", "threshold": 500_000.0}]
+    },
+    "NEAR": {
+        "range": [{"label": "Range 0.05", "size": 0.05}],
+        "vol": [{"label": "Volume 1.0M NEAR", "threshold": 1_000_000.0}, {"label": "Volume 2.5M NEAR", "threshold": 2_500_000.0}]
+    },
+    "DOT": {
+        "range": [{"label": "Range 0.05", "size": 0.05}],
+        "vol": [{"label": "Volume 200K DOT", "threshold": 200_000.0}, {"label": "Volume 500K DOT", "threshold": 500_000.0}]
+    },
+    "ATOM": {
+        "range": [{"label": "Range 0.05", "size": 0.05}],
+        "vol": [{"label": "Volume 100K ATOM", "threshold": 100_000.0}, {"label": "Volume 200K ATOM", "threshold": 200_000.0}]
+    },
+    "LTC": {
+        "range": [{"label": "Range 0.5", "size": 0.5}],
+        "vol": [{"label": "Volume 10K LTC", "threshold": 10_000.0}, {"label": "Volume 20K LTC", "threshold": 20_000.0}]
+    },
+    "BCH": {
+        "range": [{"label": "Range 2.0", "size": 2.0}],
+        "vol": [{"label": "Volume 2.0K BCH", "threshold": 2_000.0}, {"label": "Volume 2.5K BCH", "threshold": 2_500.0}]
+    },
+    "TRX": {
+        "range": [{"label": "Range 0.001", "size": 0.001}],
+        "vol": [{"label": "Volume 1.0M TRX", "threshold": 1_000_000.0}, {"label": "Volume 2.0M TRX", "threshold": 2_000_000.0}]
+    },
+    "CRV": {
+        "range": [{"label": "Range 0.005", "size": 0.005}],
+        "vol": [{"label": "Volume 1.0M CRV", "threshold": 1_000_000.0}, {"label": "Volume 2.5M CRV", "threshold": 2_500_000.0}]
+    }
+}
+
+
+def synthesize_range_bars(
+    sub_bars: List[Dict[str, Any]],
+    range_size: float,
+    symbol: str = "ETH",
+    bar_label: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Synthesizes Range Bars from completed sub-bars or trades.
+    A new Range bar closes whenever (bar_high - bar_low) reaches or exceeds range_size.
+    """
+    if not sub_bars or range_size <= 0:
+        return []
+
+    range_bars = []
+    cur_open = None
+    cur_high = -float("inf")
+    cur_low = float("inf")
+    cur_close = None
+    cur_open_t = 0
+    cur_close_t = 0
+    cur_tot_vol = 0.0
+    cur_buy_vol = 0.0
+    cur_sell_vol = 0.0
+    cur_trades = 0.0
+
+    for b in sub_bars:
+        o = float(b.get("open", 0.0))
+        h = float(b.get("high", o))
+        l = float(b.get("low", o))
+        c = float(b.get("close", o))
+        v = float(b.get("total_volume", b.get("volume", 0.0)))
+        bv = float(b.get("buy_volume", v * 0.5))
+        sv = float(b.get("sell_volume", v * 0.5))
+        tr = float(b.get("total_trades", b.get("trades", 0.0)))
+        t_open = int(b.get("open_time_ms", 0))
+        t_close = int(b.get("close_time_ms", t_open + 60000))
+
+        if cur_open is None:
+            cur_open = o
+            cur_open_t = t_open
+            cur_high = h
+            cur_low = l
+        else:
+            cur_high = max(cur_high, h)
+            cur_low = min(cur_low, l)
+
+        cur_close = c
+        cur_close_t = t_close
+        cur_tot_vol += v
+        cur_buy_vol += bv
+        cur_sell_vol += sv
+        cur_trades += tr
+
+        if (cur_high - cur_low) >= range_size:
+            d = cur_buy_vol - cur_sell_vol
+            range_bars.append({
+                "open_time_ms": cur_open_t,
+                "close_time_ms": cur_close_t,
+                "open": cur_open,
+                "high": cur_high,
+                "low": cur_low,
+                "close": cur_close,
+                "total_volume": cur_tot_vol,
+                "buy_volume": cur_buy_vol,
+                "sell_volume": cur_sell_vol,
+                "delta": d,
+                "total_trades": cur_trades,
+                "bar_type": "range",
+                "bar_label": bar_label or f"Range {range_size:g}"
+            })
+            cur_open = None
+            cur_high = -float("inf")
+            cur_low = float("inf")
+            cur_tot_vol = 0.0
+            cur_buy_vol = 0.0
+            cur_sell_vol = 0.0
+            cur_trades = 0.0
+
+    return range_bars
+
+
+def synthesize_volume_bars(
+    sub_bars: List[Dict[str, Any]],
+    vol_threshold: float,
+    symbol: str = "ETH",
+    bar_label: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Synthesizes Volume Bars from completed sub-bars or trades.
+    A new Volume bar closes whenever total accumulated volume reaches or exceeds vol_threshold.
+    """
+    if not sub_bars or vol_threshold <= 0:
+        return []
+
+    vol_bars = []
+    cur_open = None
+    cur_high = -float("inf")
+    cur_low = float("inf")
+    cur_close = None
+    cur_open_t = 0
+    cur_close_t = 0
+    cur_tot_vol = 0.0
+    cur_buy_vol = 0.0
+    cur_sell_vol = 0.0
+    cur_trades = 0.0
+
+    for b in sub_bars:
+        o = float(b.get("open", 0.0))
+        h = float(b.get("high", o))
+        l = float(b.get("low", o))
+        c = float(b.get("close", o))
+        v = float(b.get("total_volume", b.get("volume", 0.0)))
+        bv = float(b.get("buy_volume", v * 0.5))
+        sv = float(b.get("sell_volume", v * 0.5))
+        tr = float(b.get("total_trades", b.get("trades", 0.0)))
+        t_open = int(b.get("open_time_ms", 0))
+        t_close = int(b.get("close_time_ms", t_open + 60000))
+
+        if cur_open is None:
+            cur_open = o
+            cur_open_t = t_open
+            cur_high = h
+            cur_low = l
+        else:
+            cur_high = max(cur_high, h)
+            cur_low = min(cur_low, l)
+
+        cur_close = c
+        cur_close_t = t_close
+        cur_tot_vol += v
+        cur_buy_vol += bv
+        cur_sell_vol += sv
+        cur_trades += tr
+
+        if cur_tot_vol >= vol_threshold:
+            d = cur_buy_vol - cur_sell_vol
+            vol_bars.append({
+                "open_time_ms": cur_open_t,
+                "close_time_ms": cur_close_t,
+                "open": cur_open,
+                "high": cur_high,
+                "low": cur_low,
+                "close": cur_close,
+                "total_volume": cur_tot_vol,
+                "buy_volume": cur_buy_vol,
+                "sell_volume": cur_sell_vol,
+                "delta": d,
+                "total_trades": cur_trades,
+                "bar_type": "vol",
+                "bar_label": bar_label or f"Volume {format_vol_display(vol_threshold)} {symbol}"
+            })
+            cur_open = None
+            cur_high = -float("inf")
+            cur_low = float("inf")
+            cur_tot_vol = 0.0
+            cur_buy_vol = 0.0
+            cur_sell_vol = 0.0
+            cur_trades = 0.0
+
+    return vol_bars
+
+
 def utc_ms_to_ist_str(utc_ms: int) -> str:
     """Converts UTC epoch milliseconds to human-readable IST string."""
     dt_utc = datetime.fromtimestamp(utc_ms / 1000.0, timezone.utc)
@@ -127,7 +377,9 @@ class UniversalFootprintEngine:
         mt5_symbol: Optional[str] = None,
         inverted: bool = False,
         rolling_window: int = 300,
-        inspect_last_n_bars: int = 2
+        inspect_last_n_bars: int = 2,
+        bar_type: str = "time",
+        bar_label: str = "15m"
     ) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
         """
         Analyzes a sequence of bars, computes delta/CVD/POC, detects all footprint signals,
@@ -142,7 +394,7 @@ class UniversalFootprintEngine:
         else:
             return pd.DataFrame(), []
 
-        if df.empty or len(df) < 5:
+        if df.empty:
             return df, []
 
         mt5_sym = mt5_symbol or f"{symbol}.pi"
@@ -262,29 +514,100 @@ class UniversalFootprintEngine:
         # Rolling 20 SMA of volume
         df["vol_sma20"] = df["total_volume"].rolling(window=20, min_periods=5).mean().fillna(df["total_volume"])
 
-        # Signal tracking columns
+        # Per-bar metrics required by CoinGlass Footprint chart
+        df["volume"] = df["total_volume"]
+        if "total_trades" not in df.columns:
+            if "trades" in df.columns:
+                df["total_trades"] = df["trades"]
+            else:
+                df["total_trades"] = 0.0
+        df["trades"] = df["total_trades"]
+
+        # Buy / Sell Ratio
+        zero_vol_mask = (df["buy_volume"] == 0) & (df["sell_volume"] == 0)
+        df["buy_sell_ratio"] = np.where(zero_vol_mask, 1.0, np.round(df["buy_volume"] / np.maximum(df["sell_volume"], 1e-9), 3))
+
+        # Bar VWAP: Typical price VWAP (High + Low + Close) / 3
+        if "vwap" not in df.columns or df["vwap"].isna().all():
+            df["vwap"] = np.round((df["high"] + df["low"] + df["close"]) / 3.0, 6)
+
+        # Open Interest and OI Change
+        if "open_interest" not in df.columns or df["open_interest"].isna().all():
+            if "oi" in df.columns and not df["oi"].isna().all():
+                df["open_interest"] = df["oi"]
+            else:
+                df["open_interest"] = 0.0
+        if "oi_change" not in df.columns or df["oi_change"].isna().all():
+            df["oi_change"] = df["open_interest"].diff().fillna(0.0)
+
+        # Min Delta and Max Delta intra-bar excursions
+        candle_range = np.maximum(df["high"] - df["low"], 1e-9)
+        upper_wick = df["high"] - np.maximum(df["open"], df["close"])
+        lower_wick = np.minimum(df["open"], df["close"]) - df["low"]
+
+        if "min_delta" not in df.columns or df["min_delta"].isna().all():
+            min_d = np.round(np.minimum(0.0, np.minimum(df["delta"], -df["sell_volume"] * (lower_wick / candle_range))), 3)
+            df["min_delta"] = np.where(min_d.abs() < 1e-6, 0.0, min_d)
+
+        if "max_delta" not in df.columns or df["max_delta"].isna().all():
+            max_d = np.round(np.maximum(0.0, np.maximum(df["delta"], df["buy_volume"] * (upper_wick / candle_range))), 3)
+            df["max_delta"] = np.where(max_d.abs() < 1e-6, 0.0, max_d)
+
+        # Bar classification metadata
+        if "bar_type" not in df.columns:
+            df["bar_type"] = bar_type
+        if "bar_label" not in df.columns:
+            df["bar_label"] = bar_label
+
+        # Multi-signal tracking columns against the candle
+        n = len(df)
+        df["signals"] = [[] for _ in range(n)]
+        df["signals_count"] = 0
         df["has_signal"] = False
         df["signal_type"] = ""
         df["signal_side"] = ""
         df["signal_desc"] = ""
 
-        # Detect signals across the entire DataFrame
+        # Detect signals across the entire DataFrame (requires at least 5 bars for historical lookback)
         signals = []
-        n = len(df)
-        start_eval_idx = max(5, n - inspect_last_n_bars)
-        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        if n >= 5:
+            start_eval_idx = max(5, n - inspect_last_n_bars)
+            now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
 
-        for i in range(5, n):
-            b_sigs = self._evaluate_bar_signals(df, i, symbol, mt5_sym, asset_class)
-            if b_sigs:
-                df.at[i, "has_signal"] = True
-                df.at[i, "signal_type"] = "; ".join([s["sig_name"] for s in b_sigs])
-                df.at[i, "signal_side"] = b_sigs[0]["side"]
-                df.at[i, "signal_desc"] = "; ".join([s["title"] for s in b_sigs])
-                # Strict Bar Completion Invariant: Execution signals MUST strictly be on completed, closed bars
-                bar_close_ms = int(df.at[i, "close_time_ms"])
-                if i >= start_eval_idx and bar_close_ms <= now_ms:
-                    signals.extend(b_sigs)
+            for i in range(5, n):
+                b_sigs = self._evaluate_bar_signals(df, i, symbol, mt5_sym, asset_class)
+                if b_sigs:
+                    sig_records = [
+                        {
+                            "sig_code": str(s.get("sig_code", "")),
+                            "sig_name": str(s.get("sig_name", "")),
+                            "side": str(s.get("side", "")),
+                            "price": float(s.get("price", 0.0)),
+                            "title": str(s.get("title", "")),
+                            "description": str(s.get("description", ""))
+                        }
+                        for s in b_sigs
+                    ]
+                    df.at[i, "signals"] = sig_records
+                    df.at[i, "signals_count"] = len(sig_records)
+                    df.at[i, "has_signal"] = True
+                    df.at[i, "signal_type"] = "; ".join([s["sig_name"] for s in b_sigs])
+
+                    # Side agreement
+                    all_bull = all(s["side"] == "bullish" for s in b_sigs)
+                    all_bear = all(s["side"] == "bearish" for s in b_sigs)
+                    if all_bull:
+                        df.at[i, "signal_side"] = "bullish"
+                    elif all_bear:
+                        df.at[i, "signal_side"] = "bearish"
+                    else:
+                        df.at[i, "signal_side"] = "mixed"
+
+                    df.at[i, "signal_desc"] = "; ".join([s["title"] for s in b_sigs])
+                    # Strict Bar Completion Invariant: Execution signals MUST strictly be on completed, closed bars
+                    bar_close_ms = int(df.at[i, "close_time_ms"])
+                    if i >= start_eval_idx and bar_close_ms <= now_ms:
+                        signals.extend(b_sigs)
 
         # Maintain exact rolling window (default 300)
         rolling_df = df.tail(rolling_window).reset_index(drop=True)
@@ -331,6 +654,9 @@ class UniversalFootprintEngine:
         base_sig = {
             "symbol": symbol,
             "mt5_symbol": mt5_sym,
+            "market": "agg-perp",
+            "bar_type": str(row.get("bar_type", "time")),
+            "bar_label": str(row.get("bar_label", "15m")),
             "asset_class": asset_class,
             "time_ms": t_ms,
             "close_time_ms": close_t_ms,
@@ -342,6 +668,9 @@ class UniversalFootprintEngine:
             "open_time_ist": ist_str,
             "close_time_ist": close_ist_str,
             "time_ist": ist_str,
+            "datetime_ist": ist_str,
+            "time_ist_ms": float(t_ms + IST_OFFSET_MS),
+            "bar_interval_ms": float(close_t_ms - t_ms if close_t_ms > t_ms else 900000),
             "price": round(c, 5),
             "volume": v,
             "delta": delta,
@@ -361,7 +690,8 @@ class UniversalFootprintEngine:
         _macro_delta_gate = (asset_class == "Crypto") or (abs(delta_pct) >= self.min_delta_pct / 2.0)
 
         # Bullish Absorption: Heavy selling at low absorbed, closes near high
-        if lower_wick >= 0.30 * bar_range and close_pos >= 0.50 and v >= 1.10 * avg_vol and _macro_delta_gate:
+        # CoinGlass ETH specification: "Selling absorbed at the low (20%+ of bar selling, closed near high, bullish)"
+        if lower_wick >= 0.20 * bar_range and close_pos >= 0.55 and v >= 0.70 * avg_vol and _macro_delta_gate:
             sell_v = safe_float(row.get("sell_volume"), v * 0.5)
             bar_signals.append({
                 **base_sig,
@@ -369,11 +699,12 @@ class UniversalFootprintEngine:
                 "sig_name": "Absorption",
                 "side": "bullish",
                 "title": "Selling absorbed at the low",
-                "description": f"{safe_int(sell_v):,} taker selling absorbed at the low, yet closed near high, bullish"
+                "description": f"{format_vol_display(sell_v)} of taker selling at the low (20%+ of the bar's selling), yet closed near the high, bullish"
             })
 
         # Bearish Absorption: Heavy buying at high absorbed, closes near low
-        elif upper_wick >= 0.30 * bar_range and close_pos <= 0.50 and v >= 1.10 * avg_vol and _macro_delta_gate:
+        # CoinGlass ETH specification: "Buying absorbed at the high. 27K taker buying at the high (30%+ of bar buying), yet closed near low, bearish"
+        elif upper_wick >= 0.25 * bar_range and close_pos <= 0.45 and v >= 0.70 * avg_vol and _macro_delta_gate:
             buy_v = safe_float(row.get("buy_volume"), v * 0.5)
             bar_signals.append({
                 **base_sig,
@@ -381,7 +712,7 @@ class UniversalFootprintEngine:
                 "sig_name": "Absorption",
                 "side": "bearish",
                 "title": "Buying absorbed at the high",
-                "description": f"{safe_int(buy_v):,} taker buying absorbed at the high, yet closed near low, bearish"
+                "description": f"{format_vol_display(buy_v)} of taker buying at the high (30%+ of the bar's buying), yet closed near the low, bearish"
             })
 
         # ---------------------------------------------------------------------
@@ -417,11 +748,14 @@ class UniversalFootprintEngine:
         recent_lows = df["low"].iloc[idx - lookback:idx].values
         recent_highs = df["high"].iloc[idx - lookback:idx].values
         recent_cvds = df["cumulative_delta"].iloc[idx - lookback:idx].values
+        recent_times = df["open_time_ms"].iloc[idx - lookback:idx].values
 
         # Bullish Swing Div: Lower low than prior swing, but CVD is higher
         prior_min_idx = np.argmin(recent_lows)
         prior_min_low = recent_lows[prior_min_idx]
         prior_min_cvd = recent_cvds[prior_min_idx]
+        prior_min_time_ms = recent_times[prior_min_idx]
+        prior_time_str = datetime.fromtimestamp(prior_min_time_ms / 1000.0, timezone.utc).strftime("%m-%d %H:%M")
         if l < prior_min_low and cvd > prior_min_cvd and close_pos >= 0.40:
             diff_cvd = cvd - prior_min_cvd
             bar_signals.append({
@@ -430,13 +764,15 @@ class UniversalFootprintEngine:
                 "sig_name": "Bull div",
                 "side": "bullish",
                 "title": "Lower low, higher Cumulative Delta",
-                "description": f"Lower low, yet Cumulative Delta rose {safe_int(diff_cvd):,} over swing. Sellers aren't following through, bullish"
+                "description": f"Lower low than {prior_time_str}, yet Cumulative Delta rose {format_vol_display(diff_cvd)} over the swing. Sellers aren't following through, bullish"
             })
 
         # Bearish Swing Div: Higher high than prior swing, but CVD is lower
         prior_max_idx = np.argmax(recent_highs)
         prior_max_high = recent_highs[prior_max_idx]
         prior_max_cvd = recent_cvds[prior_max_idx]
+        prior_max_time_ms = recent_times[prior_max_idx]
+        prior_time_str = datetime.fromtimestamp(prior_max_time_ms / 1000.0, timezone.utc).strftime("%m-%d %H:%M")
         if h > prior_max_high and cvd < prior_max_cvd and close_pos <= 0.60:
             diff_cvd = prior_max_cvd - cvd
             bar_signals.append({
@@ -445,7 +781,7 @@ class UniversalFootprintEngine:
                 "sig_name": "Bear div",
                 "side": "bearish",
                 "title": "Higher high, lower Cumulative Delta",
-                "description": f"Higher high, yet Cumulative Delta fell {safe_int(diff_cvd):,} over swing. Buyers aren't following through, bearish"
+                "description": f"Higher high than {prior_time_str}, yet Cumulative Delta fell {format_vol_display(diff_cvd)} over the swing. Buyers aren't following through, bearish"
             })
 
         # ---------------------------------------------------------------------
@@ -463,7 +799,7 @@ class UniversalFootprintEngine:
                     "sig_name": "Buyer exhaustion",
                     "side": "bearish",
                     "title": "Buyer exhaustion at high",
-                    "description": f"New 10-bar high on depleted volume ({safe_int(v):,} vs avg {safe_int(avg_vol):,}), closed in lower half, bearish"
+                    "description": "New 10-bar high with almost no volume in the top 10% of the bar, closed in the lower half, bearish"
                 })
 
             # Seller exhaustion at low
@@ -474,7 +810,7 @@ class UniversalFootprintEngine:
                     "sig_name": "Seller exhaustion",
                     "side": "bullish",
                     "title": "Seller exhaustion at low",
-                    "description": f"New 10-bar low on depleted volume ({safe_int(v):,} vs avg {safe_int(avg_vol):,}), closed in upper half, bullish"
+                    "description": "New 10-bar low with almost no volume in the bottom 10% of the bar, closed in the upper half, bullish"
                 })
 
         # ---------------------------------------------------------------------
@@ -487,24 +823,26 @@ class UniversalFootprintEngine:
 
             # Trapped shorts: Broke 5-bar low, but bar closed back inside
             if l < np.min(last5_lows) and c > np.min(last5_lows) and close_pos >= 0.50:
+                sell_v = safe_float(row.get("sell_volume"), v * 0.5)
                 bar_signals.append({
                     **base_sig,
                     "sig_code": "trap",
                     "sig_name": "Trapped shorts",
                     "side": "bullish",
                     "title": "Failed breakdown",
-                    "description": f"Broke 5-bar low with aggressive selling, then rallied back. Breakdown sellers trapped, bullish"
+                    "description": f"Broke the 5-bar low on {format_vol_display(sell_v)} of taker selling at the bottom, then rallied back into the upper part of the bar 1 bar later. Breakdown sellers trapped, bullish"
                 })
 
             # Trapped longs: Broke 5-bar high, but bar closed back inside
             if h > np.max(last5_highs) and c < np.max(last5_highs) and close_pos <= 0.50:
+                buy_v = safe_float(row.get("buy_volume"), v * 0.5)
                 bar_signals.append({
                     **base_sig,
                     "sig_code": "trap",
                     "sig_name": "Trapped longs",
                     "side": "bearish",
                     "title": "Failed breakout",
-                    "description": f"Broke 5-bar high with aggressive buying, then fell back. Breakout buyers trapped, bearish"
+                    "description": f"Broke the 5-bar high on {format_vol_display(buy_v)} of taker buying at the top, then fell back into the lower part of the bar 1 bar later. Breakout buyers trapped, bearish"
                 })
 
         return bar_signals
