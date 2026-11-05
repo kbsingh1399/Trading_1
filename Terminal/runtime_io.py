@@ -135,6 +135,8 @@ def atomic_append_jsonl(path, records):
 def atomic_parquet(frame, path, compression='snappy'):
     if hasattr(frame, 'to_parquet'):
         _publish(path, lambda p: frame.to_parquet(p, index=False, engine='pyarrow', compression=compression))
+    elif hasattr(frame, 'write_parquet'):
+        _publish(path, lambda p: frame.write_parquet(p, compression=compression))
     else:
         import pyarrow.parquet as pq
         _publish(path, lambda p: pq.write_table(frame, p, compression=compression))
@@ -190,18 +192,21 @@ def completed_candles(frame, now_ms=None, allow_session_breaks=False):
         frame[col] = pd.to_numeric(frame[col], errors='raise')
     frame = frame[(frame.close_time_ms <= now_ms) & (frame.close_time_ms > frame.open_time_ms)]
     frame = frame.sort_values('open_time_ms').drop_duplicates('open_time_ms', keep='last')
-    if frame.empty or now_ms - frame.close_time_ms.iloc[-1] > 1800000:
+    is_tradfi = False
+    if 'asset_class' in frame.columns and not frame.empty:
+        ac = str(frame['asset_class'].iloc[0]).strip().lower()
+        if ac in {'forex', 'indices', 'metals', 'commodities'}:
+            is_tradfi = True
+
+    # Staleness check: enforce 30m window on continuous 24/7 markets (Crypto),
+    # but allow weekend/holiday session breaks for TradFi assets.
+    if frame.empty or (not (allow_session_breaks or is_tradfi) and (now_ms - frame.close_time_ms.iloc[-1] > 1800000)):
         raise ValueError('Completed candle history stale or empty')
     if len(frame) > 1:
         diffs = np.diff(frame.open_time_ms.to_numpy(dtype=np.int64))
-        is_tradfi = False
-        if 'asset_class' in frame.columns:
-            ac = str(frame['asset_class'].iloc[0]).strip().lower()
-            if ac in {'forex', 'indices', 'metals', 'commodities'}:
-                is_tradfi = True
         if allow_session_breaks or is_tradfi:
             # Valid TradFi intervals: exact 15m (900k ms) or legitimate session/weekend breaks (multiples of 15m >= 1h)
-            valid = (diffs == 900000) | ((diffs >= 3600000) & (diffs % 900000 == 0))
+            valid = (diffs == 900000) | ((diffs >= 1800000) & (diffs % 900000 == 0))
             if not np.all(valid):
                 raise ValueError('Non-contiguous M15 candle history')
         else:

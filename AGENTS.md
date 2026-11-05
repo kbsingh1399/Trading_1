@@ -39,11 +39,9 @@ This repository follows Google's **Elephant-Goldfish Model (EGM)** for architect
 - **Never Confuse Code Presence with Operational Runtime**: The presence of an import, class, or unit test is NOT evidence that a background process is active or data is flowing. Before claiming any pipeline or daemon is running, the agent MUST explicitly query the operating system process table (`Get-CimInstance Win32_Process`) and active background tasks (`manage_task list`).
 - **Physical Disk Persistence Verification**: Never claim a data dump is healthy without inspecting physical files on disk (`Path.stat().st_size > 0` and recent `st_mtime`). An empty directory, unwritten cache, or stagnant timestamp indicates a halted pipeline.
 - **Zero-Latency Evaluation Path Invariant**: Real-time signal evaluation paths must NEVER perform blocking synchronous network fetches. All external data streams (Footprint, Whales, Liquidations, Heatmaps, Hyperdash) must be kept warm by dedicated background daemons, allowing signal evaluation to query hot memory/disk in <1ms.
-- **The 6 Authorized Background Daemons**:
-  1. `1_coinglass_footprint_scraper.py --daemon` (Pillar 1: Footprint & Tape)
-  2. `2_coinglass_whales.py --daemon` (Pillar 2: Whale Book & Sweeps)
-  3. `3_coinglass_liquidation_levels.py --daemon` (Pillar 3: Liquidation Heatmap)
-  4. `4_coinglass_tv_scraper.py --daemon` (Pillar 4: Live TV Liquidation Flushes)
-  5. `Terminal/hyperdash_intel_engine.py --daemon` (Pillar 5: Hyperdash Institutional Intelligence)
-  6. `5_wake_on_footprint_signal.py --daemon` (Pillar 6: Realtime Sentinel & Delta Execution Bridge)
+- **The Authorized Background Daemons (Pure Free API Architecture)**:
+  1. `Terminal/unified_api_footprint_engine.py --daemon` (Pillars 1-4: 4-Exchange Aggregated Footprint, Order Flow Tape, Whale Depth, Liquidation & Auction Engine)
+  2. `Terminal/hyperdash_intel_engine.py --daemon` (Pillar 5: Hyperdash Institutional Intelligence)
+  3. `5_wake_on_footprint_signal.py --daemon` (Pillar 6: Realtime Sentinel & Delta Execution Bridge)
+  *(Legacy browser scrapers 1_, 2_, 3_, 4_coinglass_*.py are strictly decommissioned and replaced by high-speed free APIs)*
 

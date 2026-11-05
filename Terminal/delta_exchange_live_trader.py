@@ -1274,6 +1274,30 @@ class DeltaExchangeTrader:
             logger.warning("Delta live dispatch blocked: LIVE_DISPATCH_ENABLED is False (fail-closed operator safety gate).")
             return {"ok": False, "status": "BLOCKED_BY_SAFETY_GATE", "reason": "LIVE_DISPATCH_ENABLED_IS_FALSE"}
 
+        # Strict Bar Completion & Confluence Invariants (Delta Exchange Live Execution)
+        bar_type = str(signal.get("bar_type") or "").lower()
+        if bar_type != "time":
+            logger.warning(f"Live order blocked: non-time bar type '{bar_type}' prohibited from live execution.")
+            return {"ok": False, "status": "REJECTED", "reason": f"NON_TIME_BAR_EXECUTION_PROHIBITED: {bar_type or 'MISSING'}"}
+        
+        bar_label = str(signal.get("bar_label") or "15m").lower()
+        if bar_label.startswith("5m") or ("15m" not in bar_label and bar_label != ""):
+            logger.warning(f"Live order blocked: non-15m bar label '{bar_label}' prohibited from live execution.")
+            return {"ok": False, "status": "REJECTED", "reason": f"NON_15M_INTERVAL_PROHIBITED: {bar_label}"}
+
+        sig_time_ms = int(signal.get("time_ms") or signal.get("open_time_ms") or 0)
+        if sig_time_ms <= 0 or (sig_time_ms % 900_000 != 0):
+            logger.warning(f"Live order blocked: signal timestamp {sig_time_ms} is not on a valid 15m candle boundary.")
+            return {"ok": False, "status": "REJECTED", "reason": f"NON_15M_INTERVAL_PROHIBITED: {sig_time_ms}"}
+
+        score = float(signal.get("confluence_score", 0.0) or 0.0)
+        if score < 75.0:
+            return {"ok": False, "status": "REJECTED", "reason": f"CONFLUENCE_SCORE_BELOW_THRESHOLD: {score:.1f} < 75.0"}
+        if signal.get("validation_errors"):
+            return {"ok": False, "status": "REJECTED", "reason": f"VALIDATION_VETO: {signal.get('validation_errors')}"}
+        if signal.get("is_actionable") is False:
+            return {"ok": False, "status": "REJECTED", "reason": "SIGNAL_MARKED_NOT_ACTIONABLE"}
+
         sym = signal.get("symbol", "")
         direction = signal.get("direction", "").upper()
         if direction not in ("BUY", "SELL"):
@@ -1370,10 +1394,13 @@ class DeltaExchangeTrader:
 
         # Strict Single Source of Truth for Max Open Positions (AGENTS.md Rule 3: Max 2 positions including in-flight)
         # Exclude sub-dollar dust positions (< $1.00 notional) from blocking institutional risk slots
-        institutional_pos = [
-            p for p in active_pos
-            if (abs(int(p.get("size", 0))) * float(p.get("mark_price", 0.0) or p.get("entry_price", 0.0) or 0.0)) >= 1.0
-        ]
+        institutional_pos = []
+        for p in active_pos:
+            sz = abs(int(float(p.get("size", 0) or 0)))
+            c_val = float(p.get("contract_value") or prod.get("contract_value") or 1.0)
+            px = float(p.get("mark_price", 0.0) or p.get("entry_price", 0.0) or 0.0)
+            if (sz * c_val * px) >= 1.0:
+                institutional_pos.append(p)
         effective_positions = len(institutional_pos) + len(self._inflight_orders)
         if effective_positions >= MAX_DELTA_CONCURRENT_POSITIONS:
             return {
@@ -1498,7 +1525,7 @@ class DeltaExchangeTrader:
         # PATCH P2: harmonized with the 20.0% universal free-margin floor - the
         # sizedown target is now the headroom ABOVE the floor (avail - 20% of
         # balance), not a flat 80% of available margin.
-        if avail_margin > 0.02 and contract_val > 0:
+        if contract_val > 0:
             req_margin = (entry * contract_val * size) / float(leverage)
             margin_headroom = max(0.0, avail_margin - MARGIN_BUFFER_FLOOR_PCT * total_balance_agg)
             if req_margin > margin_headroom:

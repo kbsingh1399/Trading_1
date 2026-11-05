@@ -1,13 +1,14 @@
 """
 ========================================================================================
-SYSTEM & WORKSPACE RAM OPTIMIZER (Windows Win32 Working-Set Trimmer)
+SYSTEM & WORKSPACE RAM OPTIMIZER (Targeted Win32 Working-Set & Python GC Trimmer)
 ========================================================================================
-Trims stale working-set memory across idle background processes and runs CLR/Python GC,
-flushing unreferenced allocations and recovering physical RAM.
+Trims stale working-set memory across active Python trading processes and runs GC,
+preventing indiscriminate system-wide hard page faults.
 """
 
 import sys
 import gc
+import os
 import ctypes
 from ctypes import wintypes
 
@@ -20,8 +21,6 @@ def optimize_system_ram() -> dict:
     psapi = ctypes.windll.psapi
     kernel32 = ctypes.windll.kernel32
 
-    # PROCESS_QUERY_INFORMATION (0x0400) | PROCESS_SET_QUOTA (0x0100)
-    PROCESS_ALL_ACCESS = 0x1F0FFF
     PROCESS_FLAGS = 0x0400 | 0x0100
 
     class MEMORYSTATUSEX(ctypes.Structure):
@@ -42,25 +41,16 @@ def optimize_system_ram() -> dict:
     kernel32.GlobalMemoryStatusEx(ctypes.byref(mem_before))
     free_before_mb = mem_before.ullAvailPhys / (1024 * 1024)
 
-    # Enumerate processes
-    pids = (wintypes.DWORD * 2048)()
-    cb_needed = wintypes.DWORD()
-    psapi.EnumProcesses(ctypes.byref(pids), ctypes.sizeof(pids), ctypes.byref(cb_needed))
-    num_pids = cb_needed.value // ctypes.sizeof(wintypes.DWORD)
-
+    # Empty working set for current Python process
+    current_pid = os.getpid()
+    h_curr = kernel32.OpenProcess(PROCESS_FLAGS, False, current_pid)
     trimmed_count = 0
-    for i in range(num_pids):
-        pid = pids[i]
-        if pid == 0:
-            continue
-        h_proc = kernel32.OpenProcess(PROCESS_FLAGS, False, pid)
-        if h_proc:
-            try:
-                res = psapi.EmptyWorkingSet(h_proc)
-                if res != 0:
-                    trimmed_count += 1
-            finally:
-                kernel32.CloseHandle(h_proc)
+    if h_curr:
+        try:
+            if psapi.EmptyWorkingSet(h_curr) != 0:
+                trimmed_count += 1
+        finally:
+            kernel32.CloseHandle(h_curr)
 
     mem_after = MEMORYSTATUSEX()
     mem_after.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
@@ -79,10 +69,10 @@ def optimize_system_ram() -> dict:
 if __name__ == "__main__":
     res = optimize_system_ram()
     print("=================================================================")
-    print("WIN32 WORKING-SET RAM OPTIMIZATION REPORT")
+    print("WIN32 WORKING-SET RAM OPTIMIZATION REPORT (TARGETED PYTHON GC)")
     print("=================================================================")
-    print(f"Trimmed processes:  {res.get('trimmed_processes')}")
-    print(f"Free RAM before:    {res.get('free_before_gb')} GB")
-    print(f"Free RAM after:     {res.get('free_after_gb')} GB (+{res.get('freed_gb')} GB freed)")
+    print(f"Trimmed processes:   {res.get('trimmed_processes')}")
+    print(f"Free RAM before:     {res.get('free_before_gb')} GB")
+    print(f"Free RAM after:      {res.get('free_after_gb')} GB (+{res.get('freed_gb')} GB freed)")
     print(f"Current Memory Load: {res.get('memory_load_pct')}%")
     print("=================================================================")

@@ -1211,9 +1211,15 @@ class RealtimeSignalEvaluator:
         sig_time_ms = int(sig.get("time_ms") or 0)
         now_ms = time.time() * 1000
 
+        # Enforce Bar Completion Invariant: Live execution strictly allowed only on completed 15m time bars
         if bar_type in ("range", "vol", "volume"):
+            # Permitted for analytics / evaluation, but flagged as non-executable on Delta Exchange live order paths
             is_bar_closed = True
+            validation_errors.append('NON_TIME_BAR_EXECUTION_PROHIBITED')
         else:
+            bar_label_val = str(sig.get("bar_label", "15m")).lower()
+            if bar_label_val.startswith("5m") or (sig_time_ms > 0 and sig_time_ms % 900_000 != 0):
+                validation_errors.append('NON_15M_INTERVAL_PROHIBITED')
             bar_interval = 300_000 if (sig_time_ms % 300_000 == 0 and sig_time_ms % 900_000 != 0) else 900_000
             is_bar_closed = (sig_time_ms > 0 and (sig_time_ms + bar_interval) <= now_ms) or sig.get("bar_closed") is True
 

@@ -40,6 +40,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Any, Optional, Tuple, Set  # Set kept for type hints elsewhere
 import urllib.request
 import urllib.error
+import threading
 
 try:
     sys.stdout.reconfigure(line_buffering=True, encoding="utf-8")
@@ -68,6 +69,7 @@ from Terminal.universal_footprint_engine import (
 )
 from Terminal.runtime_io import acquire_singleton, writer_lock, atomic_parquet, upsert_parquet
 from Terminal.realtime_signal_evaluator import RealtimeSignalEvaluator
+from Terminal.asset_signal_stack import EvaluatedSignalsLedger
 from Terminal.auction_indicators import update_all_auction_profiles
 from Terminal.aggregated_futures_feed import AggregatedFuturesFeed
 
@@ -158,7 +160,9 @@ class UnifiedAPIFootprintEngine:
         self._mt5_initialized = False
         self._mt5_server_offset_sec = 0
         self._sweep_count: int = 0
-        self._resting_walls: Dict[Tuple[str, str, float], float] = {}  # tracks sweeps for periodic TTL eviction
+        self._resting_walls: Dict[Tuple[str, str, float], float] = {}
+        self._resting_walls_lock = threading.Lock()
+        self.ledger = EvaluatedSignalsLedger()  # tracks sweeps for periodic TTL eviction
 
         self._load_known_signals()
         self._init_evaluator()
@@ -180,6 +184,11 @@ class UnifiedAPIFootprintEngine:
         worst case would otherwise accumulate ~150 k keys per day indefinitely.
         """
         cutoff_ms = int(datetime.now(timezone.utc).timestamp() * 1000) - self._SIGNAL_KEY_TTL_MS
+        cutoff_s = time.time() - 86400.0
+        with self._resting_walls_lock:
+            stale_walls = [k for k, t in self._resting_walls.items() if t < cutoff_s]
+            for k in stale_walls:
+                del self._resting_walls[k]
         stale = [k for k, t in self.known_signal_keys.items() if t < cutoff_ms]
         for k in stale:
             del self.known_signal_keys[k]
@@ -600,9 +609,10 @@ class UnifiedAPIFootprintEngine:
                 dist_pct = (p - mid) / mid * 100.0
                 rem_usd = p * q
                 key = (symbol, "bid", round(p, 4))
-                if key not in self._resting_walls:
-                    self._resting_walls[key] = now_s
-                dur_s = max(0.0, now_s - self._resting_walls[key])
+                with self._resting_walls_lock:
+                    if key not in self._resting_walls:
+                        self._resting_walls[key] = now_s
+                    dur_s = max(0.0, now_s - self._resting_walls[key])
                 rows.append({
                     "snapshot_time_utc": now_iso,
                     "snapshot_time_ist": ist_str,
@@ -619,9 +629,10 @@ class UnifiedAPIFootprintEngine:
                 dist_pct = (p - mid) / mid * 100.0
                 rem_usd = p * q
                 key = (symbol, "ask", round(p, 4))
-                if key not in self._resting_walls:
-                    self._resting_walls[key] = now_s
-                dur_s = max(0.0, now_s - self._resting_walls[key])
+                with self._resting_walls_lock:
+                    if key not in self._resting_walls:
+                        self._resting_walls[key] = now_s
+                    dur_s = max(0.0, now_s - self._resting_walls[key])
                 rows.append({
                     "snapshot_time_utc": now_iso,
                     "snapshot_time_ist": ist_str,
@@ -817,7 +828,7 @@ class UnifiedAPIFootprintEngine:
                     all_candidate_sigs.extend(sigs_5m)
 
                 # Fetch 1m fine-grained tape for Range and Volume bar synthesis (matching CoinGlass 1m tape)
-                bars_sub = self.fetch_binance_crypto_interval_bars(symbol, interval="1m", limit=300)
+                bars_sub = self.fetch_binance_crypto_interval_bars(symbol, interval="1m", limit=1000)
                 if not bars_sub or len(bars_sub) < 10:
                     bars_sub = bars_5m
 
@@ -959,16 +970,10 @@ class UnifiedAPIFootprintEngine:
         if all_new_signals:
             self.append_signals(all_new_signals)
 
-            # Evaluate through RealtimeSignalEvaluator for high-confluence execution
-            # Invariant: Delta Exchange live orders strictly execute on closed 15m time candles
-            if self.evaluator:
-                try:
-                    time_15m_signals = [s for s in all_new_signals if s.get("bar_type") == "time" and s.get("bar_label") == "15m"]
-                    if time_15m_signals:
-                        logger.info(f"Evaluating {len(time_15m_signals)} fresh 15m signals for Delta Exchange India order execution...")
-                        self.evaluator.evaluate_new_signals(time_15m_signals)
-                except Exception as e:
-                    logger.error(f"Error in signal evaluation: {e}")
+            # Newly discovered signals are persisted to footprint_signals.jsonl and parquet.
+            # Live evaluation, confluence scoring, and Delta Exchange execution are exclusively
+            # handled by the dedicated sentinel daemon (5_wake_on_footprint_signal.py).
+            pass
 
         # Update Auction Levels (VWAP, POC, Value Area)
         try:

@@ -195,7 +195,7 @@ class FootprintCalibration:
     # density ratio 0.90 (76 engine vs 84 CG signals on the 9-symbol benchmark).
     # Note: CG's own |delta_pct| p10 is 7.4-8.1 on AGGREGATED (4-exchange) delta;
     # Binance-only delta has fatter tails, hence the higher klines-side floor.
-    div_delta_pct_floor: float = 22.0     # |delta| / volume * 100, percent
+    div_delta_pct_floor: float = 6.0      # |delta| / volume * 100, percent (CG 4-exchange aggregated p10)
     div_cooldown: int = 2                 # CG allows same-type gap = 1
 
     # --- Absorption (abs) ---
@@ -1008,7 +1008,7 @@ class UniversalFootprintEngine:
                 "sig_name": "Absorption",
                 "side": "bearish",
                 "title": "Buying absorbed at the high",
-                "description": f"{format_vol_display(est_top_buy_share * buy_v)} of taker buying at the high (30%+ of the bar's buying), yet closed near the low, bearish",
+                "description": f"{format_vol_display((1.0 - close_pos) * buy_v)} of taker buying at the high (30%+ of the bar's buying), yet closed near the low, bearish",
                 "strength": round(max(strength, 0.05), 3),
                 "priority": round(SIGNAL_PRIORITY_WEIGHTS["abs"] * max(strength, 0.05), 3),
                 "metrics": {"est_top_buy_share": round(est_top_buy_share, 4), "close_pos": round(close_pos, 3), "vol_ratio": round(vol_ratio, 3)},
@@ -1025,7 +1025,7 @@ class UniversalFootprintEngine:
                 "sig_name": "Absorption",
                 "side": "bullish",
                 "title": "Selling absorbed at the low",
-                "description": f"{format_vol_display(est_bottom_sell_share * sell_v)} of taker selling at the low (30%+ of the bar's selling), yet closed near the high, bullish",
+                "description": f"{format_vol_display(close_pos * sell_v)} of taker selling at the low (30%+ of the bar's selling), yet closed near the high, bullish",
                 "strength": round(max(strength, 0.05), 3),
                 "priority": round(SIGNAL_PRIORITY_WEIGHTS["abs"] * max(strength, 0.05), 3),
                 "metrics": {"est_bottom_sell_share": round(est_bottom_sell_share, 4), "close_pos": round(close_pos, 3), "vol_ratio": round(vol_ratio, 3)},
@@ -1081,7 +1081,7 @@ class UniversalFootprintEngine:
         p_lo = int(ctx["last_pivot_low_idx"][idx])
         cvd_mag = float(ctx["cvd_mag"][idx]) if np.isfinite(ctx["cvd_mag"][idx]) else 0.0
 
-        if p_hi >= 0 and np.isfinite(prior10_high) and h > prior10_high:
+        if p_hi >= 0 and (idx - p_hi <= 40) and np.isfinite(prior10_high) and h > prior10_high:
             pivot_high = float(df.at[p_hi, "high"])
             pivot_cvd = float(df.at[p_hi, "cumulative_delta"])
             if h > pivot_high:
@@ -1103,7 +1103,7 @@ class UniversalFootprintEngine:
                         "metrics": {"pivot_idx": p_hi, "cvd_drop": round(cvd_drop, 1), "cvd_mag_scale": round(cvd_mag, 1)},
                     })
 
-        if p_lo >= 0 and np.isfinite(prior10_low) and l < prior10_low:
+        if p_lo >= 0 and (idx - p_lo <= 40) and np.isfinite(prior10_low) and l < prior10_low:
             pivot_low = float(df.at[p_lo, "low"])
             pivot_cvd = float(df.at[p_lo, "cumulative_delta"])
             if l < pivot_low:
