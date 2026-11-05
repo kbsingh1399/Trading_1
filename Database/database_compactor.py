@@ -236,15 +236,17 @@ def optimize_parquet_files(directories: Optional[List[str]] = None, level: int =
         for pfile in target_dir.glob("*.parquet"):
             try:
                 orig_size = pfile.stat().st_size
-                pf = pq.ParquetFile(pfile)
-                # Check if already using ZSTD
-                codecs = {pf.metadata.row_group(0).column(c).compression for c in range(pf.metadata.num_columns)} if pf.metadata.num_row_groups > 0 else set()
-                if "ZSTD" in codecs and len(codecs) == 1:
-                    total_orig_bytes += orig_size
-                    total_new_bytes += orig_size
-                    continue
+                table = None
+                with open(pfile, "rb") as bf:
+                    pf = pq.ParquetFile(bf)
+                    codecs = {pf.metadata.row_group(0).column(c).compression for c in range(pf.metadata.num_columns)} if pf.metadata.num_row_groups > 0 else set()
+                    if "ZSTD" in codecs and len(codecs) == 1:
+                        total_orig_bytes += orig_size
+                        total_new_bytes += orig_size
+                        continue
+                    bf.seek(0)
+                    table = pq.read_table(bf)
 
-                table = pq.read_table(pfile)
                 tmp_file = pfile.with_suffix(".tmp_zstd")
                 pq.write_table(table, tmp_file, compression="zstd", compression_level=level, use_dictionary=True)
                 new_size = tmp_file.stat().st_size
