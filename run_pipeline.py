@@ -72,8 +72,46 @@ SCHEDULE = {
 }
 
 
+import urllib.request
+import json
+
 def to_ist_now():
     return datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%Y-%m-%d %H:%M:%S IST")
+
+
+def get_open_tabs_snapshot() -> set:
+    """Snapshots the set of tab IDs currently open in Chrome."""
+    try:
+        req = urllib.request.Request("http://127.0.0.1:9222/json", headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            tabs = json.loads(resp.read().decode())
+            return {t.get("id") for t in tabs if t.get("type") == "page"}
+    except Exception:
+        return set()
+
+
+def cleanup_scraper_orphaned_tabs(baseline_tab_ids: set):
+    """
+    Closes any new tab that was created during a scraper's execution that was NOT
+    present in baseline_tab_ids, ensuring no scraper leaves stranded tabs even upon crash or timeout.
+    """
+    try:
+        req = urllib.request.Request("http://127.0.0.1:9222/json", headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            tabs = json.loads(resp.read().decode())
+            for t in tabs:
+                tid = t.get("id")
+                url = t.get("url", "").lower()
+                # If tab was created during this scraper run AND is a CoinGlass route
+                if tid and tid not in baseline_tab_ids:
+                    if any(k in url for k in ["coinglass.com/large-orderbook", "coinglass.com/liquidation-levels", "coinglass.com/tv/", "coinglass.com/footprint", "bot="]):
+                        try:
+                            urllib.request.urlopen(f"http://127.0.0.1:9222/json/close/{tid}", timeout=2)
+                            logger.info(f"🧹 Orchestrator cleaned up orphaned scraper tab ({tid}): {t.get('title')}")
+                        except Exception:
+                            pass
+    except Exception as e:
+        logger.debug(f"Orchestrator tab cleanup check: {e}")
 
 
 def run_scraper(script_name: str, desc: str, flag: str = "--once") -> bool:
@@ -82,6 +120,7 @@ def run_scraper(script_name: str, desc: str, flag: str = "--once") -> bool:
         logger.error(f"Script not found: {script_path}")
         return False
 
+    baseline_tabs = get_open_tabs_snapshot()
     logger.info(f"==> Launching {desc} [{script_name}] at {to_ist_now()}...")
     t0 = time.time()
     try:
@@ -102,6 +141,8 @@ def run_scraper(script_name: str, desc: str, flag: str = "--once") -> bool:
     except Exception as e:
         logger.error(f"❌ Error running {desc}: {e}")
         return False
+    finally:
+        cleanup_scraper_orphaned_tabs(baseline_tabs)
 
 
 def run_all_sequentially():

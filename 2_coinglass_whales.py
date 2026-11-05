@@ -79,7 +79,7 @@ def cleanup_orphan_tabs(keep_tab_id: Optional[str] = None):
             for t in tabs:
                 tid = t.get("id")
                 url = t.get("url", "").lower()
-                if tid != keep_tab_id and "bot=whale_scraper" in url:
+                if tid != keep_tab_id and ("bot=whale_scraper" in url or "large-orderbook-statistics" in url):
                     try:
                         urllib.request.urlopen(f"http://127.0.0.1:9222/json/close/{tid}", timeout=2)
                         logger.info(f"Reaped orphaned whale tab ({tid})")
@@ -228,7 +228,7 @@ async def cdp_eval(ws, expr: str, msg_id: int = 1, await_promise: bool = False):
 
 
 async def harvest_whale_orders_for_symbol(ws, symbol: str) -> dict:
-    url = f"https://www.coinglass.com/large-orderbook-statistics?symbol={symbol}"
+    url = f"https://www.coinglass.com/large-orderbook-statistics?symbol={symbol}&bot=whale_scraper"
     logger.info(f"[{symbol}] Navigating to {url}...")
     await ws.send(json.dumps({"id": 100, "method": "Page.navigate", "params": {"url": url}}))
     await ws.recv()
