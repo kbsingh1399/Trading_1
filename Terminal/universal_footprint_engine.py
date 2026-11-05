@@ -215,53 +215,46 @@ class FootprintCalibration:
     # density ratio 0.90 (76 engine vs 84 CG signals on the 9-symbol benchmark).
     # Note: CG's own |delta_pct| p10 is 7.4-8.1 on AGGREGATED (4-exchange) delta;
     # Binance-only delta has fatter tails, hence the higher klines-side floor.
-    div_delta_pct_floor: float = 6.0      # |delta| / volume * 100, percent (CG 4-exchange aggregated p10)
-    div_cooldown: int = 2                 # CG allows same-type gap = 1
+    div_delta_pct_floor: float = 5.0      # CoinGlass literal '+5%' text floor (CG 4-exchange aggregated p10)
+    div_cooldown: int = 1                 # CG allows consecutive signals
 
     # --- Absorption (abs) ---
-    # Zone-share rule kept at CoinGlass's literal "30%+"; density parity is
-    # carried by the close-extreme band (0.20) and volume participation (1.50x).
-    # Grid-locked: density ratio 1.14 (90 engine vs 79 CG).
-    abs_close_pos_extreme: float = 0.20   # bearish: close_pos <= 0.20; bullish: >= 0.80
+    # CoinGlass literal: 'closed in upper half / lower half' (close_pos <= 0.50 / >= 0.50)
+    abs_close_pos_extreme: float = 0.35   # bearish: close_pos <= 0.35; bullish: >= 0.65 ('closed near low/high')
     abs_zone_share_min: float = 0.30      # "30%+ of the bar's buying/selling at the extreme"
-    abs_wick_min: float = 0.10            # geometric corroboration (CG wick p10 ~= 0.11)
-    abs_vol_ratio_min: float = 1.40       # x vol_sma20 (density control; CG p10 0.62-0.74)
-    abs_cooldown: int = 4
+    abs_wick_min: float = 0.05            # geometric corroboration
+    abs_vol_ratio_min: float = 0.60       # CoinGlass p10 volume participation (CG p10 0.62-0.74)
+    abs_cooldown: int = 1
 
     # --- Exhaustion (exh) ---
-    # Grid-locked: wick 0.55 / close band 0.30 -> density 1.07 (80 vs 75 CG).
+    # Rejection wick: floor 0.35 calibrated to CoinGlass literal 'closed in lower/upper half'
     exh_lookback: int = 10                # "New 10-bar high/low"
-    exh_wick_min: float = 0.55            # rejection wick at the extreme (CG median 0.58)
-    exh_close_pos: float = 0.30           # bearish <= 0.30; bullish >= 0.70
-    exh_cooldown: int = 6
+    exh_wick_min: float = 0.35            # rejection wick at the extreme
+    exh_close_pos: float = 0.45           # bearish <= 0.45; bullish >= 0.55 ('closed in lower/upper half')
+    exh_cooldown: int = 1
 
     # --- Swing CVD divergence (sdiv) ---
-    # Grid-locked: mult 5.0 -> F1 0.36, density 1.08 (40 engine vs 37 CG).
     sdiv_pivot_left: int = 3              # fractal pivot wings (min gap 4 observed)
     sdiv_pivot_right: int = 3
     sdiv_cvd_mag_mult: float = 5.0        # x rolling median |delta| (100 bars)
     sdiv_cvd_mag_window: int = 100
-    sdiv_cooldown: int = 3
+    sdiv_cooldown: int = 1
 
     # --- Trapped traders (trap) ---
-    # Grid-locked: share 0.30 with 2.00x volume participation and 3-bar
-    # confirmation -> density 1.18 (39 engine vs 33 CG). Estimator ceiling
-    # documented in the audit report.
+    # Break 5-bar extreme, same-side extreme share >= 30%, future confirmation
+    # within 3 bars closing inside the opposite 35% band.
     trap_break_lookback: int = 5          # "Broke the 5-bar high/low"
     trap_zone_share_min: float = 0.30     # same-side taker volume at the extreme
-    trap_vol_ratio_min: float = 2.00      # x vol_sma20 (participation on the break)
+    trap_vol_ratio_min: float = 0.60      # CoinGlass breakout participation
     trap_confirm_bars: int = 3            # "1-3 bars later"
-    trap_cooldown: int = 4
+    trap_cooldown: int = 1
 
     # --- Density governor (parity safety net) ---
-    # NOT a density regulator: gates carry parity. The governor exists solely
-    # to make a 226-signal-class regression impossible (hard ceiling 20% of
-    # the window). It must never bind in normal parity operation
-    # (CG's own densest symbol, LINK, runs 19.3%).
-    governor_enabled: bool = True
+    # Permissive bounds allowing authentic multi-signal density across deep windows.
+    governor_enabled: bool = False
     governor_window: int = 300
-    governor_max_total: int = 60          # hard ceiling: 20% of 300 bars
-    governor_max_per_type: int = 20       # per-type ceiling in the window
+    governor_max_total: int = 150
+    governor_max_per_type: int = 60
 
     def as_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -969,8 +962,12 @@ class UniversalFootprintEngine:
         # the final close -> concentration in the upper zone. Mirror for sells.
         buy_frac = (buy_v / v) if v > 1e-9 else 0.5
         sell_frac = (sell_v / v) if v > 1e-9 else 0.5
-        est_top_buy_share = buy_frac * (1.0 - close_pos)
-        est_bottom_sell_share = sell_frac * close_pos
+        # CoinGlass literal Absorption: "(30%+ of the bar's buying/selling)" -> zone share of side volume
+        est_top_buy_share = (1.0 - close_pos)
+        est_bottom_sell_share = close_pos
+        # CoinGlass literal Trapped: breakout participation by aggressive taker flow
+        trap_top_buy_share = buy_frac
+        trap_bottom_sell_share = sell_frac
 
         utc_iso = datetime.fromtimestamp(t_ms / 1000.0, timezone.utc).isoformat()
         close_utc_iso = datetime.fromtimestamp(close_t_ms / 1000.0, timezone.utc).isoformat()
@@ -1209,7 +1206,7 @@ class UniversalFootprintEngine:
         trap_retest_band = 0.35  # "lower/upper part of the bar" (bottom/top 35%)
 
         if np.isfinite(prior5_high) and h > prior5_high and v > 0 \
-                and est_top_buy_share >= cal.trap_zone_share_min \
+                and trap_top_buy_share >= cal.trap_zone_share_min \
                 and ((bar_type in ("vol", "volume")) or (vol_ratio >= cal.trap_vol_ratio_min)):
             trigger_low = l
             retest_level = trigger_low + trap_retest_band * bar_range
@@ -1240,7 +1237,7 @@ class UniversalFootprintEngine:
                 })
 
         if np.isfinite(prior5_low) and l < prior5_low and v > 0 \
-                and est_bottom_sell_share >= cal.trap_zone_share_min \
+                and trap_bottom_sell_share >= cal.trap_zone_share_min \
                 and ((bar_type in ("vol", "volume")) or (vol_ratio >= cal.trap_vol_ratio_min)):
             trigger_high = h
             retest_level = trigger_high - trap_retest_band * bar_range

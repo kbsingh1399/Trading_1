@@ -408,6 +408,31 @@ def audit_and_sync_synthesized_bars(
     return df_synth, sigs_synth, stats
 
 
+def fetch_deep_1m_sub_bars(feed: AggregatedFuturesFeed, symbol: str, target_bars: int = 1500) -> List[Dict[str, Any]]:
+    """
+    Fetches fine-grained 1m execution tape with backward pagination for Range & Volume synthesis.
+    """
+    bars_1m: Dict[int, Dict[str, Any]] = {}
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    batches = max(1, (target_bars + 999) // 1000)
+    
+    for _ in range(batches):
+        batch = feed.fetch_binance(symbol, interval="1m", limit=min(1000, target_bars - len(bars_1m)), now_ms=now_ms)
+        if not batch:
+            break
+        for t, b in batch.items():
+            b_copy = dict(b)
+            b_copy["open_time_ms"] = t
+            bars_1m[t] = b_copy
+        earliest = min(bars_1m.keys())
+        now_ms = earliest - 1
+        if len(bars_1m) >= target_bars:
+            break
+            
+    sorted_times = sorted(bars_1m.keys())
+    return [bars_1m[t] for t in sorted_times]
+
+
 # =============================================================================
 # High-Level Single-Asset Synchronizer
 # =============================================================================
@@ -447,15 +472,9 @@ def dump_asset_bars_and_signals(
     else:
         print(f"  ✗ [Time 15m] Failed to sync 15m bars for {sym}.")
 
-    # 2. Fetch 1m sub-bars for Range and Volume synthesis
-    print(f"[{sym}] Fetching fine-grained 1m execution tape for Range & Volume synthesis...")
-    sub_dict = feed.fetch_binance(sym, interval="1m", limit=300)
-    sub_bars = []
-    if sub_dict:
-        for k in sorted(sub_dict.keys()):
-            bar = dict(sub_dict[k])
-            bar["open_time_ms"] = k
-            sub_bars.append(bar)
+    # 2. Fetch 1m sub-bars for Range and Volume synthesis (deep pagination)
+    print(f"[{sym}] Fetching fine-grained 1m execution tape for Range & Volume synthesis (1,500 bars)...")
+    sub_bars = fetch_deep_1m_sub_bars(feed, sym, target_bars=1500)
 
     if not sub_bars or len(sub_bars) < 10:
         print(f"  ! Warning: 1m sub-bars insufficient ({len(sub_bars) if sub_bars else 0}). Skipping Range/Volume.")
@@ -754,8 +773,11 @@ def compare_coinglass_overlap(symbols: List[str]):
                     my_row = my_df[my_df["open_time_ms"] == t].iloc[0]
                     cg_rows = cg_sub[cg_sub["time_ms"] == t]
                     my_has_sig = my_row.get("has_signal", False)
-                    my_sigs = my_row.get("signals", [])
-                    my_codes = {str(s.get("sig_code", "")).lower() for s in (my_sigs if isinstance(my_sigs, list) else [])}
+                    my_sigs = my_row.get("signals")
+                    if isinstance(my_sigs, (list, np.ndarray)):
+                        my_codes = {str(s.get("sig_code", "")).lower() for s in my_sigs}
+                    else:
+                        my_codes = set()
                     cg_codes = {str(c).lower() for c in cg_rows["sig_code"]}
                     
                     # Directional concordance or signal code match
