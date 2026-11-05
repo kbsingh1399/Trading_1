@@ -593,7 +593,8 @@ class UniversalFootprintEngine:
             else:
                 raise ValueError("Bars missing timestamp column")
 
-        df["open_time_ms"] = pd.to_numeric(df["open_time_ms"], errors="coerce").astype(np.int64)
+        df = df.dropna(subset=["open_time_ms"]).copy()
+        df["open_time_ms"] = pd.to_numeric(df["open_time_ms"], errors="coerce").fillna(0).astype(np.int64)
         df = df.sort_values("open_time_ms").drop_duplicates("open_time_ms").reset_index(drop=True)
 
         # 15m close time = open_time + 900,000 ms

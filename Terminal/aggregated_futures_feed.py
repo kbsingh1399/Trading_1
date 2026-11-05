@@ -117,7 +117,8 @@ class AggregatedFuturesFeed:
         now_ms: Optional[int] = None
     ) -> Dict[int, Dict[str, Any]]:
         api_sym = VENUE_SYMBOL_MAP.get(symbol, {}).get("binance", f"{symbol}USDT")
-        url = f"https://fapi.binance.com/fapi/v1/klines?symbol={api_sym}&interval={interval}&limit={limit}"
+        end_param = f"&endTime={now_ms}" if now_ms is not None else ""
+        url = f"https://fapi.binance.com/fapi/v1/klines?symbol={api_sym}&interval={interval}&limit={limit}{end_param}"
         try:
             raw = _http_get_json(url, timeout=self.timeout_sec)
             now_ms = now_ms or int(datetime.now(timezone.utc).timestamp() * 1000)
@@ -132,6 +133,7 @@ class AggregatedFuturesFeed:
                 taker_buy = float(k[9]) * mult
                 sell_vol = max(tot_vol - taker_buy, 0.0)
                 bars[t_open] = {
+                    "open_time_ms": t_open,
                     "close_time_ms": t_close,
                     "open": float(k[1]),
                     "high": float(k[2]),
@@ -187,6 +189,7 @@ class AggregatedFuturesFeed:
                         c = float(k[4])
                         tot_vol = float(k[6]) * mult
                         bars[t_open] = {
+                            "open_time_ms": t_open,
                             "close_time_ms": t_close,
                             "open": o,
                             "high": h,
@@ -221,7 +224,8 @@ class AggregatedFuturesFeed:
         api_sym = VENUE_SYMBOL_MAP.get(symbol, {}).get("bybit", f"{symbol}USDT")
         bybit_interval = interval.replace("m", "")
         fetch_limit = min(limit, 1000)
-        url = f"https://api.bybit.com/v5/market/kline?category=linear&symbol={api_sym}&interval={bybit_interval}&limit={fetch_limit}"
+        end_param = f"&end={now_ms}" if now_ms is not None else ""
+        url = f"https://api.bybit.com/v5/market/kline?category=linear&symbol={api_sym}&interval={bybit_interval}&limit={fetch_limit}{end_param}"
         try:
             res = _http_get_json(url, timeout=self.timeout_sec)
             data = res.get("result", {}).get("list", []) if isinstance(res, dict) else []
@@ -240,6 +244,7 @@ class AggregatedFuturesFeed:
                 c = float(k[4])
                 tot_vol = float(k[5]) * mult
                 bars[t_open] = {
+                    "open_time_ms": t_open,
                     "close_time_ms": t_close,
                     "open": o,
                     "high": h,

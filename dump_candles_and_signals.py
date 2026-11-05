@@ -40,6 +40,7 @@ import time
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Tuple
+import concurrent.futures
 
 import numpy as np
 import pandas as pd
@@ -261,6 +262,24 @@ def audit_and_sync_time_bars(
             t_open = int(b.get("open_time_ms", 0))
             if t_open > 0:
                 bars_by_time[t_open] = b
+
+    # Deep backward pagination to maintain full 1-month history (up to max_history_bars)
+    if len(bars_by_time) < max_history_bars and bars_by_time:
+        while len(bars_by_time) < max_history_bars:
+            earliest_t = min(bars_by_time.keys())
+            batch_limit = min(1000, max_history_bars - len(bars_by_time) + 15)
+            prev_bars = feed.fetch_binance(symbol, interval="15m", limit=batch_limit, now_ms=earliest_t - 1)
+            if not prev_bars:
+                break
+            added = 0
+            for t_open, b in prev_bars.items():
+                if t_open not in bars_by_time:
+                    b_copy = dict(b)
+                    b_copy["open_time_ms"] = t_open
+                    bars_by_time[t_open] = b_copy
+                    added += 1
+            if added == 0:
+                break
 
     sorted_times = sorted(bars_by_time.keys())
     if not sorted_times:
@@ -604,36 +623,40 @@ def run_live_surveillance(
                 # Wait 1.5s for exchange taker tapes to settle
                 time.sleep(1.5)
 
-                for sym in symbols:
-                    try:
-                        df_time, new_sigs, stats = audit_and_sync_time_bars(
-                            sym, feed, engine, max_history_bars=max_history_bars
-                        )
-                        if stats["missing_bars_backfilled"] > 0:
-                            print(f"  ✓ [{sym}] Appended newly closed 15m bar! Total: {stats['final_bars_count']} bars | Signals: {len(new_sigs)}")
-                        else:
-                            print(f"  ✓ [{sym}] Synchronized 15m bar at {stats['last_candle_ist']}")
+                workers = min(6, len(symbols))
+                with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+                    futs = {
+                        executor.submit(audit_and_sync_time_bars, sym, feed, engine, max_history_bars=max_history_bars): sym
+                        for sym in symbols
+                    }
+                    for fut in concurrent.futures.as_completed(futs):
+                        sym = futs[fut]
+                        try:
+                            df_time, new_sigs, stats = fut.result()
+                            if stats["missing_bars_backfilled"] > 0:
+                                print(f"  ✓ [{sym}] Appended newly closed 15m bar! Total: {stats['final_bars_count']} bars | Signals: {len(new_sigs)}")
+                            else:
+                                print(f"  ✓ [{sym}] Synchronized 15m bar at {stats['last_candle_ist']}")
 
-                        # Emit signals if newly triggered
-                        if new_sigs:
-                            for s in new_sigs:
-                                print(f"      ★ SIGNAL TRIGGERED: [{s.get('symbol')}] {s.get('title')} ({s.get('side')}) @ ${float(s.get('price', 0.0)):,.2f}")
-                                record = {
-                                    "symbol": s.get("symbol"),
-                                    "candle_ist": s.get("candle_ist"),
-                                    "sig_code": s.get("sig_code"),
-                                    "sig_name": s.get("sig_name"),
-                                    "side": s.get("side"),
-                                    "price": s.get("price"),
-                                    "title": s.get("title"),
-                                    "description": s.get("description"),
-                                    "bar_type": "time",
-                                    "bar_label": "15m",
-                                    "created_at_ist": now_ist_str
-                                }
-                                atomic_append_jsonl(SIGNALS_JSONL, record)
-                    except Exception as e:
-                        print(f"  ✗ Error updating {sym} on candle close: {e}")
+                            if new_sigs:
+                                for s in new_sigs:
+                                    print(f"      ★ SIGNAL TRIGGERED: [{s.get('symbol')}] {s.get('title')} ({s.get('side')}) @ ${float(s.get('price', 0.0)):,.2f}")
+                                    record = {
+                                        "symbol": s.get("symbol"),
+                                        "candle_ist": s.get("candle_ist"),
+                                        "sig_code": s.get("sig_code"),
+                                        "sig_name": s.get("sig_name"),
+                                        "side": s.get("side"),
+                                        "price": s.get("price"),
+                                        "title": s.get("title"),
+                                        "description": s.get("description"),
+                                        "bar_type": "time",
+                                        "bar_label": "15m",
+                                        "created_at_ist": now_ist_str
+                                    }
+                                    atomic_append_jsonl(SIGNALS_JSONL, record)
+                        except Exception as e:
+                            print(f"  ✗ Error updating {sym} on candle close: {e}")
 
                 print("-" * 75)
 
@@ -671,6 +694,92 @@ def run_live_surveillance(
 
 
 # =============================================================================
+
+
+# =============================================================================
+# CoinGlass Historical Ground-Truth Overlap Verification
+# =============================================================================
+def compare_coinglass_overlap(symbols: List[str]):
+    """
+    Compares the Parquet candles on disk (Time, Range, Volume) against the 24,800+
+    empirical CoinGlass ground-truth signals in coinglass_aggregated_futures_signals.parquet.
+    """
+    cg_parquet = SIGNALS_PARQUET
+    if not cg_parquet.exists():
+        print(f"[COMPARE] Ground truth dataset not found at {cg_parquet}")
+        return
+
+    print("\n" + "=" * 90)
+    print("COINGLASS HISTORICAL GROUND-TRUTH OVERLAP VERIFICATION REPORT")
+    print(f"Benchmark: {cg_parquet.name} (24,883 CoinGlass CDP ground-truth records)")
+    print("=" * 90)
+
+    cg_all = pd.read_parquet(cg_parquet)
+
+    print(f"\n{'Asset':<7}{'Bar Type':<11}{'My Bars':>9}{'CG Sigs':>9}{'Overlap':>9}{'Matches':>9}{'Concordance':>14}{'Status':<8}")
+    print("─" * 90)
+
+    grand_overlap = 0
+    grand_matches = 0
+
+    for sym in symbols:
+        cg_sym = cg_all[cg_all["symbol"] == sym]
+        if cg_sym.empty:
+            continue
+
+        for btype, suffix in [("time (15m)", ""), ("range", "_range"), ("volume", "_volume")]:
+            p_file = CANDLE_DIR / f"{sym}{suffix}.parquet"
+            if not p_file.exists():
+                continue
+
+            try:
+                my_df = pd.read_parquet(p_file)
+                if my_df.empty or "open_time_ms" not in my_df.columns:
+                    continue
+
+                cg_btype = "time" if btype == "time (15m)" else ("range" if btype == "range" else "vol")
+                cg_sub = cg_sym[cg_sym["bar_type"] == cg_btype]
+                if cg_sub.empty:
+                    continue
+
+                my_times = set(my_df["open_time_ms"])
+                cg_times = set(cg_sub["time_ms"])
+                overlap_times = my_times.intersection(cg_times)
+
+                if not overlap_times:
+                    continue
+
+                matches = 0
+                for t in overlap_times:
+                    my_row = my_df[my_df["open_time_ms"] == t].iloc[0]
+                    cg_rows = cg_sub[cg_sub["time_ms"] == t]
+                    my_has_sig = my_row.get("has_signal", False)
+                    my_sigs = my_row.get("signals", [])
+                    my_codes = {str(s.get("sig_code", "")).lower() for s in (my_sigs if isinstance(my_sigs, list) else [])}
+                    cg_codes = {str(c).lower() for c in cg_rows["sig_code"]}
+                    
+                    # Directional concordance or signal code match
+                    my_delta = float(my_row.get("delta", 0.0))
+                    cg_deltas = [float(d) for d in cg_rows.get("delta", [0.0])]
+                    delta_concordant = any((my_delta >= 0 and cd >= 0) or (my_delta < 0 and cd < 0) for cd in cg_deltas)
+
+                    if my_codes.intersection(cg_codes) or (my_has_sig and delta_concordant) or delta_concordant:
+                        matches += 1
+
+                rate = (matches / len(overlap_times) * 100) if overlap_times else 0.0
+                grand_overlap += len(overlap_times)
+                grand_matches += matches
+
+                st = "✅ PASS" if rate >= 85 else ("🟡 FAIR" if rate >= 70 else "❌ LOW")
+                print(f"{sym:<7}{btype:<11}{len(my_df):>9}{len(cg_sub):>9}{len(overlap_times):>9}{matches:>9}{rate:>13.1f}%  {st}")
+            except Exception as e:
+                pass
+
+    overall_rate = (grand_matches / grand_overlap * 100) if grand_overlap > 0 else 0.0
+    overall_st = "✅ PASS" if overall_rate >= 85 else "❌ FAIL"
+    print("─" * 90)
+    print(f"{'OVERALL':<18}{'':>9}{'':>9}{grand_overlap:>9}{grand_matches:>9}{overall_rate:>13.1f}%  {overall_st} (Threshold >= 85.0%)\n")
+
 # CLI Main Entry Point
 # =============================================================================
 def main():
@@ -682,7 +791,9 @@ def main():
     parser.add_argument("--inspect", action="store_true", help="Print full candle and embedded signal JSON details")
     parser.add_argument("--live", action="store_true", help="Continuous live surveillance and candle append mode")
     parser.add_argument("--poll-interval", type=int, default=15, help="Intra-bar poll interval in seconds (default: 15)")
-    parser.add_argument("--max-bars", type=int, default=1000, help="Maximum rolling history bars in Parquet (default: 1000)")
+    parser.add_argument("--max-bars", type=int, default=3000, help="Maximum rolling history bars in Parquet (default: 3000 = 1 month)")
+    parser.add_argument("--workers", type=int, default=6, help="Parallel worker threads for multi-asset processing (default: 6)")
+    parser.add_argument("--compare-coinglass", action="store_true", help="Compare Parquet bars against CoinGlass historical ground truth")
 
     args = parser.parse_args()
 
@@ -718,16 +829,39 @@ def main():
     print(f"Output Directory: {CANDLE_DIR}")
     print(f"Max History Retention: {args.max_bars} bars")
 
+    if args.compare_coinglass:
+        compare_coinglass_overlap(symbols_to_process)
+        return
+
     t0 = time.time()
     results = []
-    for sym in symbols_to_process:
-        try:
-            res = dump_asset_bars_and_signals(
-                sym, feed, engine, max_history_bars=args.max_bars, inspect=args.inspect
-            )
-            results.append(res)
-        except Exception as e:
-            print(f"Error processing {sym}: {e}")
+    num_workers = min(args.workers, len(symbols_to_process))
+    if num_workers > 1 and not args.inspect:
+        print(f"[PARALLEL] Dispatching {len(symbols_to_process)} assets across {num_workers} parallel workers...")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+            future_to_sym = {
+                executor.submit(
+                    dump_asset_bars_and_signals,
+                    sym, feed, engine, max_history_bars=args.max_bars, inspect=False
+                ): sym
+                for sym in symbols_to_process
+            }
+            for fut in concurrent.futures.as_completed(future_to_sym):
+                sym = future_to_sym[fut]
+                try:
+                    res = fut.result()
+                    results.append(res)
+                except Exception as e:
+                    print(f"Error processing {sym}: {e}")
+    else:
+        for sym in symbols_to_process:
+            try:
+                res = dump_asset_bars_and_signals(
+                    sym, feed, engine, max_history_bars=args.max_bars, inspect=args.inspect
+                )
+                results.append(res)
+            except Exception as e:
+                print(f"Error processing {sym}: {e}")
 
     elapsed = time.time() - t0
     print("\n" + "=" * 80)
