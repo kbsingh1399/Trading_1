@@ -917,17 +917,43 @@ class MultiPillarTradeEvaluator:
             "evaluation_metrics_json": evaluation_metrics_json,
         }
 
-        # Persist setup to dedicated per-asset ledger
+        # Persist setup to dedicated per-asset ledger (deduplicated by symbol, direction, signal, and candle time)
         asset_ledger_path = SETUPS_DIR / f"{symbol.upper()}_setups.jsonl"
-        atomic_append_jsonl(asset_ledger_path, setup_record)
+        is_duplicate = False
+        if asset_ledger_path.exists():
+            try:
+                with open(asset_ledger_path, "r", encoding="utf-8") as f:
+                    last_line = ""
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            last_line = line
+                    if last_line:
+                        last_rec = json.loads(last_line)
+                        if (
+                            last_rec.get("symbol") == symbol.upper()
+                            and last_rec.get("direction") == target_direction
+                            and last_rec.get("time_ms") == candle_t_ms
+                            and last_rec.get("primary_signal") == str(p_code)
+                        ):
+                            is_duplicate = True
+            except Exception:
+                pass
 
-        # If ACTIVE, also append to master active setups
-        if status == "ACTIVE":
-            atomic_append_jsonl(MASTER_SETUPS_PATH, setup_record)
-            logger.info(
-                f"🎯 [ACTIVE SETUP] {symbol} {target_direction} | Score: {confluence_score}/100 "
-                f"| Entry: {entry_final} | SL: {sl_final} | TP: {tp_final} | R:R: {calc_rr}"
-            )
+        if not is_duplicate:
+            atomic_append_jsonl(asset_ledger_path, setup_record)
+            if status == "ACTIVE":
+                atomic_append_jsonl(MASTER_SETUPS_PATH, setup_record)
+                logger.info(
+                    f"🎯 [ACTIVE SETUP] {symbol} {target_direction} | Score: {confluence_score}/100 "
+                    f"| Entry: {entry_final} | SL: {sl_final} | TP: {tp_final} | R:R: {calc_rr}"
+                )
+        else:
+            if status == "ACTIVE":
+                logger.info(
+                    f"🎯 [EXISTING ACTIVE SETUP] {symbol} {target_direction} | Score: {confluence_score}/100 "
+                    f"| Entry: {entry_final} | SL: {sl_final} | TP: {tp_final} | R:R: {calc_rr}"
+                )
         else:
             logger.info(
                 f"[{symbol}] Setup evaluated: {status} | Score: {confluence_score}/100 | Direction: {target_direction}"
