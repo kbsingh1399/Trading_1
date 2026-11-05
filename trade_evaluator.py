@@ -37,6 +37,7 @@ import logging
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Tuple, Optional, Any
+from dataclasses import dataclass
 
 import pandas as pd
 import numpy as np
@@ -1341,6 +1342,40 @@ def evaluate_all_existing_queues(since_minutes: int = 30) -> List[dict]:
 
     logger.info(f"Evaluation complete: {len(results)} assets analyzed, {active_count} ACTIVE trade setup(s).")
     return results
+
+
+@dataclass
+class TrailingState:
+    entry: float
+    sl_current: float
+    vwap_sigma1: float
+    vwap_sigma2: float
+    poc: float
+    atr_15m: float
+    in_profit: bool = False
+
+
+class TrailingStopManager:
+    """Implements three-tier trailing stop migration (Z.ai Audit Domain 3, Listing 9)."""
+    def update(self, state: TrailingState, price: float) -> TrailingState:
+        # Tier 1: breakeven-plus-buffer
+        if price <= state.vwap_sigma1:
+            new_sl = state.sl_current
+        # Tier 2: trail +1sigma VWAP
+        elif price <= state.vwap_sigma2:
+            new_sl = max(state.sl_current, state.vwap_sigma1)
+            state.in_profit = True
+        # Tier 3: aggressive POC trailing
+        else:
+            new_sl = state.poc - 0.5 * state.atr_15m
+            state.in_profit = True
+
+        # Stop only ratchets forward (longs) or backward (shorts)
+        if state.entry > 0:  # long
+            state.sl_current = max(state.sl_current, new_sl)
+        else:  # short
+            state.sl_current = min(state.sl_current, new_sl)
+        return state
 
 
 def main():

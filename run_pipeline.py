@@ -90,7 +90,11 @@ def get_open_tabs_snapshot() -> set:
         return set()
 
 
-def cleanup_scraper_orphaned_tabs(baseline_tab_ids: set):
+_TAB_BIRTH_TS = {}
+TAB_GRACE_S = 30.0
+
+
+def cleanup_scraper_orphaned_tabs(baseline_tab_ids: set, grace_s: float = TAB_GRACE_S):
     """
     Closes any new tab that was created during a scraper's execution that was NOT
     present in baseline_tab_ids, ensuring no scraper leaves stranded tabs even upon crash or timeout.
