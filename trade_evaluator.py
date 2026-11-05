@@ -125,6 +125,148 @@ def safe_float(val: Any, default: Optional[float] = None) -> Optional[float]:
         return default
 
 
+def calculate_weighted_direction_entropy(
+    queue: List[dict],
+    half_life_seconds: float = 1800.0,
+    reference_ms: Optional[int] = None
+) -> float:
+    """
+    Computes Shannon entropy across queue directions, weighted by:
+    1. Signal priority (trap=1.0, abs=0.9, ratio_p=0.75, sdiv=0.65, div=0.6, p_spike=0.4, exh=0.35)
+    2. Continuous exponential recency decay (30-minute half-life)
+    """
+    if not queue:
+        return 0.0
+
+    now_ms = reference_ms or int(time.time() * 1000)
+    tau = half_life_seconds * 1000.0 / math.log(2)
+
+    priority_weights = {
+        "trap": 1.00,
+        "abs": 0.90,
+        "ratio_p": 0.75,
+        "sdiv": 0.65,
+        "div": 0.60,
+        "p_spike": 0.40,
+        "exh": 0.35
+    }
+
+    w_long = 0.0
+    w_short = 0.0
+
+    for s in queue:
+        direction = s.get("direction")
+        if direction not in ("LONG", "SHORT"):
+            continue
+
+        sig_code = str(s.get("sig_code", "")).lower()
+        p_w = priority_weights.get(sig_code, 0.30)
+
+        t_ms = int(s.get("time_ms") or s.get("arrived_at_ms") or now_ms)
+        age_ms = max(0, now_ms - t_ms)
+        recency_w = math.exp(-age_ms / tau)
+
+        eff_w = p_w * recency_w
+        if direction == "LONG":
+            w_long += eff_w
+        else:
+            w_short += eff_w
+
+    total_w = w_long + w_short
+    if total_w <= 0:
+        return 0.0
+
+    p_l = w_long / total_w
+    p_s = w_short / total_w
+
+    if p_l <= 0.0 or p_s <= 0.0:
+        return 0.0
+
+    return float(-(p_l * math.log2(p_l) + p_s * math.log2(p_s)))
+
+
+def classify_market_regime(
+    candle_ctx: dict,
+    auction_ctx: dict,
+    whale_ctx: dict,
+    tv_liq_ctx: dict
+) -> str:
+    """Classifies asset microstructure state into COMPRESSION, EXPANSION, WALL_DOMINATED, or NORMAL."""
+    close_px = safe_float(candle_ctx.get("latest_close"), 1.0)
+    atr = safe_float(candle_ctx.get("atr_14"), 0.0)
+    atr_pct = (atr / close_px) * 100.0 if close_px > 0 else 1.0
+
+    val = safe_float(auction_ctx.get("day_val"))
+    vah = safe_float(auction_ctx.get("day_vah"))
+    poc = safe_float(auction_ctx.get("day_poc"))
+
+    va_width_pct = 2.0
+    if val and vah and poc and poc > 0:
+        va_width_pct = ((vah - val) / poc) * 100.0
+
+    bid_wall = safe_float(whale_ctx.get("bid_wall_usd"), 0.0)
+    ask_wall = safe_float(whale_ctx.get("ask_wall_usd"), 0.0)
+    wall_diff = abs(bid_wall - ask_wall)
+    total_wall = bid_wall + ask_wall
+    wall_imbalance = (wall_diff / total_wall) if total_wall > 0 else 0.0
+
+    is_tv_spike = bool(tv_liq_ctx.get("is_spike", False))
+    ib_ext = str(auction_ctx.get("ib_extension", ""))
+
+    if atr_pct < 0.8 and va_width_pct < 1.5:
+        return "COMPRESSION"
+    elif atr_pct > 2.0 or is_tv_spike or "EXPANDING" in ib_ext:
+        return "EXPANSION"
+    elif wall_imbalance > 0.60 and max(bid_wall, ask_wall) >= 1_500_000:
+        return "WALL_DOMINATED"
+    else:
+        return "NORMAL"
+
+
+def compute_rdnl_confluence(
+    w_raw: Dict[str, float],
+    regime: str
+) -> Tuple[float, float, List[str]]:
+    """
+    Computes Regime-Dependent Non-Linear Confluence Score with Pillar Interaction Synergy.
+    Returns: (final_score, interaction_multiplier, active_couplings)
+    """
+    base_caps = {"W1": 30.0, "W2": 20.0, "W3": 20.0, "W4": 15.0, "W5": 15.0}
+    x = {k: min(max(w_raw.get(k, 0.0), 0.0) / base_caps[k], 1.0) for k in base_caps}
+
+    regime_weights = {
+        "COMPRESSION":    {"W1": 0.35, "W2": 0.25, "W3": 0.15, "W4": 0.15, "W5": 0.10},
+        "EXPANSION":      {"W1": 0.20, "W2": 0.15, "W3": 0.22, "W4": 0.23, "W5": 0.20},
+        "WALL_DOMINATED": {"W1": 0.30, "W2": 0.10, "W3": 0.35, "W4": 0.15, "W5": 0.10},
+        "NORMAL":         {"W1": 0.30, "W2": 0.20, "W3": 0.20, "W4": 0.15, "W5": 0.15},
+    }
+
+    weights = regime_weights.get(regime, regime_weights["NORMAL"])
+    s_base = sum(x[k] * weights[k] * 100.0 for k in base_caps)
+
+    gamma = {
+        ("W1", "W2"): 0.20 if regime == "COMPRESSION" else 0.12,
+        ("W1", "W3"): 0.25 if regime == "WALL_DOMINATED" else 0.18,
+        ("W2", "W4"): 0.15 if regime != "EXPANSION" else 0.08,
+        ("W3", "W5"): 0.18,
+        ("W1", "W5"): 0.12 if regime == "EXPANSION" else 0.08,
+    }
+
+    synergy_bonus = 0.0
+    active_couplings = []
+
+    for (p_a, p_b), g in gamma.items():
+        if x[p_a] >= 0.50 and x[p_b] >= 0.50:
+            phi = math.sqrt(x[p_a] * x[p_b])
+            bonus = g * phi
+            synergy_bonus += bonus
+            active_couplings.append(f"{p_a}x{p_b}(+{round(bonus * 100, 1)}%)")
+
+    m_interact = 1.0 + min(synergy_bonus, 0.40)
+    s_final = min(round(s_base * m_interact, 2), 100.0)
+
+    return s_final, round(m_interact, 3), active_couplings
+
 # ========================================================================================
 # Canonical Polars & DuckDB Schema Definitions for Zero-Copy Analytic Queries
 # ========================================================================================
@@ -648,6 +790,7 @@ class MultiPillarTradeEvaluator:
         # Direction Contradiction Entropy Gate on recent window
         queue_dirs = [s.get("direction", "NEUTRAL") for s in recent_window if s.get("direction") in ("LONG", "SHORT")]
         entropy = calculate_shannon_entropy(queue_dirs)
+        weighted_entropy = calculate_weighted_direction_entropy(recent_window)
         contradiction_veto = False
         if entropy > 0.95 and primary_trigger.get("priority", 8) > 2:
             # High chop / split queue and not a top-tier trap/absorption reversal
@@ -851,8 +994,14 @@ class MultiPillarTradeEvaluator:
 
         w5_score = min(w5_score, 15.0)
 
-        # Total Confluence Score
-        confluence_score = round(w1_score + w2_score + w3_score + w4_score + w5_score, 2)
+        # Total Confluence Score via Non-Linear Regime-Dependent Confluence Scoring (RDNL-CS)
+        raw_confluence = round(w1_score + w2_score + w3_score + w4_score + w5_score, 2)
+        regime = classify_market_regime(candle_ctx, auction_ctx, whale_ctx, tv_liq_ctx)
+        rdnl_score, m_interact, active_couplings = compute_rdnl_confluence(
+            {"W1": w1_score, "W2": w2_score, "W3": w3_score, "W4": w4_score, "W5": w5_score},
+            regime
+        )
+        confluence_score = rdnl_score
 
         # -------------------------------------------------------------------------
         # Dynamic Risk Management & Levels Formulation
@@ -1006,7 +1155,13 @@ class MultiPillarTradeEvaluator:
             "w3_whales": w3_score,
             "w4_magnets": w4_score,
             "w5_tv_liquidations": w5_score,
+            "raw_confluence": raw_confluence,
+            "rdnl_confluence": rdnl_score,
+            "market_regime": regime,
+            "synergy_multiplier": m_interact,
+            "active_couplings": active_couplings,
             "entropy": round(entropy, 4),
+            "weighted_entropy": round(weighted_entropy, 4),
             "matching_signals": matching_in_queue,
             "total_signals_in_queue": len(queue),
             "val": val,

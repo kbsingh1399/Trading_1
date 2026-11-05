@@ -201,6 +201,11 @@ def scheduler_daemon():
                 logger.info(f"🎯 Triggering 15m Candle Close Trade Evaluation pass at minute :{cur_min:02d}...")
                 run_scraper("5_trade_evaluator.py", "🎯 Multi-Pillar Trade Evaluator (15m Close)", flag="--all")
 
+                # Hourly Database Maintenance at top of hour (:00)
+                if cur_min == 0:
+                    logger.info("🗜️ Triggering Hourly Database Maintenance and Stale Lock Cleaner...")
+                    run_scraper("Database/database_compactor.py", "🗜️ Database Storage Compactor and Lock Cleaner", flag="--clean-locks")
+
         # Sleep till next 5-second boundary
         time.sleep(5.0)
 
