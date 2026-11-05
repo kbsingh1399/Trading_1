@@ -208,268 +208,6 @@ async def fetch_symbol_liquidations(ws, tv_sym: str) -> Tuple[List[List], float]
                 const cwc = win.chartWidgetCollection || window.chartWidgetCollection;
                 if (!cwc) return resolve({{ ok: false, error: "no_cwc" }});
                 
-                let priorLastTime = 0;
-                try {
-                    const ch0 = cwc.activeChartWidget ? cwc.activeChartWidget.value() : cwc.getAll()[0];
-                    const m0 = ch0.model().model ? ch0.model().model() : ch0.model();
-                    const s0 = m0.allStudies().find(s => s.metaInfo && s.metaInfo().id === 'aggregated_liq_kline@tv-basicstudies');
-                    const d0 = s0 ? s0.data() : null;
-                    if (d0 && d0.size() > 0) {
-                        const liq0 = d0.valueAt(d0.lastIndex());
-                        priorLastTime = liq0 ? liq0[0] : 0;
-                    }
-                } catch(e) {}
-                cwc.setSymbol("{tv_sym}");
-                let checks = 0;
-                const interval = setInterval(() => {
-                    checks++;
-                    const chart = cwc.activeChartWidget ? cwc.activeChartWidget.value() : cwc.getAll()[0];
-                    const model = chart.model().model ? chart.model().model() : chart.model();
-                    const ms = model.mainSeries();
-                    const currentSym = ms.symbol ? ms.symbol() : '';
-                    const study = model.allStudies().find(s => s.metaInfo && s.metaInfo().id === 'aggregated_liq_kline@tv-basicstudies');
-                    const dataObj = study ? study.data() : null;
-                    const size = dataObj ? dataObj.size() : 0;
-                    let curLastTime = 0;
-                    if (dataObj && size > 0) {
-                        const curLiq = dataObj.valueAt(dataObj.lastIndex());
-                        curLastTime = curLiq ? curLiq[0] : 0;
-                    }
-                    if (currentSym === "{tv_sym}" && size > 10 && (priorLastTime === 0 || curLastTime !== priorLastTime || checks > 10)) {
-                        clearInterval(interval);
-                        const rows = [];
-                        const firstIdx = dataObj.firstIndex();
-                        const lastIdx = dataObj.lastIndex();
-                        for (let i = firstIdx; i <= lastIdx; i++) {
-                            const liq = dataObj.valueAt(i);
-                            if (liq && liq[0]) {
-                                rows.push([
-                                    liq[0],
-                                    liq[1] !== null ? Math.abs(liq[1]) : 0.0,
-                                    liq[2] !== null ? Math.abs(liq[2]) : 0.0
-                                ]);
-                            }
-                        }
-                        const lastBar = ms.data().last();
-                        let lastPrice = 0.0;
-                        if (lastBar) {
-                            lastPrice = lastBar[4] !== undefined ? lastBar[4] : (lastBar.value && lastBar.value[4] !== undefined ? lastBar.value[4] : 0.0);
-                        }
-                        if (!Number.isFinite(lastPrice)) lastPrice = 0;
-                        return resolve({ ok: true, symbol: currentSym, rows: rows, lastPrice: lastPrice });
-                    }
-                    if (checks >= 80) {
-                        clearInterval(interval);
-                        return resolve({ ok: false, symbol: "{tv_sym}", error: "timeout" });
-                    }
-                }, 50);=====
-Standalone CoinGlass TV Liquidation & Reversal Spike Scraper (In-Browser CDP Bridge)
-========================================================================================
-Pillar 4 of 5 Standalone Crypto Pipeline:
-- Strictly operates via Chrome DevTools Protocol (CDP) on 127.0.0.1:9222.
-- In-Chart TradingView API Bridge: opens ONE ephemeral tab (?bot=tv_scraper) and switches
-  symbols sub-second via window.chartWidgetCollection.setSymbol(tv_sym).
-- Speed Benchmark: ~0.50s per asset (full 36-asset sweep in under 20 seconds).
-- Harvests:
-  1. 15-minute liquidation timeseries (long liq USD, short liq USD)
-  2. Rolling 50-bar 90th percentile threshold spike detection
-  3. Reversal Bias (BULLISH_REVERSAL seller capitulation / BEARISH_REVERSAL short squeeze)
-  4. Exhaustion Intensity Score (50–100)
-- Persists to:
-  * Database/Live_Liquidations/<SYMBOL>_tv_liquidations.parquet (capped at 10,000 bars)
-  * Database/Live_Liquidations/latest_reversal_signals.json
-  * Database/Live_Liquidations/summary_liquidations.parquet
-- Primary IST columns enriched across all outputs.
-- Runs every 60 seconds in daemon mode or on-demand (--once).
-========================================================================================
-"""
-
-import sys
-import os
-import json
-import time
-import logging
-import asyncio
-import argparse
-import urllib.request
-from pathlib import Path
-from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Tuple, Optional
-
-try:
-    sys.stdout.reconfigure(line_buffering=True, encoding="utf-8")
-except Exception:
-    pass
-
-import pandas as pd
-import numpy as np
-import websockets
-
-ROOT_DIR = Path(__file__).resolve().parent
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
-
-from coinglass_common import acquire_singleton, atomic_parquet, atomic_json, cdp_result
-from coinglass_common import BrowserLock, rotate_warp_ip, is_scheduled_for_other_collector
-from coinglass_common import utc_ms_to_ist_str
-
-DB_DIR = ROOT_DIR / "Database"
-LIVE_LIQ_DIR = DB_DIR / "Live_Liquidations"
-LIVE_LIQ_DIR.mkdir(parents=True, exist_ok=True)
-
-SIGNALS_JSON_FILE = LIVE_LIQ_DIR / "latest_reversal_signals.json"
-SUMMARY_PARQUET_FILE = LIVE_LIQ_DIR / "summary_liquidations.parquet"
-REGISTRY_FILE = DB_DIR / "mutual_asset_capability_registry.json"
-
-handler = logging.StreamHandler(sys.stdout)
-handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] [CG-TV] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
-logger = logging.getLogger("TVLiquidationScraper")
-logger.setLevel(logging.INFO)
-logger.handlers = [handler]
-
-DEFAULT_SYMBOL_MAP = {
-    "BTC": "Binance_BTCUSDT",
-    "ETH": "Binance_ETHUSDT",
-    "SOL": "Binance_SOLUSDT",
-    "XRP": "Binance_XRPUSDT",
-    "DOGE": "Binance_DOGEUSDT",
-    "BNB": "Binance_BNBUSDT",
-    "ADA": "Binance_ADAUSDT",
-    "AVAX": "Binance_AVAXUSDT",
-    "LINK": "Binance_LINKUSDT",
-    "SUI": "Binance_SUIUSDT",
-    "NEAR": "Binance_NEARUSDT",
-    "TRX": "Binance_TRXUSDT",
-    "LTC": "Binance_LTCUSDT",
-    "HYPE": "Bybit_HYPEUSDT",
-    "DOT": "Binance_DOTUSDT",
-    "BCH": "Binance_BCHUSDT",
-    "UNI": "Binance_UNIUSDT",
-    "APT": "Binance_APTUSDT",
-    "ATOM": "Binance_ATOMUSDT",
-    "ARB": "Binance_ARBUSDT",
-    "OP": "Binance_OPUSDT",
-    "FIL": "Binance_FILUSDT"
-}
-
-
-def load_tv_symbols() -> Dict[str, str]:
-    sym_map_file = DB_DIR / "coinglass_tv_symbol_map.json"
-    if sym_map_file.exists():
-        try:
-            with open(sym_map_file, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return DEFAULT_SYMBOL_MAP
-
-
-def cleanup_orphan_tabs(keep_tab_id: Optional[str] = None):
-    try:
-        req = urllib.request.Request("http://127.0.0.1:9222/json", headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            tabs = json.loads(resp.read().decode())
-            for t in tabs:
-                tid = t.get("id")
-                url = t.get("url", "").lower()
-                if tid != keep_tab_id and "bot=tv_scraper" in url:
-                    try:
-                        urllib.request.urlopen(f"http://127.0.0.1:9222/json/close/{tid}", timeout=2)
-                        logger.info(f"Reaped orphaned TV tab ({tid})")
-                    except Exception:
-                        pass
-    except Exception as e:
-        logger.debug(f"TV tab reaper: {e}")
-
-
-def open_tv_tab() -> Tuple[Optional[str], Optional[str]]:
-    cleanup_orphan_tabs()
-    try:
-        url = "https://www.coinglass.com/tv/Binance_BTCUSDT?bot=tv_scraper"
-        req = urllib.request.Request(f"http://127.0.0.1:9222/json/new?{url}", method="PUT")
-        resp = urllib.request.urlopen(req, timeout=6)
-        data = json.loads(resp.read().decode())
-        tab_id = data.get("id")
-        ws_url = data.get("webSocketDebuggerUrl")
-        logger.info(f"Opened fresh ephemeral TV tab ({tab_id})")
-        return tab_id, ws_url
-    except Exception as e:
-        logger.error(f"Failed to open TV tab via CDP: {e}")
-        return None, None
-
-
-def close_tab(tab_id: Optional[str]):
-    if tab_id:
-        try:
-            urllib.request.urlopen(f"http://127.0.0.1:9222/json/close/{tab_id}", timeout=3)
-            logger.info(f"Closed TV tab ({tab_id}) - Browser clean.")
-        except Exception as e:
-            logger.warning(f"Could not close tab {tab_id}: {e}")
-    cleanup_orphan_tabs()
-
-
-async def cdp_eval(ws, expr: str, msg_id: int = 1, await_promise: bool = False, context_id: Optional[int] = None):
-    params = {"expression": expr, "returnByValue": True, "awaitPromise": await_promise}
-    if context_id is not None:
-        params["contextId"] = context_id
-    return await cdp_result(ws, {"id": msg_id, "method": "Runtime.evaluate", "params": params}, timeout=12)
-
-
-async def setup_cdp_session(ws) -> bool:
-    """Attaches to execution contexts and ensures TradingView chart widget and liquidation study are active."""
-    check_chart = """(() => {
-        const iframe = document.querySelector('iframe[id^=tradingview_]');
-        const win = iframe ? iframe.contentWindow : window;
-        const cwc = win.chartWidgetCollection || window.chartWidgetCollection;
-        return !!cwc;
-    })()"""
-    chart_ready = False
-    for attempt in range(40):
-        eval_res = await cdp_eval(ws, check_chart, msg_id=10 + attempt)
-        if eval_res is True:
-            chart_ready = True
-            break
-        await asyncio.sleep(0.5)
-
-    if not chart_ready:
-        logger.error("TradingView chart widget not ready within 20.0s.")
-        return False
-
-    ensure_study = """(async () => {
-        const iframe = document.querySelector('iframe[id^=tradingview_]');
-        const win = iframe ? iframe.contentWindow : window;
-        const cwc = win.chartWidgetCollection || window.chartWidgetCollection;
-        if (!cwc) return { ok: false, error: "no_cwc" };
-        const chart = cwc.activeChartWidget ? cwc.activeChartWidget.value() : cwc.getAll()[0];
-        if (!chart) return { ok: false, error: "no_chart" };
-        const model = chart.model().model ? chart.model().model() : chart.model();
-        let study = model.allStudies().find(s => s.metaInfo && s.metaInfo().id === 'aggregated_liq_kline@tv-basicstudies');
-        if (!study) {
-            const inserter = model.createStudyInserter({ type: 'java', studyId: 'aggregated_liq_kline@tv-basicstudies' });
-            await inserter.insert();
-            study = model.allStudies().find(s => s.metaInfo && s.metaInfo().id === 'aggregated_liq_kline@tv-basicstudies');
-        }
-        return { ok: true, studyId: study ? study.id() : null };
-    })()"""
-    inserted = await cdp_eval(ws, ensure_study, msg_id=50, await_promise=True)
-    if not inserted or not inserted.get("ok"):
-        logger.warning(f"Could not ensure liquidation study: {inserted}")
-        return False
-
-    logger.info("TradingView chart collection and liquidation study ready.")
-    return True
-
-
-async def fetch_symbol_liquidations(ws, tv_sym: str) -> Tuple[List[List], float]:
-    """Switches symbol inside TradingView chart widget and harvests raw liquidation series."""
-    script = f"""(() => {{
-        return new Promise((resolve) => {{
-            try {{
-                const iframe = document.querySelector('iframe[id^=tradingview_]');
-                const win = iframe ? iframe.contentWindow : window;
-                const cwc = win.chartWidgetCollection || window.chartWidgetCollection;
-                if (!cwc) return resolve({{ ok: false, error: "no_cwc" }});
-                
                 cwc.setSymbol("{tv_sym}");
                 let checks = 0;
                 const interval = setInterval(() => {{
@@ -505,7 +243,7 @@ async def fetch_symbol_liquidations(ws, tv_sym: str) -> Tuple[List[List], float]
                         if (!Number.isFinite(lastPrice)) lastPrice = 0;
                         return resolve({{ ok: true, symbol: currentSym, rows: rows, lastPrice: lastPrice }});
                     }}
-                    if (checks >= 35) {{
+                    if (checks >= 70) {{
                         clearInterval(interval);
                         return resolve({{ ok: false, symbol: "{tv_sym}", error: "timeout" }});
                     }}
@@ -529,62 +267,64 @@ def process_and_persist(base_sym: str, tv_sym: str, raw_rows: List[List], last_p
         new_df[col] = pd.to_numeric(new_df[col], errors="coerce").fillna(0.0)
 
     out_file = LIVE_LIQ_DIR / f"{base_sym}_tv_liquidations.parquet"
+    if out_file.exists():
+        try:
+            existing_df = pd.read_parquet(out_file)
+            core_cols = ["timestamp", "long_liq_usd", "short_liq_usd"]
+            if all(c in existing_df.columns for c in core_cols):
+                combined = pd.concat([existing_df[core_cols], new_df[core_cols]], ignore_index=True)
+            else:
+                combined = new_df
+        except Exception:
+            combined = new_df
+    else:
+        combined = new_df
+
+    df = combined.sort_values("timestamp", kind="stable").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
+    if len(df) > 10000:
+        df = df.iloc[-10000:].reset_index(drop=True)
+
+    df["total_liq_usd"] = df["long_liq_usd"] + df["short_liq_usd"]
+    df["net_liq_usd"] = df["long_liq_usd"] - df["short_liq_usd"]
+    df["long_ratio"] = np.where(df["total_liq_usd"] > 0, df["long_liq_usd"] / df["total_liq_usd"], 0.5)
+
+    # Primary IST Columns
+    df["time_ms"] = (df["timestamp"] * 1000).astype("int64")
+    df["open_time_ms"] = df["time_ms"]
+    df["close_time_ms"] = df["time_ms"] + 900000
+    df["open_time_ist"] = df["time_ms"].apply(utc_ms_to_ist_str)
+    df["close_time_ist"] = df["close_time_ms"].apply(utc_ms_to_ist_str)
+    df["time_ist"] = df["open_time_ist"]
+    df["candle_ist"] = df["open_time_ist"]
+    df["datetime_ist"] = df["open_time_ist"]
+    df["open_time_ist_ms"] = df["time_ms"] + 19800000
+    df["close_time_ist_ms"] = df["close_time_ms"] + 19800000
+    df["datetime_utc"] = pd.to_datetime(df["timestamp"], unit="s", utc=True).dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    df["bar_closed"] = df["close_time_ms"] <= int(time.time() * 1000)
+
+    df["symbol"] = base_sym
+    df["coinglass_symbol"] = tv_sym
+    if "close_price" not in df.columns:
+        df["close_price"] = np.nan
+    if not df.empty and last_price > 0:
+        df.iloc[-1, df.columns.get_loc("close_price")] = float(last_price)
+
+    # Rolling 50-bar 90th percentile threshold for spikes
+    min_spike_floor = 50000.0 if base_sym in ["BTC", "ETH", "SOL"] else 15000.0
+    rolling_p90 = df["total_liq_usd"].shift(1).rolling(50, min_periods=10).quantile(0.90).fillna(min_spike_floor)
+    df["p90_threshold"] = np.maximum(rolling_p90, min_spike_floor)
+    df["is_spike"] = (df["total_liq_usd"] >= df["p90_threshold"]) & (df["total_liq_usd"] > min_spike_floor)
+
+    # Reversal bias logic
+    df["reversal_bias"] = "NEUTRAL"
+    df.loc[df["is_spike"] & (df["long_ratio"] >= 0.70), "reversal_bias"] = "BULLISH_REVERSAL"
+    df.loc[df["is_spike"] & (df["long_ratio"] <= 0.30), "reversal_bias"] = "BEARISH_REVERSAL"
+
     from coinglass_common import writer_lock
     with writer_lock(out_file):
-        if out_file.exists():
-            try:
-                existing_df = pd.read_parquet(out_file)
-                core_cols = ["timestamp", "long_liq_usd", "short_liq_usd", "close_price"]
-                available = [c for c in core_cols if c in existing_df.columns]
-                combined = pd.concat([existing_df[available], new_df], ignore_index=True)
-            except Exception:
-                combined = new_df
-        else:
-            combined = new_df
-
-        df = combined.sort_values("timestamp", kind="stable").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
-        if len(df) > 10000:
-            df = df.iloc[-10000:].reset_index(drop=True)
-
-        df["total_liq_usd"] = df["long_liq_usd"] + df["short_liq_usd"]
-        df["net_liq_usd"] = df["long_liq_usd"] - df["short_liq_usd"]
-        df["long_ratio"] = np.where(df["total_liq_usd"] > 0, df["long_liq_usd"] / df["total_liq_usd"], 0.5)
-
-        # Primary IST Columns
-        df["time_ms"] = (df["timestamp"] * 1000).astype("int64")
-        df["open_time_ms"] = df["time_ms"]
-        df["close_time_ms"] = df["time_ms"] + 900000
-        df["open_time_ist"] = df["time_ms"].apply(utc_ms_to_ist_str)
-        df["close_time_ist"] = df["close_time_ms"].apply(utc_ms_to_ist_str)
-        df["time_ist"] = df["open_time_ist"]
-        df["candle_ist"] = df["open_time_ist"]
-        df["datetime_ist"] = df["open_time_ist"]
-        df["open_time_ist_ms"] = df["time_ms"] + 19800000
-        df["close_time_ist_ms"] = df["close_time_ms"] + 19800000
-        df["datetime_utc"] = pd.to_datetime(df["timestamp"], unit="s", utc=True).dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-        df["bar_closed"] = df["close_time_ms"] <= int(time.time() * 1000)
-
-        df["symbol"] = base_sym
-        df["coinglass_symbol"] = tv_sym
-        if "close_price" not in df.columns:
-            df["close_price"] = np.nan
-        if last_price > 0 and len(df) > 0:
-            df.iloc[-1, df.columns.get_loc("close_price")] = float(last_price)
-
-        # Rolling 50-bar 90th percentile threshold for spikes
-        min_spike_floor = 50000.0 if base_sym in ["BTC", "ETH", "SOL"] else 15000.0
-        rolling_p90 = df["total_liq_usd"].shift(1).rolling(50, min_periods=10).quantile(0.90).fillna(min_spike_floor)
-        df["p90_threshold"] = np.maximum(rolling_p90, min_spike_floor)
-        df["is_spike"] = (df["total_liq_usd"] >= df["p90_threshold"]) & (df["total_liq_usd"] > min_spike_floor)
-
-        # Reversal bias logic
-        df["reversal_bias"] = "NEUTRAL"
-        df.loc[df["is_spike"] & (df["long_ratio"] >= 0.70), "reversal_bias"] = "BULLISH_REVERSAL"
-        df.loc[df["is_spike"] & (df["long_ratio"] <= 0.30), "reversal_bias"] = "BEARISH_REVERSAL"
-
         atomic_parquet(df, out_file)
 
-        closed_df = df[df["bar_closed"]]
+    closed_df = df[df["bar_closed"]]
     if closed_df.empty:
         return None
     latest = closed_df.iloc[-1]
