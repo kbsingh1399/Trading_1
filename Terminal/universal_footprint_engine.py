@@ -219,18 +219,18 @@ class FootprintCalibration:
     div_cooldown: int = 1                 # CG allows consecutive signals
 
     # --- Absorption (abs) ---
-    # CoinGlass literal: 'closed in upper half / lower half' (close_pos <= 0.50 / >= 0.50)
-    abs_close_pos_extreme: float = 0.35   # bearish: close_pos <= 0.35; bullish: >= 0.65 ('closed near low/high')
+    # CoinGlass decompiled AST: 'closed in upper half / lower half' (x <= 0.40 / x >= 0.60)
+    abs_close_pos_extreme: float = 0.40   # bearish: close_pos <= 0.40; bullish: >= 0.60 ('closed near low/high')
     abs_zone_share_min: float = 0.30      # "30%+ of the bar's buying/selling at the extreme"
     abs_wick_min: float = 0.05            # geometric corroboration
     abs_vol_ratio_min: float = 0.60       # CoinGlass p10 volume participation (CG p10 0.62-0.74)
     abs_cooldown: int = 1
 
     # --- Exhaustion (exh) ---
-    # Rejection wick: floor 0.35 calibrated to CoinGlass literal 'closed in lower/upper half'
+    # Rejection wick: floor 0.35 calibrated to CoinGlass decompiled AST literal 'closed in lower/upper half'
     exh_lookback: int = 10                # "New 10-bar high/low"
     exh_wick_min: float = 0.35            # rejection wick at the extreme
-    exh_close_pos: float = 0.45           # bearish <= 0.45; bullish >= 0.55 ('closed in lower/upper half')
+    exh_close_pos: float = 0.50           # bearish <= 0.50; bullish >= 0.50 ('closed in lower/upper half')
     exh_cooldown: int = 1
 
     # --- Swing CVD divergence (sdiv) ---
@@ -1203,7 +1203,7 @@ class UniversalFootprintEngine:
         n = len(df)
         prior5_high = ctx["prior5_high"][idx]
         prior5_low = ctx["prior5_low"][idx]
-        trap_retest_band = 0.35  # "lower/upper part of the bar" (bottom/top 35%)
+        trap_retest_band = 0.25  # CoinGlass decompiled AST: m + .25 * v (bottom/top 25% band)
 
         if np.isfinite(prior5_high) and h > prior5_high and v > 0 \
                 and trap_top_buy_share >= cal.trap_zone_share_min \
