@@ -157,6 +157,7 @@ def run_audit():
 def run_dump(
     symbol: str = "BTC",
     top10: bool = False,
+    top20: bool = False,
     all_assets: bool = False,
     inspect: bool = False,
     live: bool = False,
@@ -167,6 +168,8 @@ def run_dump(
     cmd = [sys.executable, "dump_candles_and_signals.py"]
     if all_assets:
         cmd.append("--all")
+    elif top20:
+        cmd.append("--top20")
     elif top10:
         cmd.append("--top10")
     else:
@@ -293,6 +296,7 @@ def main():
     parser.add_argument("--dump", action="store_true", help="Dump candles and signals (supports --symbol, --top10, --all, --inspect, --live)")
     parser.add_argument("--symbol", type=str, default="BTC", help="Symbol for --dump (default: BTC)")
     parser.add_argument("--top10", action="store_true", help="Dump top 10 liquid crypto assets")
+    parser.add_argument("--top20", action="store_true", help="Dump top 20 liquid crypto assets")
     parser.add_argument("--all", action="store_true", help="Dump all supported crypto assets")
     parser.add_argument("--inspect", action="store_true", help="Print full candle and embedded signal JSON details")
     parser.add_argument("--live", action="store_true", help="Run continuous live surveillance and candle append loop")
@@ -316,6 +320,7 @@ def main():
         sys.exit(run_dump(
             symbol=args.symbol,
             top10=args.top10,
+            top20=args.top20,
             all_assets=args.all,
             inspect=args.inspect,
             live=args.live,

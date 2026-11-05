@@ -159,6 +159,26 @@ COINGLASS_BAR_CONFIGS: Dict[str, Dict[str, Any]] = {
         "range": [{"label": "Range 0.001", "size": 0.001}],
         "vol": [{"label": "Volume 1.0M TRX", "threshold": 1_000_000.0}, {"label": "Volume 2.0M TRX", "threshold": 2_000_000.0}]
     },
+    "SUI": {
+        "range": [{"label": "Range 0.02", "size": 0.02}],
+        "vol": [{"label": "Volume 2.0M SUI", "threshold": 2_000_000.0}]
+    },
+    "PEPE": {
+        "range": [{"label": "Range 0.0001", "size": 0.0001}],
+        "vol": [{"label": "Volume 500M PEPE", "threshold": 500_000_000.0}]
+    },
+    "UNI": {
+        "range": [{"label": "Range 0.05", "size": 0.05}],
+        "vol": [{"label": "Volume 200K UNI", "threshold": 200_000.0}]
+    },
+    "AAVE": {
+        "range": [{"label": "Range 1.0", "size": 1.0}],
+        "vol": [{"label": "Volume 10K AAVE", "threshold": 10_000.0}]
+    },
+    "FIL": {
+        "range": [{"label": "Range 0.05", "size": 0.05}],
+        "vol": [{"label": "Volume 500K FIL", "threshold": 500_000.0}]
+    },
     "CRV": {
         "range": [{"label": "Range 0.005", "size": 0.005}],
         "vol": [{"label": "Volume 1.0M CRV", "threshold": 1_000_000.0}, {"label": "Volume 2.5M CRV", "threshold": 2_500_000.0}]

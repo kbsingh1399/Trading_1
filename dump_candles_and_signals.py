@@ -74,6 +74,10 @@ SIGNALS_DIR.mkdir(parents=True, exist_ok=True)
 SIGNALS_PARQUET = SIGNALS_DIR / "coinglass_aggregated_futures_signals.parquet"
 SIGNALS_JSONL = SIGNALS_DIR / "footprint_signals.jsonl"
 TOP10_ASSETS = ["BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "AVAX", "LINK", "DOGE", "NEAR"]
+TOP20_ASSETS = [
+    "BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA", "AVAX", "LINK", "SUI",
+    "PEPE", "NEAR", "DOT", "LTC", "BCH", "TRX", "UNI", "ATOM", "AAVE", "FIL"
+]
 
 
 # =============================================================================
@@ -673,6 +677,7 @@ def main():
     parser = argparse.ArgumentParser(description="Standalone Pure API Candle & Signal Dumper (Time, Range & Volume)")
     parser.add_argument("--symbol", type=str, default="BTC", help="Symbol to dump (e.g. BTC, ETH, SOL; default: BTC)")
     parser.add_argument("--top10", action="store_true", help="Dump/Stream top 10 crypto futures assets")
+    parser.add_argument("--top20", action="store_true", help="Dump/Stream top 20 crypto futures assets")
     parser.add_argument("--all", action="store_true", help="Dump/Stream all 32 supported crypto assets")
     parser.add_argument("--inspect", action="store_true", help="Print full candle and embedded signal JSON details")
     parser.add_argument("--live", action="store_true", help="Continuous live surveillance and candle append mode")
@@ -688,6 +693,8 @@ def main():
     if args.all:
         from Terminal.aggregated_futures_feed import VENUE_SYMBOL_MAP
         symbols_to_process = sorted(list(VENUE_SYMBOL_MAP.keys()))
+    elif args.top20:
+        symbols_to_process = TOP20_ASSETS
     elif args.top10:
         symbols_to_process = TOP10_ASSETS
     else:
