@@ -163,7 +163,7 @@ class AggregatedFuturesFeed:
         now_ms = now_ms or int(datetime.now(timezone.utc).timestamp() * 1000)
         mult = VENUE_MULTIPLIERS.get(symbol, {}).get("okx", 1.0)
         step_ms = 900000 if "15" in interval else (300000 if "5" in interval else 60000)
-        needed = min(limit, 300)
+        needed = min(limit, 1000)
         pages = (needed + 99) // 100
         bars = {}
         after_param = ""
@@ -220,7 +220,7 @@ class AggregatedFuturesFeed:
     ) -> Dict[int, Dict[str, Any]]:
         api_sym = VENUE_SYMBOL_MAP.get(symbol, {}).get("bybit", f"{symbol}USDT")
         bybit_interval = interval.replace("m", "")
-        fetch_limit = min(limit, 300)
+        fetch_limit = min(limit, 1000)
         url = f"https://api.bybit.com/v5/market/kline?category=linear&symbol={api_sym}&interval={bybit_interval}&limit={fetch_limit}"
         try:
             res = _http_get_json(url, timeout=self.timeout_sec)

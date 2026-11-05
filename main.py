@@ -154,7 +154,15 @@ def run_audit():
     exec_audit()
 
 
-def run_dump(symbol: str = "BTC", top10: bool = False, all_assets: bool = False, inspect: bool = False):
+def run_dump(
+    symbol: str = "BTC",
+    top10: bool = False,
+    all_assets: bool = False,
+    inspect: bool = False,
+    live: bool = False,
+    poll_interval: int = 15,
+    max_bars: int = 1000
+):
     """Dumps 4-exchange pure API candles (Time, Range, Volume) with embedded signals to Parquet."""
     cmd = [sys.executable, "dump_candles_and_signals.py"]
     if all_assets:
@@ -165,7 +173,13 @@ def run_dump(symbol: str = "BTC", top10: bool = False, all_assets: bool = False,
         cmd.extend(["--symbol", symbol])
     if inspect:
         cmd.append("--inspect")
-    print(f"\n[MAIN] Executing candle & signal dump ({' '.join(cmd)})...")
+    if live:
+        cmd.append("--live")
+    if poll_interval != 15:
+        cmd.extend(["--poll-interval", str(poll_interval)])
+    if max_bars != 1000:
+        cmd.extend(["--max-bars", str(max_bars)])
+    print(f"\n[MAIN] Executing candle & signal dumper ({' '.join(cmd)})...")
     env = os.environ.copy()
     env["PYTHONPATH"] = str(ROOT_DIR)
     p = subprocess.run(cmd, cwd=str(ROOT_DIR), env=env)
@@ -175,7 +189,14 @@ def run_dump(symbol: str = "BTC", top10: bool = False, all_assets: bool = False,
 def run_test():
     """Runs the full repository test suite via pytest."""
     print("\n[MAIN] Running complete test suite via pytest...")
-    cmd = [sys.executable, "-m", "pytest", "tests/test_coinglass_api_replica.py", "tests/test_aggregated_futures_feed.py", "tests/test_live_execution_guardrails.py", "-v"]
+    cmd = [
+        sys.executable, "-m", "pytest",
+        "tests/test_coinglass_api_replica.py",
+        "tests/test_aggregated_futures_feed.py",
+        "tests/test_live_execution_guardrails.py",
+        "tests/test_dump_candles_and_signals.py",
+        "-v"
+    ]
     env = os.environ.copy()
     env["PYTHONPATH"] = str(ROOT_DIR)
     p = subprocess.run(cmd, cwd=str(ROOT_DIR), env=env)
@@ -269,11 +290,14 @@ def main():
     parser = argparse.ArgumentParser(description="Standalone Quant Trading Engine Primary Controller")
     parser.add_argument("--status", action="store_true", help="Display 360-degree operational reality & health status")
     parser.add_argument("--daemon", action="store_true", help="Run continuous 2-process pipeline (Harvester + Sentinel)")
-    parser.add_argument("--dump", action="store_true", help="Dump candles and signals (supports --symbol, --top10, --all, --inspect)")
+    parser.add_argument("--dump", action="store_true", help="Dump candles and signals (supports --symbol, --top10, --all, --inspect, --live)")
     parser.add_argument("--symbol", type=str, default="BTC", help="Symbol for --dump (default: BTC)")
     parser.add_argument("--top10", action="store_true", help="Dump top 10 liquid crypto assets")
     parser.add_argument("--all", action="store_true", help="Dump all supported crypto assets")
     parser.add_argument("--inspect", action="store_true", help="Print full candle and embedded signal JSON details")
+    parser.add_argument("--live", action="store_true", help="Run continuous live surveillance and candle append loop")
+    parser.add_argument("--poll-interval", type=int, default=15, help="Intra-bar poll interval in seconds (default: 15)")
+    parser.add_argument("--max-bars", type=int, default=1000, help="Maximum rolling history bars in Parquet (default: 1000)")
     parser.add_argument("--sweep", action="store_true", help="Run single pure API footprint sweep across assets")
     parser.add_argument("--sentinel", action="store_true", help="Run Sentinel live execution engine alone")
     parser.add_argument("--audit", action="store_true", help="Run Delta Exchange India position & risk audit")
@@ -289,7 +313,15 @@ def main():
     if args.status:
         run_status()
     elif args.dump:
-        sys.exit(run_dump(symbol=args.symbol, top10=args.top10, all_assets=args.all, inspect=args.inspect))
+        sys.exit(run_dump(
+            symbol=args.symbol,
+            top10=args.top10,
+            all_assets=args.all,
+            inspect=args.inspect,
+            live=args.live,
+            poll_interval=args.poll_interval,
+            max_bars=args.max_bars
+        ))
     elif args.daemon:
         run_daemon(interval=args.interval, crypto_only=args.crypto_only)
     elif args.sweep:
