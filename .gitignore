@@ -28,6 +28,8 @@ scratch/
 
 # Runtime locks
 Database/.locks/
+*.lock
+*.writer.lock
 
 # Log files
 *.log

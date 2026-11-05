@@ -1,0 +1,961 @@
+"""
+trade_evaluator.py
+========================================================================================
+Pillar 5 of Standalone Crypto Pipeline: Per-Asset Rolling 5-Signal Queue & Evaluator
+========================================================================================
+- Maintains dedicated per-asset rolling 5-signal FIFO queues in:
+    Database/Signals/Signal_Queues/<SYM>_queue.json
+- Handles burst arrivals (e.g. 2 simultaneous signals in one sweep) without loss:
+    appends all, slices [-5:] to keep latest 5, analyzes latest triggers in context.
+- Synthesizes 5 Pillars of Market Intelligence into a 0-100 Confluence Score:
+    Pillar 1: Footprint Signal Quality & Queue Momentum/Exhaustion (Max 30)
+    Pillar 2: Auction Market Theory, VAH/VAL/POC & VWAP Alignment (Max 20)
+    Pillar 3: Whale Defending Walls & Orderbook Imbalance (Max 20)
+    Pillar 4: Liquidation Heatmap Magnet Zones (Max 15)
+    Pillar 5: TV 15m Liquidations Bursts & Squeeze Exhaustion (Max 15)
+- Dynamic Risk Management:
+    Dynamic SL anchored to Defending Whale Wall / VAL / VAH with 0.2% safety buffer
+    Take Profit anchored to Counter Liquidation Magnet enforcing R:R >= 2.0
+- Deterministic Pass Gates:
+    Direction Contradiction Entropy (Hd <= 0.95)
+    Strict Confluence Gate (Score >= 75.0)
+    Risk-to-Reward Hard Gate (R:R >= 2.0)
+- Dual Timestamp & Microsecond Precision:
+    Candle bar time: time_ms, time_ist
+    Event formulation: created_at_ms, created_at_us, created_at_utc, created_at_ist
+- Fully compatible with DuckDB / Polars read_ndjson('Database/Signals/Trade_Setups/*.jsonl'):
+    Flat typed primary schema, serialized JSON string for nested metadata, allow_nan=False.
+========================================================================================
+"""
+
+import sys
+import os
+import json
+import math
+import time
+import logging
+from pathlib import Path
+from datetime import datetime, timezone, timedelta
+from typing import List, Dict, Tuple, Optional, Any
+
+import pandas as pd
+import numpy as np
+
+# Root and Database directory resolution
+ROOT_DIR = Path(__file__).resolve().parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from coinglass_common import (
+    writer_lock,
+    atomic_json,
+    atomic_append_jsonl,
+    utc_ms_to_ist_str,
+    acquire_singleton,
+)
+
+logger = logging.getLogger("TradeEvaluator")
+if not logger.handlers:
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter("[%(asctime)s][%(name)s][%(levelname)s] %(message)s"))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+
+# Canonical Storage Paths
+DB_DIR = ROOT_DIR / "Database"
+SIGNALS_DIR = DB_DIR / "Signals"
+QUEUE_DIR = SIGNALS_DIR / "Signal_Queues"
+SETUPS_DIR = SIGNALS_DIR / "Trade_Setups"
+MASTER_SETUPS_PATH = SETUPS_DIR / "master_active_setups.jsonl"
+
+CANDLE_DIR = DB_DIR / "Candle_Data"
+AUCTION_DIR = DB_DIR / "Auction_Levels"
+WHALE_DIR = DB_DIR / "Whale_Orders" / "Open_Orders"
+MAGNET_DIR = DB_DIR / "Liquidation_Data" / "Magnet_Zones"
+TV_LIQ_DIR = DB_DIR / "Live_Liquidations"
+
+# Ensure all directories exist
+QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+SETUPS_DIR.mkdir(parents=True, exist_ok=True)
+
+# Signal Priority Hierarchy (Lower number = Higher Priority)
+SIGNAL_PRIORITY_MAP = {
+    "trap": 1,       # Bull/Bear Trap (reversal with trapped market orders)
+    "abs": 2,        # Absorption (high volume limit orders soaking aggressive flow)
+    "ratio_p": 3,    # Ratio Pass / Bid-Ask Imbalance Pass
+    "sdiv": 4,       # Swing CVD Divergence
+    "div": 5,        # Delta Divergence
+    "p_spike": 6,    # Pressure / Delta Spike
+    "exh": 7,        # Volume Exhaustion
+}
+
+def get_signal_priority(sig_code: Optional[str]) -> int:
+    if not sig_code:
+        return 8
+    code = str(sig_code).lower().strip()
+    return SIGNAL_PRIORITY_MAP.get(code, 8)
+
+def calculate_shannon_entropy(labels: List[str]) -> float:
+    """Computes Shannon entropy across binary direction labels (e.g. ['LONG', 'SHORT'])."""
+    if not labels:
+        return 0.0
+    total = len(labels)
+    counts: Dict[str, int] = {}
+    for l in labels:
+        counts[l] = counts.get(l, 0) + 1
+    entropy = 0.0
+    for count in counts.values():
+        p = count / total
+        if p > 0:
+            entropy -= p * math.log2(p)
+    return float(entropy)
+
+def safe_float(val: Any, default: Optional[float] = None) -> Optional[float]:
+    if val is None or pd.isna(val):
+        return default
+    try:
+        f = float(val)
+        return default if math.isnan(f) or math.isinf(f) else f
+    except (ValueError, TypeError):
+        return default
+
+
+# ========================================================================================
+# 1. Per-Asset Rolling 5-Signal Queue Manager
+# ========================================================================================
+class SignalQueueManager:
+    @staticmethod
+    def get_queue_path(symbol: str) -> Path:
+        return QUEUE_DIR / f"{symbol.upper()}_queue.json"
+
+    @classmethod
+    def load_queue(cls, symbol: str) -> List[dict]:
+        p = cls.get_queue_path(symbol)
+        if not p.exists():
+            return []
+        try:
+            with writer_lock(p):
+                content = p.read_text(encoding="utf-8").strip()
+                if not content:
+                    return []
+                data = json.loads(content)
+                return data if isinstance(data, list) else []
+        except Exception as e:
+            logger.warning(f"[{symbol}] Failed to read queue from {p.name}: {e}")
+            return []
+
+    @classmethod
+    def push_signals_and_roll(
+        cls,
+        symbol: str,
+        new_signals: List[dict],
+        max_len: int = 5
+    ) -> Tuple[List[dict], List[dict]]:
+        """
+        Pushes new harvested signals into the asset's dedicated queue.
+        Deduplicates against existing elements, rolls to keep at most `max_len` latest items,
+        and persists atomically under writer_lock.
+        Returns: (updated_queue, newly_added_signals)
+        """
+        if not new_signals:
+            return cls.load_queue(symbol), []
+
+        p = cls.get_queue_path(symbol)
+        with writer_lock(p):
+            existing = []
+            if p.exists():
+                try:
+                    content = p.read_text(encoding="utf-8").strip()
+                    if content:
+                        parsed = json.loads(content)
+                        if isinstance(parsed, list):
+                            existing = parsed
+                except Exception:
+                    existing = []
+
+            # Build set of existing signature keys: (sig_code, bar_type, bar_label, time_ms)
+            existing_keys = {
+                (
+                    str(s.get("sig_code", "")).lower(),
+                    str(s.get("bar_type", "time")).lower(),
+                    str(s.get("bar_label", "")).strip(),
+                    int(s.get("time_ms", 0)),
+                )
+                for s in existing
+            }
+
+            now_utc = datetime.now(timezone.utc)
+            now_ist = now_utc + timedelta(hours=5, minutes=30)
+            now_ms = int(now_utc.timestamp() * 1000)
+            now_us = int(now_utc.timestamp() * 1_000_000)
+            now_ist_str = now_ist.strftime("%Y-%m-%d %H:%M:%S.%f IST")
+
+            newly_added = []
+            for s in new_signals:
+                sig_code = str(s.get("sig_code", "")).lower()
+                bar_type = str(s.get("bar_type", "time")).lower()
+                bar_label = str(s.get("bar_label", "")).strip()
+                t_ms = int(s.get("time_ms", 0))
+
+                key = (sig_code, bar_type, bar_label, t_ms)
+                if key in existing_keys:
+                    continue
+
+                raw_side = str(s.get("side", "")).lower()
+                if "bull" in raw_side or "long" in raw_side or "buy" in raw_side:
+                    direction = "LONG"
+                elif "bear" in raw_side or "short" in raw_side or "sell" in raw_side:
+                    direction = "SHORT"
+                else:
+                    direction = "NEUTRAL"
+
+                price_val = safe_float(s.get("price") or s.get("poc_price") or s.get("close"), 0.0)
+
+                pruned_sig = {
+                    "sig_id": f"{symbol}_{sig_code}_{bar_type}_{t_ms}_{now_us % 1000000}",
+                    "symbol": symbol.upper(),
+                    "sig_code": sig_code,
+                    "sig_name": str(s.get("sig_name") or s.get("title") or sig_code),
+                    "direction": direction,
+                    "side": raw_side,
+                    "price": round(price_val, 6),
+                    "bar_type": bar_type,
+                    "bar_label": bar_label,
+                    "time_ms": t_ms,
+                    "time_ist": s.get("time_ist") or utc_ms_to_ist_str(t_ms),
+                    "priority": get_signal_priority(sig_code),
+                    "delta": safe_float(s.get("delta"), 0.0),
+                    "delta_pct": safe_float(s.get("delta_pct"), 0.0),
+                    "cvd": safe_float(s.get("cvd"), 0.0),
+                    "poc_price": safe_float(s.get("poc_price"), price_val),
+                    "arrived_at_ms": now_ms,
+                    "arrived_at_ist": now_ist_str,
+                }
+
+                existing_keys.add(key)
+                existing.append(pruned_sig)
+                newly_added.append(pruned_sig)
+
+            # Roll window: keep at most latest max_len signals
+            updated_queue = existing[-max_len:]
+            atomic_json(p, updated_queue)
+
+            if newly_added:
+                logger.info(
+                    f"[{symbol}] Appended {len(newly_added)} signal(s) to rolling queue "
+                    f"({len(updated_queue)}/{max_len} in window)."
+                )
+
+            return updated_queue, newly_added
+
+
+# ========================================================================================
+# 2. Multi-Pillar Trade Evaluator
+# ========================================================================================
+class MultiPillarTradeEvaluator:
+    @classmethod
+    def load_candle_context(cls, symbol: str) -> Dict[str, Any]:
+        """Loads latest 15m candle metrics and ATR from Database/Candle_Data/<SYM>.parquet."""
+        p = CANDLE_DIR / f"{symbol.upper()}.parquet"
+        if not p.exists():
+            return {}
+        try:
+            df = pd.read_parquet(p)
+            if df.empty:
+                return {}
+            last_row = df.iloc[-1].to_dict()
+
+            # Calculate 14-period ATR
+            atr_val = 0.0
+            if len(df) >= 5 and "high" in df.columns and "low" in df.columns and "close" in df.columns:
+                highs = df["high"].astype(float)
+                lows = df["low"].astype(float)
+                closes = df["close"].astype(float)
+                prev_closes = closes.shift(1).fillna(closes)
+                tr1 = highs - lows
+                tr2 = (highs - prev_closes).abs()
+                tr3 = (lows - prev_closes).abs()
+                tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+                atr_val = float(tr.tail(14).mean())
+
+            return {
+                "latest_close": safe_float(last_row.get("close")),
+                "latest_open": safe_float(last_row.get("open")),
+                "latest_high": safe_float(last_row.get("high")),
+                "latest_low": safe_float(last_row.get("low")),
+                "latest_volume": safe_float(last_row.get("total_volume") or last_row.get("volume"), 0.0),
+                "latest_delta": safe_float(last_row.get("delta"), 0.0),
+                "latest_delta_pct": safe_float(last_row.get("delta_pct"), 0.0),
+                "latest_cvd": safe_float(last_row.get("cumulative_delta") or last_row.get("cvd"), 0.0),
+                "latest_poc": safe_float(last_row.get("poc_price")),
+                "atr_14": round(atr_val, 6) if atr_val > 0 else None,
+                "time_ms": int(last_row.get("open_time_ms") or 0),
+                "time_ist": str(last_row.get("time_ist") or ""),
+            }
+        except Exception as e:
+            logger.debug(f"[{symbol}] Failed reading candles: {e}")
+            return {}
+
+    @classmethod
+    def load_auction_context(cls, symbol: str) -> Dict[str, Any]:
+        """Loads latest auction levels from Database/Auction_Levels/<SYM>_auction_levels.parquet."""
+        p = AUCTION_DIR / f"{symbol.upper()}_auction_levels.parquet"
+        if not p.exists():
+            return {}
+        try:
+            df = pd.read_parquet(p)
+            if df.empty:
+                return {}
+            row = df.iloc[-1].to_dict()
+            return {
+                "day_val": safe_float(row.get("day_val")),
+                "day_vah": safe_float(row.get("day_vah")),
+                "day_poc": safe_float(row.get("day_poc")),
+                "day_vwap": safe_float(row.get("day_vwap")),
+                "value_status": str(row.get("value_status") or "UNKNOWN"),
+                "price_vs_vwap": str(row.get("price_vs_vwap") or "UNKNOWN"),
+                "mtf_bias": str(row.get("mtf_bias") or "UNKNOWN"),
+                "htf_1h_trend": str(row.get("htf_1h_trend") or "UNKNOWN"),
+                "htf_4h_trend": str(row.get("htf_4h_trend") or "UNKNOWN"),
+                "nearest_whale_bid": row.get("nearest_whale_bid"),
+                "nearest_whale_ask": row.get("nearest_whale_ask"),
+                "updated_at_utc": str(row.get("updated_at_utc") or ""),
+            }
+        except Exception as e:
+            logger.debug(f"[{symbol}] Failed reading auction levels: {e}")
+            return {}
+
+    @classmethod
+    def load_whale_context(cls, symbol: str, current_price: float) -> Dict[str, Any]:
+        """Loads active open whale orders and identifies defending bid/ask walls."""
+        p = WHALE_DIR / f"{symbol.upper()}_whale_open_orders.parquet"
+        if not p.exists() or current_price <= 0:
+            return {"defending_bid": None, "defending_ask": None, "bid_wall_usd": 0.0, "ask_wall_usd": 0.0}
+        try:
+            df = pd.read_parquet(p)
+            if df.empty:
+                return {"defending_bid": None, "defending_ask": None, "bid_wall_usd": 0.0, "ask_wall_usd": 0.0}
+
+            # Filter for orders with decay_weight >= 0.25 (fresh within ~45 min)
+            if "decay_weight" in df.columns:
+                df = df[df["decay_weight"] >= 0.25]
+
+            bids = df[df["side"].str.lower() == "bid"].copy()
+            asks = df[df["side"].str.lower() == "ask"].copy()
+
+            # Defending bid: order below current price within 0.1% to 2.5%
+            bids["dist_pct"] = (current_price - bids["price"]) / current_price * 100.0
+            defending_bids = bids[(bids["dist_pct"] >= 0.1) & (bids["dist_pct"] <= 2.5)]
+            best_bid_wall = None
+            bid_wall_usd = 0.0
+            if not defending_bids.empty:
+                best_bid_row = defending_bids.sort_values(by="remaining_usd", ascending=False).iloc[0]
+                best_bid_wall = {
+                    "price": safe_float(best_bid_row["price"]),
+                    "usd": safe_float(best_bid_row["remaining_usd"]),
+                    "dist_pct": safe_float(best_bid_row["dist_pct"]),
+                }
+                bid_wall_usd = float(defending_bids["remaining_usd"].sum())
+
+            # Defending ask: order above current price within 0.1% to 2.5%
+            asks["dist_pct"] = (asks["price"] - current_price) / current_price * 100.0
+            defending_asks = asks[(asks["dist_pct"] >= 0.1) & (asks["dist_pct"] <= 2.5)]
+            best_ask_wall = None
+            ask_wall_usd = 0.0
+            if not defending_asks.empty:
+                best_ask_row = defending_asks.sort_values(by="remaining_usd", ascending=False).iloc[0]
+                best_ask_wall = {
+                    "price": safe_float(best_ask_row["price"]),
+                    "usd": safe_float(best_ask_row["remaining_usd"]),
+                    "dist_pct": safe_float(best_ask_row["dist_pct"]),
+                }
+                ask_wall_usd = float(defending_asks["remaining_usd"].sum())
+
+            return {
+                "defending_bid": best_bid_wall,
+                "defending_ask": best_ask_wall,
+                "bid_wall_usd": round(bid_wall_usd, 2),
+                "ask_wall_usd": round(ask_wall_usd, 2),
+            }
+        except Exception as e:
+            logger.debug(f"[{symbol}] Failed reading whale orders: {e}")
+            return {"defending_bid": None, "defending_ask": None, "bid_wall_usd": 0.0, "ask_wall_usd": 0.0}
+
+    @classmethod
+    def load_magnet_context(cls, symbol: str, current_price: float) -> Dict[str, Any]:
+        """Loads nearest liquidation magnet zones from Database/Liquidation_Data/Magnet_Zones/<SYM>_magnet_zones.parquet."""
+        p = MAGNET_DIR / f"{symbol.upper()}_magnet_zones.parquet"
+        if not p.exists() or current_price <= 0:
+            return {"long_magnet": None, "short_magnet": None}
+        try:
+            df = pd.read_parquet(p)
+            if df.empty:
+                return {"long_magnet": None, "short_magnet": None}
+
+            # side: SHORT = short liquidation cluster (above price, magnet for longs)
+            # side: LONG = long liquidation cluster (below price, magnet for shorts)
+            shorts = df[df["side"].str.upper() == "SHORT"]
+            longs = df[df["side"].str.upper() == "LONG"]
+
+            target_short_liq = None  # Upside target for LONG trade
+            if not shorts.empty:
+                s_sorted = shorts.sort_values(by="score", ascending=False).iloc[0]
+                target_short_liq = {
+                    "price": safe_float(s_sorted.get("zone_price")),
+                    "score": safe_float(s_sorted.get("score")),
+                    "dist_pct": safe_float(s_sorted.get("distance_pct")),
+                }
+
+            target_long_liq = None  # Downside target for SHORT trade
+            if not longs.empty:
+                l_sorted = longs.sort_values(by="score", ascending=False).iloc[0]
+                target_long_liq = {
+                    "price": safe_float(l_sorted.get("zone_price")),
+                    "score": safe_float(l_sorted.get("score")),
+                    "dist_pct": safe_float(l_sorted.get("distance_pct")),
+                }
+
+            return {
+                "short_magnet": target_short_liq,  # target above
+                "long_magnet": target_long_liq,    # target below
+            }
+        except Exception as e:
+            logger.debug(f"[{symbol}] Failed reading magnet zones: {e}")
+            return {"long_magnet": None, "short_magnet": None}
+
+    @classmethod
+    def load_tv_liquidation_context(cls, symbol: str) -> Dict[str, Any]:
+        """Loads latest 15m liquidation spikes from Database/Live_Liquidations/<SYM>_tv_liquidations.parquet."""
+        p = TV_LIQ_DIR / f"{symbol.upper()}_tv_liquidations.parquet"
+        if not p.exists():
+            return {}
+        try:
+            df = pd.read_parquet(p)
+            if df.empty:
+                return {}
+            last_row = df.iloc[-1].to_dict()
+            recent_4 = df.tail(4)
+            recent_long_liq = float(recent_4["long_liq_usd"].sum())
+            recent_short_liq = float(recent_4["short_liq_usd"].sum())
+            is_spike = bool(last_row.get("is_spike", False))
+            reversal_bias = str(last_row.get("reversal_bias") or "NEUTRAL")
+
+            return {
+                "latest_long_liq": safe_float(last_row.get("long_liq_usd"), 0.0),
+                "latest_short_liq": safe_float(last_row.get("short_liq_usd"), 0.0),
+                "recent_long_liq_1h": safe_float(recent_long_liq, 0.0),
+                "recent_short_liq_1h": safe_float(recent_short_liq, 0.0),
+                "is_spike": is_spike,
+                "reversal_bias": reversal_bias,
+            }
+        except Exception as e:
+            logger.debug(f"[{symbol}] Failed reading TV liquidations: {e}")
+            return {}
+
+    @classmethod
+    def evaluate_symbol(
+        cls,
+        symbol: str,
+        trigger_signals: List[dict],
+        queue: List[dict],
+        current_price: Optional[float] = None
+    ) -> Optional[dict]:
+        """
+        Synthesizes the 5 Pillars of Market Intelligence to formulate a structured trade setup.
+        Returns a canonical setup dict or None.
+        """
+        if not queue:
+            return None
+
+        # Determine primary trigger: highest priority among newly arrived triggers
+        sorted_triggers = sorted(trigger_signals if trigger_signals else queue, key=lambda s: s.get("priority", 8))
+        primary_trigger = sorted_triggers[0]
+
+        target_direction = primary_trigger.get("direction", "NEUTRAL")
+        if target_direction not in ("LONG", "SHORT"):
+            # If neutral, derive from queue consensus
+            long_cnt = sum(1 for s in queue if s.get("direction") == "LONG")
+            short_cnt = sum(1 for s in queue if s.get("direction") == "SHORT")
+            if long_cnt > short_cnt:
+                target_direction = "LONG"
+            elif short_cnt > long_cnt:
+                target_direction = "SHORT"
+            else:
+                return None  # Pure deadlock
+
+        # Direction Contradiction Entropy Gate
+        queue_dirs = [s.get("direction", "NEUTRAL") for s in queue if s.get("direction") in ("LONG", "SHORT")]
+        entropy = calculate_shannon_entropy(queue_dirs)
+        contradiction_veto = False
+        if entropy > 0.95 and primary_trigger.get("priority", 8) > 2:
+            # High chop / split queue and not a top-tier trap/absorption reversal
+            contradiction_veto = True
+
+        # Load context across all 5 pillars
+        candle_ctx = cls.load_candle_context(symbol)
+        ref_price = (
+            safe_float(current_price)
+            or candle_ctx.get("latest_close")
+            or primary_trigger.get("price")
+            or 0.0
+        )
+        if ref_price <= 0:
+            logger.warning(f"[{symbol}] Cannot evaluate: invalid reference price {ref_price}")
+            return None
+
+        auction_ctx = cls.load_auction_context(symbol)
+        whale_ctx = cls.load_whale_context(symbol, ref_price)
+        magnet_ctx = cls.load_magnet_context(symbol, ref_price)
+        tv_liq_ctx = cls.load_tv_liquidation_context(symbol)
+
+        # -------------------------------------------------------------------------
+        # Pillar 1: Footprint Signal Quality & Queue Alignment (Max 30)
+        # -------------------------------------------------------------------------
+        w1_score = 0.0
+        p_code = primary_trigger.get("sig_code", "")
+        # Base trigger priority
+        if p_code == "trap":
+            w1_score += 18.0
+        elif p_code == "abs":
+            w1_score += 15.0
+        elif p_code == "ratio_p":
+            w1_score += 13.0
+        elif p_code in ("sdiv", "div"):
+            w1_score += 11.0
+        elif p_code in ("p_spike", "exh"):
+            w1_score += 9.0
+        else:
+            w1_score += 7.0
+
+        # Queue concordance
+        matching_in_queue = sum(1 for s in queue if s.get("direction") == target_direction)
+        if matching_in_queue >= 4:
+            w1_score += 8.0
+        elif matching_in_queue >= 3:
+            w1_score += 5.0
+        elif matching_in_queue == 2:
+            w1_score += 3.0
+
+        # Burst concordance bonus
+        if len(trigger_signals) >= 2:
+            agreeing_triggers = sum(1 for s in trigger_signals if s.get("direction") == target_direction)
+            if agreeing_triggers >= 2:
+                w1_score += 2.0
+
+        # Delta confirmation
+        latest_delta = candle_ctx.get("latest_delta", 0.0)
+        if target_direction == "LONG" and latest_delta > 0:
+            w1_score += 2.0
+        elif target_direction == "SHORT" and latest_delta < 0:
+            w1_score += 2.0
+
+        w1_score = min(w1_score, 30.0)
+
+        # -------------------------------------------------------------------------
+        # Pillar 2: Auction Market Theory, VAH/VAL/POC & VWAP Alignment (Max 20)
+        # -------------------------------------------------------------------------
+        w2_score = 0.0
+        val = safe_float(auction_ctx.get("day_val"))
+        vah = safe_float(auction_ctx.get("day_vah"))
+        poc = safe_float(auction_ctx.get("day_poc"))
+        vwap = safe_float(auction_ctx.get("day_vwap"))
+        mtf_bias = auction_ctx.get("mtf_bias", "")
+
+        if target_direction == "LONG":
+            # Bouncing off VAL or reclaiming POC
+            if val and abs(ref_price - val) / ref_price <= 0.012:
+                w2_score += 8.0
+            if vwap and ref_price >= vwap:
+                w2_score += 6.0
+            elif poc and ref_price >= poc:
+                w2_score += 4.0
+            if "BULLISH" in mtf_bias:
+                w2_score += 6.0
+            elif "BALANCED" in mtf_bias:
+                w2_score += 3.0
+        else:  # SHORT
+            # Rejecting VAH or losing POC
+            if vah and abs(ref_price - vah) / ref_price <= 0.012:
+                w2_score += 8.0
+            if vwap and ref_price <= vwap:
+                w2_score += 6.0
+            elif poc and ref_price <= poc:
+                w2_score += 4.0
+            if "BEARISH" in mtf_bias:
+                w2_score += 6.0
+            elif "BALANCED" in mtf_bias:
+                w2_score += 3.0
+
+        w2_score = min(w2_score, 20.0)
+
+        # -------------------------------------------------------------------------
+        # Pillar 3: Whale Defending Walls & Orderbook Imbalance (Max 20)
+        # -------------------------------------------------------------------------
+        w3_score = 0.0
+        defending_bid = whale_ctx.get("defending_bid")
+        defending_ask = whale_ctx.get("defending_ask")
+        bid_wall_usd = whale_ctx.get("bid_wall_usd", 0.0)
+        ask_wall_usd = whale_ctx.get("ask_wall_usd", 0.0)
+
+        if target_direction == "LONG":
+            if defending_bid:
+                usd = defending_bid.get("usd", 0.0)
+                if usd >= 1_500_000:
+                    w3_score += 16.0
+                elif usd >= 500_000:
+                    w3_score += 12.0
+                elif usd >= 100_000:
+                    w3_score += 8.0
+                else:
+                    w3_score += 5.0
+            if bid_wall_usd > ask_wall_usd * 1.5:
+                w3_score += 4.0
+        else:  # SHORT
+            if defending_ask:
+                usd = defending_ask.get("usd", 0.0)
+                if usd >= 1_500_000:
+                    w3_score += 16.0
+                elif usd >= 500_000:
+                    w3_score += 12.0
+                elif usd >= 100_000:
+                    w3_score += 8.0
+                else:
+                    w3_score += 5.0
+            if ask_wall_usd > bid_wall_usd * 1.5:
+                w3_score += 4.0
+
+        w3_score = min(w3_score, 20.0)
+
+        # -------------------------------------------------------------------------
+        # Pillar 4: Liquidation Heatmap Magnet Zones (Max 15)
+        # -------------------------------------------------------------------------
+        w4_score = 0.0
+        short_magnet = magnet_ctx.get("short_magnet")  # upside target
+        long_magnet = magnet_ctx.get("long_magnet")    # downside target
+
+        if target_direction == "LONG" and short_magnet:
+            score_m = short_magnet.get("score", 0.0)
+            dist_m = short_magnet.get("dist_pct", 0.0)
+            if 0.3 <= dist_m <= 4.0:
+                if score_m >= 75.0:
+                    w4_score += 15.0
+                elif score_m >= 50.0:
+                    w4_score += 11.0
+                else:
+                    w4_score += 7.0
+        elif target_direction == "SHORT" and long_magnet:
+            score_m = long_magnet.get("score", 0.0)
+            dist_m = long_magnet.get("dist_pct", 0.0)
+            if 0.3 <= dist_m <= 4.0:
+                if score_m >= 75.0:
+                    w4_score += 15.0
+                elif score_m >= 50.0:
+                    w4_score += 11.0
+                else:
+                    w4_score += 7.0
+
+        w4_score = min(w4_score, 15.0)
+
+        # -------------------------------------------------------------------------
+        # Pillar 5: TV 15m Liquidations Spike (Max 15)
+        # -------------------------------------------------------------------------
+        w5_score = 0.0
+        is_spike = tv_liq_ctx.get("is_spike", False)
+        rev_bias = tv_liq_ctx.get("reversal_bias", "NEUTRAL")
+        rec_long_liq = tv_liq_ctx.get("recent_long_liq_1h", 0.0)
+        rec_short_liq = tv_liq_ctx.get("recent_short_liq_1h", 0.0)
+
+        if target_direction == "LONG":
+            if rev_bias == "BULLISH_REVERSAL":
+                w5_score += 15.0
+            elif is_spike and rec_short_liq > rec_long_liq:
+                w5_score += 12.0
+            elif rec_short_liq > 1_000_000:
+                w5_score += 8.0
+            elif rec_short_liq > 250_000:
+                w5_score += 5.0
+        else:  # SHORT
+            if rev_bias == "BEARISH_REVERSAL":
+                w5_score += 15.0
+            elif is_spike and rec_long_liq > rec_short_liq:
+                w5_score += 12.0
+            elif rec_long_liq > 1_000_000:
+                w5_score += 8.0
+            elif rec_long_liq > 250_000:
+                w5_score += 5.0
+
+        w5_score = min(w5_score, 15.0)
+
+        # Total Confluence Score
+        confluence_score = round(w1_score + w2_score + w3_score + w4_score + w5_score, 2)
+
+        # -------------------------------------------------------------------------
+        # Dynamic Risk Management & Levels Formulation
+        # -------------------------------------------------------------------------
+        atr = candle_ctx.get("atr_14") or (ref_price * 0.008)
+        min_risk_dist = max(atr * 1.2, ref_price * 0.003)
+
+        defending_wall_price = None
+        target_magnet_price = None
+
+        if target_direction == "LONG":
+            # SL anchored behind defending whale bid or VAL with buffer
+            bid_px = safe_float(defending_bid.get("price")) if defending_bid else None
+            val_px = safe_float(val)
+
+            candidate_sls = []
+            if bid_px and bid_px < ref_price:
+                candidate_sls.append(bid_px * 0.998)
+                defending_wall_price = bid_px
+            if val_px and val_px < ref_price:
+                candidate_sls.append(val_px * 0.998)
+
+            if candidate_sls:
+                sl_price = max(candidate_sls)  # closest valid structural support
+                if (ref_price - sl_price) < min_risk_dist:
+                    sl_price = ref_price - min_risk_dist
+            else:
+                sl_price = ref_price - min_risk_dist
+
+            risk_dist = ref_price - sl_price
+            if risk_dist <= 0:
+                sl_price = ref_price - min_risk_dist
+                risk_dist = min_risk_dist
+
+            # TP anchored to short liquidation magnet or VAH, enforcing R:R >= 2.0
+            target_short_px = safe_float(short_magnet.get("price")) if short_magnet else None
+            target_vah = safe_float(vah)
+
+            min_tp = ref_price + (2.0 * risk_dist)
+            tp_price = min_tp
+
+            if target_short_px and target_short_px > ref_price:
+                target_magnet_price = target_short_px
+                if target_short_px >= min_tp:
+                    tp_price = target_short_px
+            elif target_vah and target_vah > ref_price and target_vah >= min_tp:
+                tp_price = target_vah
+
+        else:  # SHORT
+            # SL anchored behind defending whale ask or VAH with buffer
+            ask_px = safe_float(defending_ask.get("price")) if defending_ask else None
+            vah_px = safe_float(vah)
+
+            candidate_sls = []
+            if ask_px and ask_px > ref_price:
+                candidate_sls.append(ask_px * 1.002)
+                defending_wall_price = ask_px
+            if vah_px and vah_px > ref_price:
+                candidate_sls.append(vah_px * 1.002)
+
+            if candidate_sls:
+                sl_price = min(candidate_sls)  # closest valid structural resistance
+                if (sl_price - ref_price) < min_risk_dist:
+                    sl_price = ref_price + min_risk_dist
+            else:
+                sl_price = ref_price + min_risk_dist
+
+            risk_dist = sl_price - ref_price
+            if risk_dist <= 0:
+                sl_price = ref_price + min_risk_dist
+                risk_dist = min_risk_dist
+
+            # TP anchored to long liquidation magnet or VAL, enforcing R:R >= 2.0
+            target_long_px = safe_float(long_magnet.get("price")) if long_magnet else None
+            target_val = safe_float(val)
+
+            min_tp = ref_price - (2.0 * risk_dist)
+            tp_price = min_tp
+
+            if target_long_px and target_long_px < ref_price:
+                target_magnet_price = target_long_px
+                if target_long_px <= min_tp:
+                    tp_price = target_long_px
+            elif target_val and target_val < ref_price and target_val <= min_tp:
+                tp_price = target_val
+
+        # Exact calculated Risk-Reward Ratio
+        reward_dist = abs(tp_price - ref_price)
+        calc_rr = round(reward_dist / max(risk_dist, 1e-9), 2)
+
+        # Quantize prices according to scale
+        if ref_price >= 1000.0:
+            p_dec = 2
+        elif ref_price >= 1.0:
+            p_dec = 4
+        else:
+            p_dec = 6
+
+        entry_final = round(ref_price, p_dec)
+        sl_final = round(sl_price, p_dec)
+        tp_final = round(tp_price, p_dec)
+
+        # -------------------------------------------------------------------------
+        # Pass Condition Checks
+        # -------------------------------------------------------------------------
+        if contradiction_veto:
+            status = "PASS_CONTRADICTION"
+        elif calc_rr < 2.0:
+            status = "PASS_RR_BELOW_2"
+        elif confluence_score < 75.0:
+            status = "PASS_SUB_CONFLUENCE"
+        else:
+            status = "ACTIVE"
+
+        # Timestamp generation with microsecond precision
+        now_utc = datetime.now(timezone.utc)
+        now_ist = now_utc + timedelta(hours=5, minutes=30)
+        now_ms = int(now_utc.timestamp() * 1000)
+        now_us = int(now_utc.timestamp() * 1_000_000)
+
+        candle_t_ms = int(candle_ctx.get("time_ms") or primary_trigger.get("time_ms") or now_ms)
+        candle_t_ist = candle_ctx.get("time_ist") or primary_trigger.get("time_ist") or utc_ms_to_ist_str(candle_t_ms)
+
+        # Serialized JSON strings for DuckDB / Polars schema stability
+        queue_snapshot_json = json.dumps(queue, ensure_ascii=True, allow_nan=False)
+        metrics_payload = {
+            "w1_footprint": w1_score,
+            "w2_auction": w2_score,
+            "w3_whales": w3_score,
+            "w4_magnets": w4_score,
+            "w5_tv_liquidations": w5_score,
+            "entropy": round(entropy, 4),
+            "matching_signals": matching_in_queue,
+            "total_signals_in_queue": len(queue),
+            "val": val,
+            "vah": vah,
+            "poc": poc,
+            "vwap": vwap,
+            "bid_wall_usd": bid_wall_usd,
+            "ask_wall_usd": ask_wall_usd,
+        }
+        evaluation_metrics_json = json.dumps(metrics_payload, ensure_ascii=True, allow_nan=False)
+
+        # Canonical Record conforming strictly to DuckDB read_ndjson invariants
+        setup_record = {
+            "setup_id": f"{symbol.upper()}_{now_us}",
+            "symbol": symbol.upper(),
+            "status": status,
+            "direction": target_direction,
+            "signal_count": len(queue),
+            "primary_signal": str(p_code),
+            "confluence_score": float(confluence_score),
+            "w1_footprint": float(round(w1_score, 2)),
+            "w2_auction": float(round(w2_score, 2)),
+            "w3_whales": float(round(w3_score, 2)),
+            "w4_magnets": float(round(w4_score, 2)),
+            "w5_tv_liquidations": float(round(w5_score, 2)),
+            "entry_price": float(entry_final),
+            "stop_loss": float(sl_final),
+            "take_profit": float(tp_final),
+            "risk_reward_ratio": float(calc_rr),
+            "risk_amount": float(round(abs(entry_final - sl_final), p_dec)),
+            "reward_amount": float(round(abs(tp_final - entry_final), p_dec)),
+            "atr_15m": float(round(atr, p_dec)),
+            "auction_bias": str(auction_ctx.get("value_status") or "UNKNOWN"),
+            "htf_trend": str(auction_ctx.get("mtf_bias") or "UNKNOWN"),
+            "defending_wall_price": float(round(defending_wall_price, p_dec)) if defending_wall_price is not None else None,
+            "magnet_target_price": float(round(target_magnet_price, p_dec)) if target_magnet_price is not None else None,
+            "time_ms": candle_t_ms,
+            "time_ist": candle_t_ist,
+            "created_at_ms": now_ms,
+            "created_at_us": now_us,
+            "created_at_utc": now_utc.isoformat(),
+            "created_at_ist": now_ist.strftime("%Y-%m-%d %H:%M:%S.%f IST"),
+            "queue_snapshot_json": queue_snapshot_json,
+            "evaluation_metrics_json": evaluation_metrics_json,
+        }
+
+        # Persist setup to dedicated per-asset ledger
+        asset_ledger_path = SETUPS_DIR / f"{symbol.upper()}_setups.jsonl"
+        atomic_append_jsonl(asset_ledger_path, setup_record)
+
+        # If ACTIVE, also append to master active setups
+        if status == "ACTIVE":
+            atomic_append_jsonl(MASTER_SETUPS_PATH, setup_record)
+            logger.info(
+                f"🎯 [ACTIVE SETUP] {symbol} {target_direction} | Score: {confluence_score}/100 "
+                f"| Entry: {entry_final} | SL: {sl_final} | TP: {tp_final} | R:R: {calc_rr}"
+            )
+        else:
+            logger.info(
+                f"[{symbol}] Setup evaluated: {status} | Score: {confluence_score}/100 | Direction: {target_direction}"
+            )
+
+        return setup_record
+
+
+# ========================================================================================
+# 3. High-Level Callback & Standalone Entrypoints
+# ========================================================================================
+def update_asset_queue_and_evaluate(
+    symbol: str,
+    new_signals: List[dict],
+    current_price: Optional[float] = None
+) -> Optional[dict]:
+    """
+    Main entrypoint called synchronously upon harvesting footprint signals.
+    Updates the per-asset rolling 5-signal queue, then runs the Multi-Pillar Evaluator
+    strictly if new signals were added to the window.
+    """
+    queue, added = SignalQueueManager.push_signals_and_roll(symbol, new_signals, max_len=5)
+    if not queue or not added:
+        return None
+
+    # Run evaluation using the newly arrived triggers in context of the 5-signal window
+    return MultiPillarTradeEvaluator.evaluate_symbol(
+        symbol=symbol,
+        trigger_signals=added,
+        queue=queue,
+        current_price=current_price
+    )
+
+
+def evaluate_all_existing_queues() -> List[dict]:
+    """Scans all existing per-asset queues in Database/Signals/Signal_Queues/ and evaluates them."""
+    results = []
+    queue_files = list(QUEUE_DIR.glob("*_queue.json"))
+    if not queue_files:
+        logger.info("No signal queues found in Database/Signals/Signal_Queues/.")
+        return []
+
+    logger.info(f"Evaluating {len(queue_files)} existing asset queue(s)...")
+    for qf in queue_files:
+        sym = qf.name.replace("_queue.json", "").upper()
+        try:
+            queue = SignalQueueManager.load_queue(sym)
+            if queue:
+                res = MultiPillarTradeEvaluator.evaluate_symbol(
+                    symbol=sym,
+                    trigger_signals=[queue[-1]],
+                    queue=queue
+                )
+                if res:
+                    results.append(res)
+        except Exception as e:
+            logger.error(f"[{sym}] Evaluation failed: {e}")
+    return results
+
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Multi-Pillar Trade Evaluator & Rolling 5-Signal Queue")
+    parser.add_argument("--symbol", type=str, default="", help="Evaluate specific asset (e.g. BTC)")
+    parser.add_argument("--all", action="store_true", help="Evaluate all existing asset queues")
+    args = parser.parse_args()
+
+    if args.symbol:
+        sym = args.symbol.upper().strip()
+        queue = SignalQueueManager.load_queue(sym)
+        if not queue:
+            print(f"No queue exists for {sym}. Push signals first.")
+            return
+        res = MultiPillarTradeEvaluator.evaluate_symbol(sym, [queue[-1]], queue)
+        print(json.dumps(res, indent=2))
+    elif args.all:
+        evaluate_all_existing_queues()
+    else:
+        print("Usage: python trade_evaluator.py --symbol <SYM> OR --all")
+
+if __name__ == "__main__":
+    main()
