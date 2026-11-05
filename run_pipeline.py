@@ -86,7 +86,7 @@ def run_scraper(script_name: str, desc: str, flag: str = "--once") -> bool:
     t0 = time.time()
     try:
         cmd = [sys.executable, str(script_path), flag]
-        res = subprocess.run(cmd, cwd=str(ROOT_DIR), capture_output=True, text=True, timeout=180)
+        res = subprocess.run(cmd, cwd=str(ROOT_DIR), capture_output=True, text=True, timeout=300)
         dur = time.time() - t0
         if res.returncode == 0:
             logger.info(f"✅ Finished {desc} in {dur:.1f}s (Exit code 0).")
@@ -97,7 +97,7 @@ def run_scraper(script_name: str, desc: str, flag: str = "--once") -> bool:
                 logger.warning(f"STDERR snippet: {res.stderr[-300:]}")
             return False
     except subprocess.TimeoutExpired:
-        logger.error(f"❌ {desc} timed out after 180s.")
+        logger.error(f"❌ {desc} timed out after 300s.")
         return False
     except Exception as e:
         logger.error(f"❌ Error running {desc}: {e}")
