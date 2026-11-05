@@ -163,7 +163,10 @@ class FundedNextMCPClient:
         """Fetch currently open positions."""
         acc_id = self.get_account_id()
         res = self.call_tool("get_trading_history", {"account_id": acc_id, "page": 1})
-        return res.get("runningTrades", [])
+        running = res.get("runningTrades", [])
+        if isinstance(running, dict):
+            return running.get("data", [])
+        return running if isinstance(running, list) else []
 
     def validate_order_risk(self, planned_risk_usd: float) -> tuple[bool, str]:
         """
