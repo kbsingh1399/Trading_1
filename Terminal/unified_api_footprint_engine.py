@@ -482,13 +482,14 @@ class UnifiedAPIFootprintEngine:
     # -------------------------------------------------------------------------
     # Atomic Lock-Free Parquet Persistence
     # -------------------------------------------------------------------------
-    def save_rolling_parquet(self, df: pd.DataFrame, symbol: str, aliases: List[str] = []):
+    def save_rolling_parquet(self, df: pd.DataFrame, symbol: str, aliases: List[str] = [], suffix: str = ""):
         """
         Atomically saves 300 rolling candle window to Database/Candle_Data/<symbol>.parquet.
         Uses atomic_parquet with retry backoff to survive Windows file-sharing locks.
         Guarantees strict PyArrow List(Struct(...)) schema for signals column.
         """
-        target_path = CANDLE_DIR / f"{symbol}.parquet"
+        target_name = f"{symbol}{suffix}.parquet" if suffix else f"{symbol}.parquet"
+        target_path = CANDLE_DIR / target_name
         try:
             rolling_df = df.tail(self.rolling_window).reset_index(drop=True)
             if "signals" in rolling_df.columns:
@@ -850,7 +851,7 @@ class UnifiedAPIFootprintEngine:
                     for r_cfg in range_presets:
                         range_bars = synthesize_range_bars(bars_sub, range_size=r_cfg["size"], symbol=symbol, bar_label=r_cfg["label"])
                         if len(range_bars) >= 8:
-                            _, sigs_r = self.engine.analyze_bars(
+                            df_r, sigs_r = self.engine.analyze_bars(
                                 bars=range_bars,
                                 symbol=symbol,
                                 asset_class="Crypto",
@@ -861,12 +862,14 @@ class UnifiedAPIFootprintEngine:
                                 bar_label=r_cfg["label"]
                             )
                             all_candidate_sigs.extend(sigs_r)
+                            if df_r is not None and not df_r.empty:
+                                self.save_rolling_parquet(df_r, symbol, suffix="_range")
 
                     # Synthesize Volume bars
                     for v_cfg in vol_presets:
                         vol_bars = synthesize_volume_bars(bars_sub, vol_threshold=v_cfg["threshold"], symbol=symbol, bar_label=v_cfg["label"])
                         if len(vol_bars) >= 8:
-                            _, sigs_v = self.engine.analyze_bars(
+                            df_v, sigs_v = self.engine.analyze_bars(
                                 bars=vol_bars,
                                 symbol=symbol,
                                 asset_class="Crypto",
@@ -877,6 +880,8 @@ class UnifiedAPIFootprintEngine:
                                 bar_label=v_cfg["label"]
                             )
                             all_candidate_sigs.extend(sigs_v)
+                            if df_v is not None and not df_v.empty:
+                                self.save_rolling_parquet(df_v, symbol, suffix="_volume")
             except Exception as mbe:
                 logger.debug(f"Multi-bar footprint synthesis notice for {symbol}: {mbe}")
 

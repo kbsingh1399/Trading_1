@@ -6,6 +6,7 @@ Single standalone entry point for C:\\Users\\SIGMA\\Documents\\_Trading_1
 
 Commands:
     python main.py --daemon       # Run autonomous 2-process pipeline (Harvester + Sentinel)
+    python main.py --dump         # Dump candles with embedded signals (Time, Range & Volume)
     python main.py --sweep        # Run on-demand 4-exchange pure API footprint sweep
     python main.py --status       # 360-degree operational reality & health audit
     python main.py --sentinel     # Run Sentinel live execution bridge alone
@@ -24,6 +25,11 @@ import signal
 import time
 from pathlib import Path
 from datetime import datetime, timezone
+
+try:
+    sys.stdout.reconfigure(line_buffering=True, encoding="utf-8")
+except Exception:
+    pass
 
 ROOT_DIR = Path(__file__).resolve().parent
 if str(ROOT_DIR) not in sys.path:
@@ -148,6 +154,24 @@ def run_audit():
     exec_audit()
 
 
+def run_dump(symbol: str = "BTC", top10: bool = False, all_assets: bool = False, inspect: bool = False):
+    """Dumps 4-exchange pure API candles (Time, Range, Volume) with embedded signals to Parquet."""
+    cmd = [sys.executable, "dump_candles_and_signals.py"]
+    if all_assets:
+        cmd.append("--all")
+    elif top10:
+        cmd.append("--top10")
+    else:
+        cmd.extend(["--symbol", symbol])
+    if inspect:
+        cmd.append("--inspect")
+    print(f"\n[MAIN] Executing candle & signal dump ({' '.join(cmd)})...")
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(ROOT_DIR)
+    p = subprocess.run(cmd, cwd=str(ROOT_DIR), env=env)
+    return p.returncode
+
+
 def run_test():
     """Runs the full repository test suite via pytest."""
     print("\n[MAIN] Running complete test suite via pytest...")
@@ -245,6 +269,11 @@ def main():
     parser = argparse.ArgumentParser(description="Standalone Quant Trading Engine Primary Controller")
     parser.add_argument("--status", action="store_true", help="Display 360-degree operational reality & health status")
     parser.add_argument("--daemon", action="store_true", help="Run continuous 2-process pipeline (Harvester + Sentinel)")
+    parser.add_argument("--dump", action="store_true", help="Dump candles and signals (supports --symbol, --top10, --all, --inspect)")
+    parser.add_argument("--symbol", type=str, default="BTC", help="Symbol for --dump (default: BTC)")
+    parser.add_argument("--top10", action="store_true", help="Dump top 10 liquid crypto assets")
+    parser.add_argument("--all", action="store_true", help="Dump all supported crypto assets")
+    parser.add_argument("--inspect", action="store_true", help="Print full candle and embedded signal JSON details")
     parser.add_argument("--sweep", action="store_true", help="Run single pure API footprint sweep across assets")
     parser.add_argument("--sentinel", action="store_true", help="Run Sentinel live execution engine alone")
     parser.add_argument("--audit", action="store_true", help="Run Delta Exchange India position & risk audit")
@@ -259,6 +288,8 @@ def main():
 
     if args.status:
         run_status()
+    elif args.dump:
+        sys.exit(run_dump(symbol=args.symbol, top10=args.top10, all_assets=args.all, inspect=args.inspect))
     elif args.daemon:
         run_daemon(interval=args.interval, crypto_only=args.crypto_only)
     elif args.sweep:
