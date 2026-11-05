@@ -104,8 +104,8 @@ COINGLASS_BAR_CONFIGS: Dict[str, Dict[str, Any]] = {
         "vol": [{"label": "Volume 50K ETH", "threshold": 50_000.0}, {"label": "Volume 25K ETH", "threshold": 25_000.0}]
     },
     "BTC": {
-        "range": [{"label": "Range 200", "size": 200.0}, {"label": "Range 100", "size": 100.0}],
-        "vol": [{"label": "Volume 2.0K BTC", "threshold": 2_000.0}, {"label": "Volume 2.5K BTC", "threshold": 2_500.0}, {"label": "Volume 500 BTC", "threshold": 500.0}]
+        "range": [{"label": "Range 250", "size": 250.0}, {"label": "Range 200", "size": 200.0}, {"label": "Range 100", "size": 100.0}],
+        "vol": [{"label": "Volume 1.0K BTC", "threshold": 1_000.0}, {"label": "Volume 2.0K BTC", "threshold": 2_000.0}, {"label": "Volume 2.5K BTC", "threshold": 2_500.0}, {"label": "Volume 500 BTC", "threshold": 500.0}]
     },
     "SOL": {
         "range": [{"label": "Range 0.25", "size": 0.25}],
@@ -938,6 +938,7 @@ class UniversalFootprintEngine:
         lower_wick = min(o, c) - l
         close_pos = (c - l) / bar_range  # 0.0 at low, 1.0 at high
         vol_ratio = v / max(avg_vol, 1e-9)
+        bar_type = str(row.get("bar_type", "time"))
 
         # Zone-share estimation from klines/MT5 aggregates (no per-level footprint).
         # buy_frac * (1 - close_pos): taker buys executed while price traded above
@@ -999,7 +1000,7 @@ class UniversalFootprintEngine:
         if _macro_delta_gate and v > 0 and est_top_buy_share >= cal.abs_zone_share_min \
                 and close_pos <= cal.abs_close_pos_extreme \
                 and (upper_wick / bar_range) >= cal.abs_wick_min \
-                and vol_ratio >= cal.abs_vol_ratio_min:
+                and ((bar_type in ("vol", "volume")) or (vol_ratio >= cal.abs_vol_ratio_min)):
             strength = float(min(1.0, 0.6 * (est_top_buy_share / max(cal.abs_zone_share_min, 1e-9) - 1.0) + 0.4 * min(vol_ratio / 2.0, 1.0)))
             bar_signals.append({
                 **base_sig,
@@ -1016,7 +1017,7 @@ class UniversalFootprintEngine:
         elif _macro_delta_gate and v > 0 and est_bottom_sell_share >= cal.abs_zone_share_min \
                 and close_pos >= (1.0 - cal.abs_close_pos_extreme) \
                 and (lower_wick / bar_range) >= cal.abs_wick_min \
-                and vol_ratio >= cal.abs_vol_ratio_min:
+                and ((bar_type in ("vol", "volume")) or (vol_ratio >= cal.abs_vol_ratio_min)):
             strength = float(min(1.0, 0.6 * (est_bottom_sell_share / max(cal.abs_zone_share_min, 1e-9) - 1.0) + 0.4 * min(vol_ratio / 2.0, 1.0)))
             bar_signals.append({
                 **base_sig,
@@ -1185,7 +1186,7 @@ class UniversalFootprintEngine:
 
         if np.isfinite(prior5_high) and h > prior5_high and v > 0 \
                 and est_top_buy_share >= cal.trap_zone_share_min \
-                and vol_ratio >= cal.trap_vol_ratio_min:
+                and ((bar_type in ("vol", "volume")) or (vol_ratio >= cal.trap_vol_ratio_min)):
             trigger_low = l
             retest_level = trigger_low + trap_retest_band * bar_range
             confirm_lag = 0
@@ -1216,7 +1217,7 @@ class UniversalFootprintEngine:
 
         if np.isfinite(prior5_low) and l < prior5_low and v > 0 \
                 and est_bottom_sell_share >= cal.trap_zone_share_min \
-                and vol_ratio >= cal.trap_vol_ratio_min:
+                and ((bar_type in ("vol", "volume")) or (vol_ratio >= cal.trap_vol_ratio_min)):
             trigger_high = h
             retest_level = trigger_high - trap_retest_band * bar_range
             confirm_lag = 0

@@ -1,14 +1,14 @@
 # Empirical Parity Report: API Footprint vs. CoinGlass Footprint (v2.0)
 
-**Execution Timestamp:** `2026-11-05T06:43:41.452639+00:00`  
+**Execution Timestamp:** `2026-11-05T08:00:31.502665+00:00`  
 **Engine:** `Terminal/universal_footprint_engine.py` v2.0.0 (CoinGlass parity calibration)  
 **Historical Benchmark:** `Database/Signals/coinglass_aggregated_futures_signals.parquet` (23,800+ CoinGlass CDP records)  
 
 ## Parity Verdict: **PASS**
 
-- Directional concordance: **90.2%** (gate: >= 85.0% -> OK)
-- Signal density band across symbols: **8.0% - 13.67%** of 15m bars (CoinGlass band: 8%-13% on majors, up to 19% on high-activity symbols -> OK)
-- Total engine signals: **332** vs CoinGlass **308** (ratio 1.078)
+- Directional concordance: **89.9%** (gate: >= 85.0% -> OK)
+- Signal density band across symbols: **7.0% - 13.67%** of 15m bars (CoinGlass band: 8%-13% on majors, up to 19% on high-activity symbols -> OK)
+- Total engine signals: **324** vs CoinGlass **305** (ratio 1.062)
 
 ---
 
@@ -16,7 +16,7 @@
 
 | Asset | 15m Bars | CG Signals | CG Density | API Signals | API Signal Bars | API Density | Overlap Bars | Concordance |
 |---|---|---|---|---|---|---|---|---|
-| **BTC** | 300 | 26 | 6.67% | 34 | 24 | 8.0% | 7 | **85.7%** |
+| **BTC** | 300 | 23 | 5.67% | 26 | 21 | 7.0% | 3 | **66.7%** |
 | **ETH** | 300 | 25 | 8.0% | 38 | 33 | 11.0% | 13 | **84.6%** |
 | **SOL** | 300 | 24 | 8.0% | 32 | 29 | 9.67% | 12 | **91.7%** |
 | **BNB** | 300 | 36 | 9.67% | 31 | 26 | 8.67% | 17 | **88.2%** |
@@ -25,7 +25,7 @@
 | **ADA** | 300 | 39 | 11.67% | 39 | 33 | 11.0% | 13 | **100.0%** |
 | **LINK** | 300 | 58 | 16.33% | 38 | 34 | 11.33% | 25 | **88.0%** |
 | **AVAX** | 300 | 40 | 10.67% | 51 | 41 | 13.67% | 24 | **87.5%** |
-| **TOTAL** | - | **308** | - | **332** | - | - | **133** | **90.2%** |
+| **TOTAL** | - | **305** | - | **324** | - | - | **129** | **89.9%** |
 
 ---
 
@@ -33,11 +33,11 @@
 
 | Code | Signal Family | CoinGlass (in window) | API (in window) | Exact Bar+Side Matches | Density Ratio |
 |---|---|---|---|---|---|
-| `div` | Single-Bar Divergence (close vs Delta opposition) | 84 | 76 | 37 | 0.9x |
-| `abs` | Absorption (heavy side volume absorbed at extreme) | 79 | 97 | 12 | 1.23x |
-| `exh` | Exhaustion (new 10-bar extreme, depleted extreme zone) | 75 | 80 | 25 | 1.07x |
+| `div` | Single-Bar Divergence (close vs Delta opposition) | 82 | 78 | 35 | 0.95x |
+| `abs` | Absorption (heavy side volume absorbed at extreme) | 78 | 90 | 12 | 1.15x |
+| `exh` | Exhaustion (new 10-bar extreme, depleted extreme zone) | 75 | 79 | 24 | 1.05x |
 | `sdiv` | Swing CVD Divergence (fractal pivot vs CVD) | 37 | 40 | 14 | 1.08x |
-| `trap` | Trapped Traders (failed 5-bar break, 1-3 bar confirmation) | 33 | 39 | 3 | 1.18x |
+| `trap` | Trapped Traders (failed 5-bar break, 1-3 bar confirmation) | 33 | 37 | 3 | 1.12x |
 
 > abs/trap bar-level timing is bounded by the klines-only zone-volume estimation
 > ceiling (see audit report, Section 4); density and direction remain parity-locked.

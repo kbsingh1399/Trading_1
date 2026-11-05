@@ -69,6 +69,7 @@ from Terminal.universal_footprint_engine import (
 from Terminal.runtime_io import acquire_singleton, writer_lock, atomic_parquet, upsert_parquet
 from Terminal.realtime_signal_evaluator import RealtimeSignalEvaluator
 from Terminal.auction_indicators import update_all_auction_profiles
+from Terminal.aggregated_futures_feed import AggregatedFuturesFeed
 
 DB_DIR = ROOT_DIR / "Database"
 CANDLE_DIR = DB_DIR / "Candle_Data"
@@ -150,6 +151,7 @@ class UnifiedAPIFootprintEngine:
         # the 226-signal over-generation defect; the engine now clamps to the
         # calibrated CoinGlass parity floor regardless of legacy call paths).
         self.engine = UniversalFootprintEngine(imbalance_ratio=3.0)
+        self.aggregated_feed = AggregatedFuturesFeed(timeout_sec=3.5, max_workers=4)
         self.evaluator: Optional[RealtimeSignalEvaluator] = None
         # Maps (symbol, sig_code, time_ms, price) → time_ms for TTL eviction
         self.known_signal_keys: Dict[Tuple[str, str, int, float], int] = {}
@@ -286,8 +288,15 @@ class UnifiedAPIFootprintEngine:
 
     def fetch_binance_crypto_interval_bars(self, symbol: str, interval: str = "5m", limit: int = 300) -> Optional[List[Dict[str, Any]]]:
         """
-        Fetches klines of specified interval (e.g. 5m, 1m) from Binance Futures Public API.
+        Fetches klines of specified interval (e.g. 5m, 1m) from Aggregated Futures
+        (Binance + OKX + Bybit + Hyperliquid) with direct Binance fallback.
         """
+        try:
+            agg_bars = self.aggregated_feed.fetch_aggregated_bars(symbol, interval=interval, limit=limit)
+            if agg_bars and len(agg_bars) >= 10:
+                return agg_bars
+        except Exception as ae:
+            logger.debug(f"Aggregated interval feed notice for {symbol}: {ae}; falling back to direct Binance.")
         api_symbol = f"{symbol}USDT"
         url = f"https://fapi.binance.com/fapi/v1/klines?symbol={api_symbol}&interval={interval}&limit={limit}"
         try:
@@ -332,9 +341,25 @@ class UnifiedAPIFootprintEngine:
 
     def fetch_binance_crypto_bars(self, symbol: str) -> Optional[List[Dict[str, Any]]]:
         """
-        Fetches 300 M15 klines from Binance Futures Public API with exact Taker Volume & OI.
-        URL: https://fapi.binance.com/fapi/v1/klines?symbol=<SYM>USDT&interval=15m&limit=300
+        Fetches 300 M15 klines from Aggregated Futures (Binance + OKX + Bybit + Hyperliquid)
+        matching CoinGlass 'Aggregated futures' architecture, with direct Binance fallback.
         """
+        try:
+            agg_bars = self.aggregated_feed.fetch_aggregated_bars(symbol, interval="15m", limit=self.rolling_window + 1)
+            if agg_bars and len(agg_bars) >= 10:
+                if len(agg_bars) > self.rolling_window:
+                    agg_bars = agg_bars[-self.rolling_window:]
+                try:
+                    oi_map = self.fetch_binance_open_interest_hist(symbol, limit=len(agg_bars) + 10)
+                    for b in agg_bars:
+                        t = b["open_time_ms"]
+                        if t in oi_map:
+                            b["open_interest"] = oi_map[t]
+                except Exception:
+                    pass
+                return agg_bars
+        except Exception as ae:
+            logger.debug(f"Aggregated futures feed notice for {symbol}: {ae}; falling back to direct Binance.")
         api_symbol = f"{symbol}USDT"
         url = f"https://fapi.binance.com/fapi/v1/klines?symbol={api_symbol}&interval=15m&limit={self.rolling_window + 1}"
         try:
@@ -775,7 +800,7 @@ class UnifiedAPIFootprintEngine:
             self.harvest_crypto_liquidation_data(symbol, f"{symbol}USDT")
 
             try:
-                # Fetch 5m klines for 5m signals and Range/Volume bar synthesis
+                # Fetch 5m klines for 5m signals
                 bars_5m = self.fetch_binance_crypto_interval_bars(symbol, interval="5m", limit=120)
                 if bars_5m and len(bars_5m) >= 10:
                     # 5m Time Footprint
@@ -791,22 +816,27 @@ class UnifiedAPIFootprintEngine:
                     )
                     all_candidate_sigs.extend(sigs_5m)
 
-                    # Range & Volume Footprints from CoinGlass standard asset presets
+                # Fetch 1m fine-grained tape for Range and Volume bar synthesis (matching CoinGlass 1m tape)
+                bars_sub = self.fetch_binance_crypto_interval_bars(symbol, interval="1m", limit=300)
+                if not bars_sub or len(bars_sub) < 10:
+                    bars_sub = bars_5m
+
+                if bars_sub and len(bars_sub) >= 10:
                     cfg = COINGLASS_BAR_CONFIGS.get(symbol, {})
                     range_presets = cfg.get("range", [])
                     vol_presets = cfg.get("vol", [])
 
                     # Dynamic fallback if asset not in presets
-                    if not range_presets and bars_5m:
-                        last_p = float(bars_5m[-1].get("close", 1.0))
+                    if not range_presets:
+                        last_p = float(bars_sub[-1].get("close", 1.0))
                         range_presets = [{"label": f"Range {round(last_p * 0.005, 4):g}", "size": round(last_p * 0.005, 4)}]
-                    if not vol_presets and bars_5m:
-                        avg_5m_v = float(np.mean([b.get("total_volume", 0.0) for b in bars_5m]))
-                        vol_presets = [{"label": f"Volume {format_vol_display(avg_5m_v * 3)} {symbol}", "threshold": avg_5m_v * 3}]
+                    if not vol_presets:
+                        avg_sub_v = float(np.mean([b.get("total_volume", 0.0) for b in bars_sub]))
+                        vol_presets = [{"label": f"Volume {format_vol_display(avg_sub_v * 10)} {symbol}", "threshold": avg_sub_v * 10}]
 
                     # Synthesize Range bars
                     for r_cfg in range_presets:
-                        range_bars = synthesize_range_bars(bars_5m, range_size=r_cfg["size"], symbol=symbol, bar_label=r_cfg["label"])
+                        range_bars = synthesize_range_bars(bars_sub, range_size=r_cfg["size"], symbol=symbol, bar_label=r_cfg["label"])
                         if len(range_bars) >= 8:
                             _, sigs_r = self.engine.analyze_bars(
                                 bars=range_bars,
@@ -822,7 +852,7 @@ class UnifiedAPIFootprintEngine:
 
                     # Synthesize Volume bars
                     for v_cfg in vol_presets:
-                        vol_bars = synthesize_volume_bars(bars_5m, vol_threshold=v_cfg["threshold"], symbol=symbol, bar_label=v_cfg["label"])
+                        vol_bars = synthesize_volume_bars(bars_sub, vol_threshold=v_cfg["threshold"], symbol=symbol, bar_label=v_cfg["label"])
                         if len(vol_bars) >= 8:
                             _, sigs_v = self.engine.analyze_bars(
                                 bars=vol_bars,
