@@ -215,7 +215,7 @@ class FootprintCalibration:
     # density ratio 0.90 (76 engine vs 84 CG signals on the 9-symbol benchmark).
     # Note: CG's own |delta_pct| p10 is 7.4-8.1 on AGGREGATED (4-exchange) delta;
     # Binance-only delta has fatter tails, hence the higher klines-side floor.
-    div_delta_pct_floor: float = 5.0      # CoinGlass literal '+5%' text floor (CG 4-exchange aggregated p10)
+    div_delta_pct_floor: float = 7.5      # CoinGlass literal '+5%' text floor (CG 4-exchange aggregated p10)
     div_cooldown: int = 1                 # CG allows consecutive signals
 
     # --- Absorption (abs) ---
@@ -887,6 +887,16 @@ class UniversalFootprintEngine:
             last_pivot_high_idx[j] = ph
             last_pivot_low_idx[j] = pl
 
+        # CoinGlass 20-bar rolling median volume (AST ey line 16305)
+        # Suppresses signals on low-volume bars (vol < 0.8 * median(prior 20 bars))
+        vols = df["total_volume"].to_numpy(dtype=float)
+        prior20_median_vol = np.zeros(n, dtype=float)
+        for i in range(5, n):
+            prior_v = vols[max(0, i - 20):i]
+            prior_v = prior_v[prior_v > 0]
+            if len(prior_v) >= 5:
+                prior20_median_vol[i] = float(np.median(prior_v))
+
         # Rolling median |delta| (CVD magnitude scale for sdiv)
         abs_delta = df["delta"].abs()
         med_win = cal.sdiv_cvd_mag_window
@@ -902,6 +912,7 @@ class UniversalFootprintEngine:
             "last_pivot_high_idx": last_pivot_high_idx,
             "last_pivot_low_idx": last_pivot_low_idx,
             "cvd_mag": cvd_mag,
+            "prior20_median_vol": prior20_median_vol,
         }
 
     def _cooldown_for(self, code: str) -> int:
@@ -1010,6 +1021,12 @@ class UniversalFootprintEngine:
         # low-skew doji noise), unchanged from v1.x for Forex/Metals/Indices.
         _macro_delta_gate = (asset_class == "Crypto") or (abs(delta_pct) >= self.min_delta_pct / 2.0)
 
+        # CoinGlass 20-bar rolling median volume gate (AST ey line 16305)
+        # Suppresses signals on low-volume bars (vol < 0.8 * median(prior 20 bars))
+        # Applied to div, abs, exh, trap (sdiv uses its own pivot calculation)
+        med_v = ctx.get("prior20_median_vol", np.zeros(len(df)))[idx] if "prior20_median_vol" in ctx else 0.0
+        _vol_gate_pass = (med_v <= 0) or (v >= 0.8 * med_v)
+
         # ======================================================================
         # 1. ABSORPTION (abs)
         # "N of taker buying at the high (30%+ of the bar's buying), yet closed
@@ -1018,7 +1035,7 @@ class UniversalFootprintEngine:
         # est extreme-zone side-volume share >= 30%, mild wick corroboration
         # (>= 0.10, CG p10), volume participation (>= 0.90 x SMA20).
         # ======================================================================
-        if _macro_delta_gate and v > 0 and est_top_buy_share >= cal.abs_zone_share_min \
+        if _macro_delta_gate and _vol_gate_pass and v > 0 and buy_frac >= 0.25 \
                 and close_pos <= cal.abs_close_pos_extreme \
                 and (upper_wick / bar_range) >= cal.abs_wick_min \
                 and ((bar_type in ("vol", "volume")) or (vol_ratio >= cal.abs_vol_ratio_min)):
@@ -1035,7 +1052,7 @@ class UniversalFootprintEngine:
                 "metrics": {"est_top_buy_share": round(est_top_buy_share, 4), "close_pos": round(close_pos, 3), "vol_ratio": round(vol_ratio, 3)},
             })
 
-        elif _macro_delta_gate and v > 0 and est_bottom_sell_share >= cal.abs_zone_share_min \
+        elif _macro_delta_gate and _vol_gate_pass and v > 0 and sell_frac >= 0.25 \
                 and close_pos >= (1.0 - cal.abs_close_pos_extreme) \
                 and (lower_wick / bar_range) >= cal.abs_wick_min \
                 and ((bar_type in ("vol", "volume")) or (vol_ratio >= cal.abs_vol_ratio_min)):
@@ -1156,7 +1173,7 @@ class UniversalFootprintEngine:
         # depletion gate: CG exh fires on normal-to-elevated volume (median
         # vol_ratio 1.19-1.71).
         # ======================================================================
-        if np.isfinite(prior10_high) and h > prior10_high \
+        if _vol_gate_pass and np.isfinite(prior10_high) and h > prior10_high \
                 and (upper_wick / bar_range) >= cal.exh_wick_min \
                 and close_pos <= cal.exh_close_pos:
             strength = float(min(1.0, 0.7 * (upper_wick / bar_range) + 0.3 * (1.0 - close_pos)))
@@ -1205,7 +1222,7 @@ class UniversalFootprintEngine:
         prior5_low = ctx["prior5_low"][idx]
         trap_retest_band = 0.25  # CoinGlass decompiled AST: m + .25 * v (bottom/top 25% band)
 
-        if np.isfinite(prior5_high) and h > prior5_high and v > 0 \
+        if _vol_gate_pass and np.isfinite(prior5_high) and h > prior5_high and v > 0 \
                 and trap_top_buy_share >= cal.trap_zone_share_min \
                 and ((bar_type in ("vol", "volume")) or (vol_ratio >= cal.trap_vol_ratio_min)):
             trigger_low = l
@@ -1236,7 +1253,7 @@ class UniversalFootprintEngine:
                     "metrics": {"est_top_buy_share": round(est_top_buy_share, 4), "confirm_lag": confirm_lag},
                 })
 
-        if np.isfinite(prior5_low) and l < prior5_low and v > 0 \
+        if _vol_gate_pass and np.isfinite(prior5_low) and l < prior5_low and v > 0 \
                 and trap_bottom_sell_share >= cal.trap_zone_share_min \
                 and ((bar_type in ("vol", "volume")) or (vol_ratio >= cal.trap_vol_ratio_min)):
             trigger_high = h
