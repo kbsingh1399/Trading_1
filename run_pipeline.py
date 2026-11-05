@@ -83,6 +83,22 @@ def run_parity():
     return p.returncode
 
 
+def run_optimize_ram():
+    """Trims stale working-set allocations across background processes and runs GC."""
+    print("\n[PIPELINE] Running Win32 working-set RAM optimization...")
+    from tools.optimize_memory import optimize_system_ram
+    res = optimize_system_ram()
+    print("=================================================================")
+    print("WIN32 WORKING-SET RAM OPTIMIZATION REPORT")
+    print("=================================================================")
+    print(f"Trimmed processes:   {res.get('trimmed_processes')}")
+    print(f"Free RAM before:     {res.get('free_before_gb')} GB")
+    print(f"Free RAM after:      {res.get('free_after_gb')} GB (+{res.get('freed_gb')} GB freed)")
+    print(f"Current Memory Load: {res.get('memory_load_pct')}%")
+    print("=================================================================")
+
+
+
 def run_daemon(interval: int = 60, crypto_only: bool = False):
     """
     Spawns and monitors the two decoupled processes:
@@ -151,6 +167,7 @@ def main():
     parser.add_argument("--audit", action="store_true", help="Run Delta Exchange India position & risk audit")
     parser.add_argument("--test", action="store_true", help="Run complete pytest test suite")
     parser.add_argument("--parity", action="store_true", help="Run CoinGlass footprint parity validation report")
+    parser.add_argument("--optimize-ram", action="store_true", help="Trim working sets and recover system RAM")
     parser.add_argument("--crypto-only", action="store_true", help="Restrict harvester sweep to crypto only")
     parser.add_argument("--interval", type=int, default=60, help="Harvester daemon sweep interval in seconds (default: 60)")
     parser.add_argument("--reset-offset", action="store_true", help="Start sentinel from current end of signal ledger")
@@ -166,6 +183,8 @@ def main():
         sys.exit(run_test())
     elif args.parity:
         sys.exit(run_parity())
+    elif args.optimize_ram:
+        run_optimize_ram()
     elif args.daemon:
         run_daemon(interval=args.interval, crypto_only=args.crypto_only)
     else:
