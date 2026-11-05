@@ -37,6 +37,7 @@ reports/*.log
 Database/Liquidation_Data/**/*.csv
 Database/Liquidation_Data/**/*.xlsx
 Database/Signals/*.jsonl
+Database/Candle_Data/*_1m_cache.parquet
 
 # Vector database binary fragments
 Database/Vector_Memory/*

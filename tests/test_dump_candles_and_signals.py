@@ -68,9 +68,9 @@ def test_startup_gap_detection_and_incremental_backfill(tmp_path):
     engine = UniversalFootprintEngine()
 
     # Backfill on real BTC
-    df_synced, sigs, stats = audit_and_sync_time_bars("BTC", feed, engine, max_history_bars=300)
+    df_synced, sigs, stats = audit_and_sync_time_bars("BTC", feed, engine, max_history_bars=3000)
     assert not df_synced.empty
-    assert len(df_synced) >= 290
+    assert len(df_synced) >= 2900
     assert "signals" in df_synced.columns
 
     # Verify no chronological timestamp duplicates
@@ -110,3 +110,31 @@ def test_multibar_files_exist_and_are_valid():
         assert "delta" in df.columns
         assert "total_volume" in df.columns
         assert "signals" in df.columns
+
+
+def test_coinglass_anchor_volume_bar_sol_genesis_parity():
+    """
+    Verifies 100% empirical CoinGlass parity for the oldest available SOL volume bar:
+    - Anchor window: 10-26 23:22 - 23:42 UTC (20 minutes duration)
+    - Volume: 205K SOL (4-exchange normalized)
+    - Total trades: ~24.5K - 25K
+    """
+    sol_vol_file = CANDLE_DIR / "SOL_volume.parquet"
+    assert sol_vol_file.exists(), "SOL_volume.parquet must exist"
+    df = pd.read_parquet(sol_vol_file)
+    assert not df.empty and len(df) >= 500
+
+    b0 = df.iloc[0]
+    t0_open = int(b0["open_time_ms"])
+    t0_close = int(b0["close_time_ms"])
+
+    assert t0_open == 1793056920000, f"Expected 1793056920000 (10-26 23:22 UTC), got {t0_open}"
+    duration_min = (t0_close - t0_open + 1) / 60_000
+    assert abs(duration_min - 20.0) < 0.1, f"Expected 20 min duration, got {duration_min}"
+
+    tot_vol = float(b0["total_volume"])
+    assert 200_000.0 <= tot_vol <= 210_000.0, f"Expected ~205K SOL, got {tot_vol}"
+
+    trades = float(b0["total_trades"])
+    assert 22_000.0 <= trades <= 26_000.0, f"Expected ~25K trades, got {trades}"
+
