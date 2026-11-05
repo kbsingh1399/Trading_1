@@ -160,42 +160,53 @@ class AggregatedFuturesFeed:
         now_ms: Optional[int] = None
     ) -> Dict[int, Dict[str, Any]]:
         api_sym = VENUE_SYMBOL_MAP.get(symbol, {}).get("okx", f"{symbol}-USDT-SWAP")
-        fetch_limit = min(limit, 100)
-        url = f"https://www.okx.com/api/v5/market/candles?instId={api_sym}&bar={interval}&limit={fetch_limit}"
+        now_ms = now_ms or int(datetime.now(timezone.utc).timestamp() * 1000)
+        mult = VENUE_MULTIPLIERS.get(symbol, {}).get("okx", 1.0)
+        step_ms = 900000 if "15" in interval else (300000 if "5" in interval else 60000)
+        needed = min(limit, 300)
+        pages = (needed + 99) // 100
+        bars = {}
+        after_param = ""
+
         try:
-            res = _http_get_json(url, timeout=self.timeout_sec)
-            data = res.get("data", []) if isinstance(res, dict) else []
-            now_ms = now_ms or int(datetime.now(timezone.utc).timestamp() * 1000)
-            mult = VENUE_MULTIPLIERS.get(symbol, {}).get("okx", 1.0)
-            bars = {}
-            for k in data:
-                t_open = int(k[0])
-                step_ms = 900000 if "15" in interval else (300000 if "5" in interval else 60000)
-                t_close = t_open + step_ms - 1
-                if t_close > now_ms:
-                    continue
-                o = float(k[1])
-                h = float(k[2])
-                l = float(k[3])
-                c = float(k[4])
-                tot_vol = float(k[6]) * mult
-                bars[t_open] = {
-                    "close_time_ms": t_close,
-                    "open": o,
-                    "high": h,
-                    "low": l,
-                    "close": c,
-                    "total_volume": tot_vol,
-                    "buy_volume": tot_vol * 0.5,
-                    "sell_volume": tot_vol * 0.5,
-                    "delta": 0.0,
-                    "total_trades": 0.0,
-                    "has_real_taker": False,
-                }
+            for _ in range(pages):
+                url = f"https://www.okx.com/api/v5/market/candles?instId={api_sym}&bar={interval}&limit=100{after_param}"
+                res = _http_get_json(url, timeout=self.timeout_sec)
+                data = res.get("data", []) if isinstance(res, dict) else []
+                if not data:
+                    break
+                for k in data:
+                    t_open = int(k[0])
+                    t_close = t_open + step_ms - 1
+                    if t_close > now_ms:
+                        continue
+                    if t_open not in bars:
+                        o = float(k[1])
+                        h = float(k[2])
+                        l = float(k[3])
+                        c = float(k[4])
+                        tot_vol = float(k[6]) * mult
+                        bars[t_open] = {
+                            "close_time_ms": t_close,
+                            "open": o,
+                            "high": h,
+                            "low": l,
+                            "close": c,
+                            "total_volume": tot_vol,
+                            "buy_volume": tot_vol * 0.5,
+                            "sell_volume": tot_vol * 0.5,
+                            "delta": 0.0,
+                            "total_trades": 0.0,
+                            "has_real_taker": False,
+                        }
+                if len(bars) >= needed:
+                    break
+                oldest_t = data[-1][0]
+                after_param = f"&after={oldest_t}"
             return bars
         except Exception as e:
             logger.debug(f"OKX fetch notice for {symbol}: {e}")
-            return {}
+            return bars
 
     # -------------------------------------------------------------------------
     # Venue 3: Bybit Linear Perpetuals
