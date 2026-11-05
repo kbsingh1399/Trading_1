@@ -121,59 +121,96 @@ def safe_float(val: Any, default: Optional[float] = None) -> Optional[float]:
 
 
 # ========================================================================================
-# 1. Per-Asset Rolling 5-Signal Queue Manager
+# 1. Per-Asset Append-Only Signal Store & Event Stream Manager
 # ========================================================================================
 class SignalQueueManager:
+    """
+    Append-Only Signal Store & Event Stream Manager.
+    Instead of truncating to 5 signals, all harvested signals are permanently appended
+    to per-asset JSONL files in Database/Signals/Signal_Queues/<SYM>_signals.jsonl.
+    Maintains full historical sequence while deduplicating against identical signatures.
+    """
+    @staticmethod
+    def get_signals_jsonl_path(symbol: str) -> Path:
+        return QUEUE_DIR / f"{symbol.upper()}_signals.jsonl"
+
     @staticmethod
     def get_queue_path(symbol: str) -> Path:
+        return QUEUE_DIR / f"{symbol.upper()}_signals.jsonl"
+
+    @staticmethod
+    def get_legacy_json_path(symbol: str) -> Path:
         return QUEUE_DIR / f"{symbol.upper()}_queue.json"
 
     @classmethod
     def load_queue(cls, symbol: str) -> List[dict]:
-        p = cls.get_queue_path(symbol)
-        if not p.exists():
-            return []
-        try:
-            with writer_lock(p):
-                content = p.read_text(encoding="utf-8").strip()
-                if not content:
-                    return []
-                data = json.loads(content)
-                return data if isinstance(data, list) else []
-        except Exception as e:
-            logger.warning(f"[{symbol}] Failed to read queue from {p.name}: {e}")
-            return []
+        return cls.load_all_signals(symbol)
+
+    @classmethod
+    def load_all_signals(cls, symbol: str) -> List[dict]:
+        """Loads all appended signals from the asset's append-only ledger."""
+        p_jsonl = cls.get_signals_jsonl_path(symbol)
+        p_legacy = cls.get_legacy_json_path(symbol)
+
+        signals = []
+        if p_jsonl.exists():
+            try:
+                with open(p_jsonl, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            try:
+                                signals.append(json.loads(line))
+                            except Exception:
+                                pass
+                return signals
+            except Exception as e:
+                logger.warning(f"[{symbol}] Error reading {p_jsonl.name}: {e}")
+
+        # If jsonl does not exist yet, check legacy queue.json and migrate
+        if p_legacy.exists():
+            try:
+                content = p_legacy.read_text(encoding="utf-8").strip()
+                if content:
+                    parsed = json.loads(content)
+                    if isinstance(parsed, list):
+                        signals = parsed
+                        # Auto-migrate into jsonl append format
+                        cls.append_signals(symbol, signals)
+            except Exception as e:
+                logger.warning(f"[{symbol}] Failed reading legacy queue {p_legacy.name}: {e}")
+
+        return signals
 
     @classmethod
     def push_signals_and_roll(
         cls,
         symbol: str,
         new_signals: List[dict],
-        max_len: int = 5
+        max_len: int = 0
+    ) -> Tuple[List[dict], List[dict]]:
+        return cls.append_signals(symbol, new_signals)
+
+    @classmethod
+    def append_signals(
+        cls,
+        symbol: str,
+        new_signals: List[dict]
     ) -> Tuple[List[dict], List[dict]]:
         """
-        Pushes new harvested signals into the asset's dedicated queue.
-        Deduplicates against existing elements, rolls to keep at most `max_len` latest items,
-        and persists atomically under writer_lock.
-        Returns: (updated_queue, newly_added_signals)
+        Permanently appends newly harvested signals into Database/Signals/Signal_Queues/<SYM>_signals.jsonl.
+        Deduplicates against already appended signals using signature keys.
+        Never drops or truncates historical signals.
+        Returns: (all_signals, newly_added_signals)
         """
         if not new_signals:
-            return cls.load_queue(symbol), []
+            return cls.load_all_signals(symbol), []
 
-        p = cls.get_queue_path(symbol)
-        with writer_lock(p):
-            existing = []
-            if p.exists():
-                try:
-                    content = p.read_text(encoding="utf-8").strip()
-                    if content:
-                        parsed = json.loads(content)
-                        if isinstance(parsed, list):
-                            existing = parsed
-                except Exception:
-                    existing = []
+        p_jsonl = cls.get_signals_jsonl_path(symbol)
+        p_legacy = cls.get_legacy_json_path(symbol)
 
-            # Build set of existing signature keys: (sig_code, bar_type, bar_label, time_ms)
+        with writer_lock(p_jsonl):
+            existing = cls.load_all_signals(symbol)
             existing_keys = {
                 (
                     str(s.get("sig_code", "")).lower(),
@@ -191,6 +228,8 @@ class SignalQueueManager:
             now_ist_str = now_ist.strftime("%Y-%m-%d %H:%M:%S.%f IST")
 
             newly_added = []
+            lines_to_append = []
+
             for s in new_signals:
                 sig_code = str(s.get("sig_code", "")).lower()
                 bar_type = str(s.get("bar_type", "time")).lower()
@@ -235,18 +274,25 @@ class SignalQueueManager:
                 existing_keys.add(key)
                 existing.append(pruned_sig)
                 newly_added.append(pruned_sig)
+                lines_to_append.append(json.dumps(pruned_sig, ensure_ascii=True, allow_nan=False))
 
-            # Roll window: keep at most latest max_len signals
-            updated_queue = existing[-max_len:]
-            atomic_json(p, updated_queue)
+            if lines_to_append:
+                with open(p_jsonl, "a", encoding="utf-8") as f:
+                    for l in lines_to_append:
+                        f.write(l + "\n")
 
-            if newly_added:
+                # Also update legacy json with full history for seamless backward compatibility
+                try:
+                    atomic_json(p_legacy, existing)
+                except Exception:
+                    pass
+
                 logger.info(
-                    f"[{symbol}] Appended {len(newly_added)} signal(s) to rolling queue "
-                    f"({len(updated_queue)}/{max_len} in window)."
+                    f"[{symbol}] Appended {len(newly_added)} new signal(s) to permanent ledger "
+                    f"(Total stored: {len(existing)})."
                 )
 
-            return updated_queue, newly_added
+            return existing, newly_added
 
 
 # ========================================================================================
@@ -471,11 +517,14 @@ class MultiPillarTradeEvaluator:
         sorted_triggers = sorted(trigger_signals if trigger_signals else queue, key=lambda s: s.get("priority", 8))
         primary_trigger = sorted_triggers[0]
 
+        # Determine recent window for momentum & entropy context (latest up to 15 signals)
+        recent_window = queue[-15:] if len(queue) > 15 else queue
+
         target_direction = primary_trigger.get("direction", "NEUTRAL")
         if target_direction not in ("LONG", "SHORT"):
-            # If neutral, derive from queue consensus
-            long_cnt = sum(1 for s in queue if s.get("direction") == "LONG")
-            short_cnt = sum(1 for s in queue if s.get("direction") == "SHORT")
+            # If neutral, derive from recent consensus
+            long_cnt = sum(1 for s in recent_window if s.get("direction") == "LONG")
+            short_cnt = sum(1 for s in recent_window if s.get("direction") == "SHORT")
             if long_cnt > short_cnt:
                 target_direction = "LONG"
             elif short_cnt > long_cnt:
@@ -483,8 +532,8 @@ class MultiPillarTradeEvaluator:
             else:
                 return None  # Pure deadlock
 
-        # Direction Contradiction Entropy Gate
-        queue_dirs = [s.get("direction", "NEUTRAL") for s in queue if s.get("direction") in ("LONG", "SHORT")]
+        # Direction Contradiction Entropy Gate on recent window
+        queue_dirs = [s.get("direction", "NEUTRAL") for s in recent_window if s.get("direction") in ("LONG", "SHORT")]
         entropy = calculate_shannon_entropy(queue_dirs)
         contradiction_veto = False
         if entropy > 0.95 and primary_trigger.get("priority", 8) > 2:
@@ -527,13 +576,15 @@ class MultiPillarTradeEvaluator:
         else:
             w1_score += 7.0
 
-        # Queue concordance
-        matching_in_queue = sum(1 for s in queue if s.get("direction") == target_direction)
-        if matching_in_queue >= 4:
+        # Recent signal concordance
+        matching_in_queue = sum(1 for s in recent_window if s.get("direction") == target_direction)
+        total_recent = max(len(recent_window), 1)
+        concordance_ratio = matching_in_queue / total_recent
+        if concordance_ratio >= 0.75:
             w1_score += 8.0
-        elif matching_in_queue >= 3:
+        elif concordance_ratio >= 0.60:
             w1_score += 5.0
-        elif matching_in_queue == 2:
+        elif concordance_ratio >= 0.40:
             w1_score += 3.0
 
         # Burst concordance bonus
@@ -811,8 +862,8 @@ class MultiPillarTradeEvaluator:
         candle_t_ms = int(candle_ctx.get("time_ms") or primary_trigger.get("time_ms") or now_ms)
         candle_t_ist = candle_ctx.get("time_ist") or primary_trigger.get("time_ist") or utc_ms_to_ist_str(candle_t_ms)
 
-        # Serialized JSON strings for DuckDB / Polars schema stability
-        queue_snapshot_json = json.dumps(queue, ensure_ascii=True, allow_nan=False)
+        # Serialized JSON strings for DuckDB / Polars schema stability (recent window snapshot)
+        queue_snapshot_json = json.dumps(recent_window[-5:], ensure_ascii=True, allow_nan=False)
         metrics_payload = {
             "w1_footprint": w1_score,
             "w2_auction": w2_score,
@@ -895,65 +946,85 @@ def update_asset_queue_and_evaluate(
 ) -> Optional[dict]:
     """
     Main entrypoint called synchronously upon harvesting footprint signals.
-    Updates the per-asset rolling 5-signal queue, then runs the Multi-Pillar Evaluator
-    strictly if new signals were added to the window.
+    Permanently appends signals to the asset ledger, then runs Multi-Pillar Evaluator
+    strictly if new signals were added.
     """
-    queue, added = SignalQueueManager.push_signals_and_roll(symbol, new_signals, max_len=5)
-    if not queue or not added:
+    signals, added = SignalQueueManager.append_signals(symbol, new_signals)
+    if not signals or not added:
         return None
 
-    # Run evaluation using the newly arrived triggers in context of the 5-signal window
     return MultiPillarTradeEvaluator.evaluate_symbol(
         symbol=symbol,
         trigger_signals=added,
-        queue=queue,
+        queue=signals,
         current_price=current_price
     )
 
 
-def evaluate_all_existing_queues() -> List[dict]:
-    """Scans all existing per-asset queues in Database/Signals/Signal_Queues/ and evaluates them."""
+def evaluate_all_existing_queues(since_minutes: int = 30) -> List[dict]:
+    """
+    Scans all per-asset append ledgers in Database/Signals/Signal_Queues/ and evaluates new signals.
+    Runs on the 0th, 15th, 30th, 45th minute candle close cron jobs.
+    """
     results = []
-    queue_files = list(QUEUE_DIR.glob("*_queue.json"))
-    if not queue_files:
-        logger.info("No signal queues found in Database/Signals/Signal_Queues/.")
+    symbol_files = list(QUEUE_DIR.glob("*_signals.jsonl")) + list(QUEUE_DIR.glob("*_queue.json"))
+    symbols = sorted({f.name.split("_")[0].upper() for f in symbol_files})
+    if not symbols:
+        logger.info("No signal ledgers found in Database/Signals/Signal_Queues/.")
         return []
 
-    logger.info(f"Evaluating {len(queue_files)} existing asset queue(s)...")
-    for qf in queue_files:
-        sym = qf.name.replace("_queue.json", "").upper()
+    cutoff_ms = int((datetime.now(timezone.utc) - timedelta(minutes=since_minutes)).timestamp() * 1000)
+    logger.info(f"Evaluating {len(symbols)} asset ledgers for new signals (window: {since_minutes}m)...")
+
+    active_count = 0
+    for sym in symbols:
         try:
-            queue = SignalQueueManager.load_queue(sym)
-            if queue:
-                res = MultiPillarTradeEvaluator.evaluate_symbol(
-                    symbol=sym,
-                    trigger_signals=[queue[-1]],
-                    queue=queue
-                )
-                if res:
-                    results.append(res)
+            signals = SignalQueueManager.load_all_signals(sym)
+            if not signals:
+                continue
+
+            # Prioritize signals in the recent window, or fall back to latest signal
+            recent_triggers = [s for s in signals if int(s.get("time_ms", 0)) >= cutoff_ms or int(s.get("arrived_at_ms", 0)) >= cutoff_ms]
+            triggers = recent_triggers if recent_triggers else [signals[-1]]
+
+            res = MultiPillarTradeEvaluator.evaluate_symbol(
+                symbol=sym,
+                trigger_signals=triggers,
+                queue=signals
+            )
+            if res:
+                results.append(res)
+                if res.get("status") == "ACTIVE":
+                    active_count += 1
+                    logger.info(
+                        f"🚨 ACTIVE TRADE SETUP: [{sym}] {res['direction']} | Score: {res['confluence_score']}/100 | "
+                        f"Entry: {res['entry_price']} | SL: {res['stop_loss']} | TP: {res['take_profit']} | R:R: {res['risk_reward_ratio']}"
+                    )
         except Exception as e:
             logger.error(f"[{sym}] Evaluation failed: {e}")
+
+    logger.info(f"Evaluation complete: {len(results)} assets analyzed, {active_count} ACTIVE trade setup(s).")
     return results
 
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Multi-Pillar Trade Evaluator & Rolling 5-Signal Queue")
+    parser = argparse.ArgumentParser(description="Multi-Pillar Trade Evaluator & Append-Only Signal Store")
     parser.add_argument("--symbol", type=str, default="", help="Evaluate specific asset (e.g. BTC)")
-    parser.add_argument("--all", action="store_true", help="Evaluate all existing asset queues")
+    parser.add_argument("--all", action="store_true", help="Evaluate all existing asset ledgers")
+    parser.add_argument("--window", type=int, default=30, help="Lookback window in minutes for new signals (default 30)")
     args = parser.parse_args()
 
     if args.symbol:
         sym = args.symbol.upper().strip()
-        queue = SignalQueueManager.load_queue(sym)
-        if not queue:
-            print(f"No queue exists for {sym}. Push signals first.")
+        signals = SignalQueueManager.load_all_signals(sym)
+        if not signals:
+            print(f"No signals exist for {sym}.")
             return
-        res = MultiPillarTradeEvaluator.evaluate_symbol(sym, [queue[-1]], queue)
+        res = MultiPillarTradeEvaluator.evaluate_symbol(sym, [signals[-1]], signals)
         print(json.dumps(res, indent=2))
     elif args.all:
-        evaluate_all_existing_queues()
+        evaluate_all_existing_queues(since_minutes=args.window)
     else:
         print("Usage: python trade_evaluator.py --symbol <SYM> OR --all")
 

@@ -192,7 +192,12 @@ def scheduler_daemon():
         if cur_min in SCHEDULE and cur_min != last_dispatched_minute:
             script, desc = SCHEDULE[cur_min]
             last_dispatched_minute = cur_min
-            run_scraper(script, desc)
+            success = run_scraper(script, desc)
+
+            # At each 15m candle close (:00, :15, :30, :45), immediately execute trade evaluator across all new signals
+            if cur_min in (0, 15, 30, 45):
+                logger.info(f"🎯 Triggering 15m Candle Close Trade Evaluation pass at minute :{cur_min:02d}...")
+                run_scraper("5_trade_evaluator.py", "🎯 Multi-Pillar Trade Evaluator (15m Close)", flag="--all")
 
         # Sleep till next 5-second boundary
         time.sleep(5.0)

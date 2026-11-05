@@ -1061,7 +1061,7 @@ async def execute_footprint_sweep(ws) -> Tuple[int, int]:
                 total_new += len(new_s)
                 try:
                     latest_px = float(candles[-1].get("close")) if candles else None
-                    update_asset_queue_and_evaluate(sym, new_s if new_s else signals[-5:], current_price=latest_px)
+                    update_asset_queue_and_evaluate(sym, new_s if new_s else signals, current_price=latest_px)
                 except Exception as eval_err:
                     logger.error(f"[{sym}] Trade evaluator error: {eval_err}")
 
