@@ -146,7 +146,10 @@ class UnifiedAPIFootprintEngine:
     def __init__(self, rolling_window: int = 300, crypto_only: bool = False):
         self.rolling_window = rolling_window
         self.crypto_only = crypto_only
-        self.engine = UniversalFootprintEngine(imbalance_ratio=3.0, min_delta_pct=5.0)
+        # v2.0.0 parity-calibrated engine (legacy min_delta_pct=5.0 removed: it caused
+        # the 226-signal over-generation defect; the engine now clamps to the
+        # calibrated CoinGlass parity floor regardless of legacy call paths).
+        self.engine = UniversalFootprintEngine(imbalance_ratio=3.0)
         self.evaluator: Optional[RealtimeSignalEvaluator] = None
         # Maps (symbol, sig_code, time_ms, price) → time_ms for TTL eviction
         self.known_signal_keys: Dict[Tuple[str, str, int, float], int] = {}

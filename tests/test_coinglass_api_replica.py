@@ -306,7 +306,7 @@ def test_parquet_signals_schema_consistency_with_empty_signals(tmp_path):
 
 
 def test_coinglass_absorption_specifications():
-    """Verify Bullish Absorption (20%+ selling wick) and Bearish Absorption (30%+ buying wick) phrasing."""
+    """Verify Absorption phrasing matches CoinGlass CDP ground truth (30%+ on BOTH sides)."""
     engine = UniversalFootprintEngine()
     t0 = 1793500000000
     bars = [
@@ -341,7 +341,9 @@ def test_coinglass_absorption_specifications():
     abs_sigs = [s for s in candle["signals"] if s["sig_code"] == "abs"]
     assert len(abs_sigs) >= 1
     assert abs_sigs[0]["side"] == "bullish"
-    assert "20%+ of the bar's selling" in abs_sigs[0]["description"]
+    # CoinGlass CDP ground truth: bullish absorption also reads "30%+ of the bar's selling"
+    # (verified across the historical coinglass_cdp dump; the legacy "20%+" was a template defect).
+    assert "30%+ of the bar's selling" in abs_sigs[0]["description"]
     assert "Selling absorbed at the low" in abs_sigs[0]["title"]
 
 

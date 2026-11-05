@@ -12,6 +12,7 @@ Validates that UniversalFootprintEngine:
 """
 
 import math
+from pathlib import Path
 from datetime import datetime, timezone, timedelta
 import pandas as pd
 import numpy as np
@@ -167,3 +168,250 @@ def test_trapped_traders_signal():
     assert len(trap_sigs) > 0
     assert trap_sigs[0]["side"] == "bearish"
     assert trap_sigs[0]["title"] == "Failed breakout"
+
+
+# ========================================================================================
+# v2.0.0 CoinGlass Parity Calibration Tests
+# ========================================================================================
+from Terminal.universal_footprint_engine import (  # noqa: E402
+    FootprintCalibration,
+    SIGNAL_PRIORITY_WEIGHTS,
+    DEFAULT_CALIBRATION,
+)
+
+CANDLE_DIR = Path(__file__).resolve().parent.parent / "Database" / "Candle_Data"
+
+
+def _flat_bars(n=30, start_utc_ms=1793500000000, base_price=2500.0, volume=10000.0):
+    bars = []
+    for i in range(n):
+        t_ms = start_utc_ms + i * 900000
+        bars.append({
+            "open_time_ms": t_ms,
+            "open": base_price,
+            "high": base_price + 5.0,
+            "low": base_price - 5.0,
+            "close": base_price,
+            "total_volume": volume,
+            "buy_volume": volume / 2.0,
+            "sell_volume": volume / 2.0,
+            "delta": 0.0,
+        })
+    return bars
+
+
+def test_legacy_min_delta_pct_is_clamped_to_parity_floor():
+    """The historical min_delta_pct=5.0 call path must NOT regress the over-generation defect."""
+    engine = UniversalFootprintEngine(imbalance_ratio=3.0, min_delta_pct=5.0)
+    assert engine.min_delta_pct >= 20.0, "legacy min_delta_pct must be clamped to the calibrated parity floor"
+    fresh = UniversalFootprintEngine()
+    assert fresh.min_delta_pct == DEFAULT_CALIBRATION.div_delta_pct_floor
+
+
+def test_divergence_respects_calibrated_delta_floor():
+    """|delta_pct| below the calibrated floor must not fire (the naive 5% floor fired 41.7% of bars)."""
+    engine = UniversalFootprintEngine()
+    bars = _flat_bars(n=30)
+
+    # Weak divergence: closed up on -10% delta -> below the 22% parity floor
+    b = bars[25]
+    b["open"], b["high"], b["low"], b["close"] = 2500.0, 2510.0, 2495.0, 2508.0
+    b["total_volume"] = 20000.0
+    b["delta"] = -2000.0  # -10%
+    b["buy_volume"] = 9000.0
+    b["sell_volume"] = 11000.0
+
+    df, sigs = engine.analyze_bars(bars, symbol="ETH", asset_class="Crypto", inspect_last_n_bars=30)
+    weak = [s for s in sigs if s["sig_code"] == "div" and s["time_ms"] == b["open_time_ms"]]
+    assert weak == [], "div must not fire below the calibrated delta floor"
+
+    # Strong divergence: closed up on -30% delta -> fires
+    b2 = bars[27]
+    b2["open"], b2["high"], b2["low"], b2["close"] = 2500.0, 2510.0, 2495.0, 2508.0
+    b2["total_volume"] = 20000.0
+    b2["delta"] = -6000.0  # -30%
+    b2["buy_volume"] = 7000.0
+    b2["sell_volume"] = 13000.0
+
+    df, sigs = engine.analyze_bars(bars, symbol="ETH", asset_class="Crypto", inspect_last_n_bars=30)
+    strong = [s for s in sigs if s["sig_code"] == "div" and s["time_ms"] == b2["open_time_ms"]]
+    assert len(strong) == 1
+    assert strong[0]["side"] == "bearish"
+
+
+def test_divergence_requires_close_vs_open_not_prev_close():
+    """The naive `or c < prev_c` expansion fired on down-closing gap bars; must not."""
+    engine = UniversalFootprintEngine()
+    bars = _flat_bars(n=30)
+    # Bar 26 closes at 2504 (prev close 2500): closed UP normally
+    bars[26].update({"open": 2500.0, "high": 2512.0, "low": 2498.0, "close": 2504.0,
+                     "total_volume": 20000.0, "delta": -6000.0,
+                     "buy_volume": 7000.0, "sell_volume": 13000.0})
+    # Bar 27: opens at 2510 (gap up), closes 2506 -> closes DOWN vs open, but ABOVE prev close 2504.
+    # delta stays strongly negative. The naive engine fired bearish div here via `c > prev_c`.
+    bars[27].update({"open": 2510.0, "high": 2514.0, "low": 2502.0, "close": 2506.0,
+                     "total_volume": 20000.0, "delta": -6000.0,
+                     "buy_volume": 7000.0, "sell_volume": 13000.0})
+
+    df, sigs = engine.analyze_bars(bars, symbol="ETH", asset_class="Crypto", inspect_last_n_bars=30)
+    div27 = [s for s in sigs if s["sig_code"] == "div" and s["time_ms"] == bars[27]["open_time_ms"]]
+    assert div27 == [], "div must evaluate close-vs-open only, never close-vs-prev-close"
+    # sanity: bar 26 (closed up, -30% delta) still fires
+    div26 = [s for s in sigs if s["sig_code"] == "div" and s["time_ms"] == bars[26]["open_time_ms"]]
+    assert len(div26) == 1 and div26[0]["side"] == "bearish"
+
+
+def test_trap_requires_future_confirmation():
+    """A breakout bar whose follow-through CONTINUES must not be a trap."""
+    engine = UniversalFootprintEngine()
+    bars = _flat_bars(n=30, base_price=2500.0)
+    # Failed-breakout shape at bar 20 (would fire in the naive same-bar engine)...
+    bars[20].update({"open": 2500.0, "high": 2540.0, "low": 2496.0, "close": 2502.0,
+                     "total_volume": 40000.0, "delta": 12000.0,
+                     "buy_volume": 26000.0, "sell_volume": 14000.0})
+    # ...but bars 21-23 keep making new highs -> no confirmation, no trap
+    for k, p in enumerate([2545.0, 2550.0, 2555.0]):
+        bars[21 + k].update({"open": 2502.0 + k, "high": p, "low": 2500.0, "close": p - 1.0,
+                             "total_volume": 20000.0, "delta": 2000.0,
+                             "buy_volume": 11000.0, "sell_volume": 9000.0})
+
+    df, sigs = engine.analyze_bars(bars, symbol="ETH", asset_class="Crypto", inspect_last_n_bars=30)
+    traps = [s for s in sigs if s["sig_code"] == "trap" and s["time_ms"] == bars[20]["open_time_ms"]]
+    assert traps == [], "trap must require 1-3 bar failure confirmation, not fire on the break itself"
+
+
+def test_trap_confirmation_lag_is_recorded():
+    """Confirmed traps carry their CoinGlass confirmation lag (1-3 bars)."""
+    engine = UniversalFootprintEngine()
+    bars = _flat_bars(n=30, base_price=2500.0)
+    bars[20].update({"open": 2500.0, "high": 2540.0, "low": 2496.0, "close": 2510.0,
+                     "total_volume": 40000.0, "delta": 12000.0,
+                     "buy_volume": 26000.0, "sell_volume": 14000.0})
+    # Bar 21 closes back inside the lower 35% band of bar 20's range (2496..2540)
+    retest_level = 2496.0 + 0.35 * (2540.0 - 2496.0)  # 2511.4
+    bars[21].update({"open": 2510.0, "high": 2520.0, "low": 2500.0, "close": 2505.0,
+                     "total_volume": 20000.0, "delta": -2000.0,
+                     "buy_volume": 9000.0, "sell_volume": 11000.0})
+
+    df, sigs = engine.analyze_bars(bars, symbol="ETH", asset_class="Crypto", inspect_last_n_bars=30)
+    traps = [s for s in sigs if s["sig_code"] == "trap" and s["time_ms"] == bars[20]["open_time_ms"]]
+    assert len(traps) == 1
+    assert traps[0]["side"] == "bearish"
+    assert traps[0]["confirm_bars"] == 1
+    assert "1 bars later" in traps[0]["description"]  # CoinGlass literal template
+
+
+def test_sdiv_requires_fractal_pivot_with_minimum_gap():
+    """sdiv compares against a 3-left/3-right fractal pivot (minimum pivot->signal gap = 4 bars)."""
+    engine = UniversalFootprintEngine()
+    bars = _flat_bars(n=30, base_price=2500.0)
+    # Build a swing pivot high at bar 10 (unique max of bars 7..13)
+    bars[10].update({"open": 2500.0, "high": 2560.0, "low": 2495.0, "close": 2550.0,
+                     "total_volume": 20000.0, "delta": 3000.0,
+                     "buy_volume": 11500.0, "sell_volume": 8500.0})
+    # Divergent new high at bar 14 (gap = 4 bars from pivot) with heavy negative delta
+    bars[14].update({"open": 2520.0, "high": 2570.0, "low": 2515.0, "close": 2565.0,
+                     "total_volume": 30000.0, "delta": -9000.0,
+                     "buy_volume": 10500.0, "sell_volume": 19500.0})
+
+    df, sigs = engine.analyze_bars(bars, symbol="ETH", asset_class="Crypto", inspect_last_n_bars=30)
+    sdivs = [s for s in sigs if s["sig_code"] == "sdiv" and s["time_ms"] == bars[14]["open_time_ms"]]
+    assert len(sdivs) == 1
+    assert sdivs[0]["side"] == "bearish"
+    assert "Higher high" in sdivs[0]["title"]
+
+
+def test_cooldown_suppresses_consecutive_same_type():
+    """Two adjacent absorption-shaped bars: the second is suppressed by cooldown."""
+    engine = UniversalFootprintEngine()
+    bars = _flat_bars(n=30, base_price=2500.0)
+    for i in (20, 21):
+        bars[i].update({"open": 2500.0, "high": 2505.0, "low": 2470.0, "close": 2504.0,
+                        "total_volume": 40000.0, "delta": 6000.0,
+                        "buy_volume": 23000.0, "sell_volume": 17000.0})
+    df, sigs = engine.analyze_bars(bars, symbol="ETH", asset_class="Crypto", inspect_last_n_bars=30)
+    t20 = [s for s in sigs if s["sig_code"] == "abs" and s["time_ms"] == bars[20]["open_time_ms"]]
+    t21 = [s for s in sigs if s["sig_code"] == "abs" and s["time_ms"] == bars[21]["open_time_ms"]]
+    assert len(t20) == 1, "first absorption bar must fire"
+    assert t21 == [], "second consecutive absorption bar must be cooldown-suppressed"
+
+
+def test_density_governor_hard_ceiling():
+    """Governor: even adversarial input cannot exceed the hard signal ceiling."""
+    cal = FootprintCalibration(
+        governor_enabled=True,
+        governor_window=300,
+        governor_max_total=3,
+        governor_max_per_type=2,
+        abs_cooldown=1,
+    )
+    engine = UniversalFootprintEngine(calibration=cal)
+    bars = _flat_bars(n=40, base_price=2500.0)
+    for i in range(10, 40):
+        lo = 2470.0 if i % 2 == 0 else 2500.0
+        bars[i].update({"open": 2500.0, "high": 2535.0, "low": lo, "close": 2530.0 if lo == 2470.0 else 2505.0,
+                        "total_volume": 40000.0, "delta": 6000.0,
+                        "buy_volume": 23000.0, "sell_volume": 17000.0})
+    df, sigs = engine.analyze_bars(bars, symbol="ETH", asset_class="Crypto", inspect_last_n_bars=40)
+    assert len(sigs) <= 3, "governor must enforce the hard total ceiling"
+
+
+def test_pick_primary_priority_arbitration():
+    """Concurrent signals: trap outranks div regardless of list order (execution scoring)."""
+    engine = UniversalFootprintEngine()
+    div_sig = {"sig_code": "div", "side": "bearish", "strength": 0.9}     # 0.60 x 0.9 = 0.54
+    trap_sig = {"sig_code": "trap", "side": "bearish", "strength": 0.6}   # 1.00 x 0.6 = 0.60
+    primary = engine.pick_primary([div_sig, trap_sig])
+    assert primary["sig_code"] == "trap"
+    assert SIGNAL_PRIORITY_WEIGHTS["trap"] > SIGNAL_PRIORITY_WEIGHTS["abs"] > SIGNAL_PRIORITY_WEIGHTS["exh"]
+
+
+def test_execution_plan_fill_calibrated_rr_and_fees():
+    """1:2 R:R order plan with fee-aware discrete sizing for the Delta Exchange trader."""
+    engine = UniversalFootprintEngine()
+    signal = {"side": "bearish", "price": 100.0}
+    plan = engine.build_execution_plan(
+        signal, equity_usd=10000.0, atr_pct=1.0, risk_fraction=0.01,
+        rr_target=2.0, taker_fee_rate=0.0005, contract_value=1.0, min_size=1.0)
+    assert plan["valid"] is True
+    assert plan["direction"] == "SHORT"
+    assert plan["rr"] == 2.0
+    assert plan["stop_loss"] == pytest.approx(101.5, abs=1e-9)   # ATR band 1.5%
+    assert plan["take_profit"] == pytest.approx(97.0, abs=1e-9)  # exactly 2R
+    # Fee-aware discrete size: floor(100 / (1.5 + 0.0005*(100+97)))
+    assert plan["size"] == math.floor(100.0 / (1.5 + 0.0005 * 197.0))
+    assert plan["fees_reserved_usd"] > 0
+
+    tiny = engine.build_execution_plan(signal, equity_usd=1.0, atr_pct=1.0)
+    assert tiny["valid"] is False
+    assert tiny["reason"] == "below_min_size"
+
+
+def test_trailing_ratchet_never_widens():
+    engine = UniversalFootprintEngine()
+    stop = 98.5
+    stop = engine.apply_trailing_ratchet(stop, mark_price=102.0, direction=1, atr=1.0)
+    assert stop == pytest.approx(100.0)          # ratcheted up
+    stop2 = engine.apply_trailing_ratchet(stop, mark_price=99.0, direction=1, atr=1.0)
+    assert stop2 == pytest.approx(100.0)         # must NOT widen on pullback
+    short_stop = engine.apply_trailing_ratchet(101.5, mark_price=98.0, direction=-1, atr=1.0)
+    assert short_stop == pytest.approx(100.0)    # ratcheted down
+
+
+@pytest.mark.skipif(not (CANDLE_DIR / "ETH.parquet").exists(), reason="ETH.parquet not present")
+def test_signal_density_parity_on_eth_window():
+    """The over-generation defect fix: ETH 300-bar window must stay in the CoinGlass density band."""
+    engine = UniversalFootprintEngine()
+    raw = pd.read_parquet(CANDLE_DIR / "ETH.parquet")
+    df, sigs = engine.analyze_bars(
+        raw, symbol="ETH", asset_class="Crypto",
+        rolling_window=len(raw), inspect_last_n_bars=len(raw))
+    n = len(df)
+    bars_with = int((df["signals_count"] > 0).sum())
+    density = 100.0 * bars_with / n
+    # CoinGlass ground truth on the same window: 25 signals / 8.3% density
+    # (naive engine: 226 signals / 42.7% of bars). Parity band: 5%-20%.
+    assert 5.0 <= density <= 20.0, f"signal-bar density {density:.1f}% outside parity band"
+    assert 10 <= len(sigs) <= 60, f"{len(sigs)} signals outside parity range"
+    stats = engine.last_run_stats
+    assert stats["engine_version"] == "2.0.0"

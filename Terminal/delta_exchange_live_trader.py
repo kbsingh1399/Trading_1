@@ -11,7 +11,7 @@ import json
 import math
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Set, Tuple
+from typing import Dict, Any, Optional, List, Set, Tuple, Union
 import requests
 from requests.adapters import HTTPAdapter
 
