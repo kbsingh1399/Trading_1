@@ -128,16 +128,27 @@ class RiskGovernor(BaseCouncilAgent):
     name = "RiskGovernor"
     weight = 1.0
 
+    # Broker symbol specifications for risk calculation
+    SYMBOL_SPECS = {
+        "BTC": {"contract": 1.0, "min_vol": 0.01, "step": 0.01},
+        "ETH": {"contract": 1.0, "min_vol": 0.01, "step": 0.01},
+        "DOGE": {"contract": 1000.0, "min_vol": 0.01, "step": 0.01},
+        "ADA": {"contract": 100.0, "min_vol": 0.01, "step": 0.01},
+        "XRP": {"contract": 100.0, "min_vol": 0.01, "step": 0.01},
+        "LTC": {"contract": 1.0, "min_vol": 0.01, "step": 0.01},
+        "LINK": {"contract": 1.0, "min_vol": 0.01, "step": 0.01},
+    }
+
     def vote(self, candidate: Dict[str, Any], evidence: Dict[str, Any]) -> Ballot:
         entry = _safe_float(candidate.get("entry_price"), 0.0)
         sl = _safe_float(candidate.get("stop_loss"), 0.0)
         rr = _safe_float(candidate.get("risk_reward_ratio"), 0.0)
-        risk_usd = _safe_float(candidate.get("risk_usd"), 12.50)
+        symbol = str(candidate.get("symbol", "")).upper()
         
         distance = abs(entry - sl)
-        grounding = [entry, sl, rr, risk_usd, round(distance, 5)]
+        grounding = [entry, sl, rr, round(distance, 5)]
         
-        # Risk bounds: Risk must be between 10.0 and 15.0 USD, R:R >= 2.0
+        # Zero distance check
         if distance <= 1e-8:
             return Ballot(
                 agent=self.name,
@@ -157,25 +168,39 @@ class RiskGovernor(BaseCouncilAgent):
                 rationale=f"Risk:Reward ratio {rr:.2f} below institutional minimum 2.0.",
                 grounding_results=grounding
             )
-            
-        if 10.0 <= risk_usd <= 15.0:
-            return Ballot(
-                agent=self.name,
-                vote=Vote.YEA,
-                confidence=0.95,
-                veto=False,
-                rationale=f"Risk {risk_usd:.2f} strictly within authorized 10-15 USD window. R:R is {rr:.2f}.",
-                grounding_results=grounding
-            )
-        else:
+
+        # Minimum Lot Size Dollar Risk check
+        spec = self.SYMBOL_SPECS.get(symbol, {"contract": 1.0, "min_vol": 0.01, "step": 0.01})
+        min_dollar_risk = spec["min_vol"] * spec["contract"] * distance
+        grounding.append(round(min_dollar_risk, 2))
+
+        # Retrieve live account cushion from evidence or default to $79.37
+        account_cushion = _safe_float(evidence.get("account_cushion"), 79.37)
+        max_allowed_risk = min(15.00, account_cushion * 0.25)
+        grounding.extend([round(account_cushion, 2), round(max_allowed_risk, 2)])
+
+        if min_dollar_risk > max_allowed_risk:
             return Ballot(
                 agent=self.name,
                 vote=Vote.NAY,
-                confidence=0.85,
-                veto=False,
-                rationale=f"Risk {risk_usd:.2f} outside authorized 10-15 USD limits.",
+                confidence=1.0,
+                veto=True,
+                rationale=f"VETO: Minimum lot dollar risk {min_dollar_risk:.2f} USD exceeds maximum authorized ceiling {max_allowed_risk:.2f} USD on account cushion {account_cushion:.2f} USD.",
                 grounding_results=grounding
             )
+            
+        # Target risk is bounded between $10.0 and max_allowed_risk
+        target_risk = max(10.0, min(max_allowed_risk, 12.50))
+        grounding.append(round(target_risk, 2))
+
+        return Ballot(
+            agent=self.name,
+            vote=Vote.YEA,
+            confidence=0.95,
+            veto=False,
+            rationale=f"Risk parameters verified: Min lot risk {min_dollar_risk:.2f} USD is within authorized {max_allowed_risk:.2f} USD window. R:R is {rr:.2f}.",
+            grounding_results=grounding
+        )
 
 
 class AdversarialCritic(BaseCouncilAgent):
@@ -230,15 +255,29 @@ class OrderExecutionAgent(BaseCouncilAgent):
     name = "OrderExecution"
     weight = 1.0
 
+    # Unlisted or unsupported symbols on broker MT5
+    UNSUPPORTED_MT5_SYMBOLS = {"SOL", "SOLUSD", "AVAX", "AVAXUSD", "NEAR", "NEARUSD", "SUI", "SUIUSD", "PEPE", "PEPEUSD"}
+
     def vote(self, candidate: Dict[str, Any], evidence: Dict[str, Any]) -> Ballot:
-        mt5_sym = candidate.get("mt5_symbol", "")
+        symbol = str(candidate.get("symbol", "")).upper()
         spread_pct = float(evidence.get("spread_pct", 0.05))
-        margin_required = float(candidate.get("margin_required", 500.0))
-        account_free_margin = float(evidence.get("free_margin", 4698.66))
+        margin_required = float(candidate.get("margin_required", 150.0))
+        account_free_margin = float(evidence.get("free_margin", 4679.37))
         
         grounding = [spread_pct, margin_required, account_free_margin]
         
-        # Check if margin required exceeds 40% of free margin
+        # Check 1: Symbol broker availability
+        if symbol in self.UNSUPPORTED_MT5_SYMBOLS:
+            return Ballot(
+                agent=self.name,
+                vote=Vote.NAY,
+                confidence=1.0,
+                veto=True,
+                rationale=f"VETO: Asset {symbol} is unlisted on FundedNext MT5 broker terminal.",
+                grounding_results=grounding
+            )
+
+        # Check 2: Margin utilization ceiling
         margin_util_pct = (margin_required / account_free_margin * 100) if account_free_margin > 0 else 100
         grounding.append(round(margin_util_pct, 1))
         
