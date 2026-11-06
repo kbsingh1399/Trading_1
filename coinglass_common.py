@@ -693,6 +693,93 @@ class BrowserLock(FileMutex):
 
 
 
+# --- Z.AI DOMAIN 2 UPGRADE: CHROME CDP LIVENESS WATCHDOG & HEARTBEAT ---
+CHROME_HEARTBEAT_FILE = LOCK_DIR / "chrome_heartbeat.json"
+
+def is_cdp_alive(timeout_s: float = 3.0) -> bool:
+    """Return True iff Chrome DevTools Protocol /json/version responds with HTTP 200."""
+    try:
+        import urllib.request
+        req = urllib.request.Request("http://127.0.0.1:9222/json/version", headers={"User-Agent": "Antigravity/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout_s) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+class ChromeWatchdog:
+    """
+    Background watchdog that probes Chrome CDP port (127.0.0.1:9222) every probe_interval_s.
+    Writes liveness heartbeat to Database/.locks/chrome_heartbeat.json.
+    """
+    def __init__(self, probe_interval_s: float = 30.0, on_recover = None):
+        self.probe_interval_s = probe_interval_s
+        self.on_recover = on_recover
+        self._stop = False
+        self._thread = None
+
+    def start(self):
+        import threading
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop = False
+        self._thread = threading.Thread(target=self._loop, name="chrome-watchdog", daemon=True)
+        self._thread.start()
+        logger.info("ChromeWatchdog background thread started (probe interval: %ss).", self.probe_interval_s)
+
+    def stop(self):
+        self._stop = True
+
+    def _loop(self):
+        import time
+        import os
+        import json
+        while not self._stop:
+            alive = is_cdp_alive()
+            try:
+                LOCK_DIR.mkdir(parents=True, exist_ok=True)
+                payload = {
+                    "alive": alive,
+                    "ts_us": int(time.time() * 1_000_000),
+                    "pid": os.getpid()
+                }
+                CHROME_HEARTBEAT_FILE.write_text(json.dumps(payload), encoding="utf-8")
+            except Exception:
+                pass
+
+            if not alive and self.on_recover:
+                try:
+                    self.on_recover("CDP port 9222 unresponsive")
+                except Exception:
+                    pass
+            time.sleep(self.probe_interval_s)
+
+
+def _reap_stale_lock(lock_path: Path, ttl: float = 300.0) -> None:
+    """Z.ai Domain 1 Upgrade: Remove stale PID lock if its holder has been dead >= ttl."""
+    if not lock_path.exists():
+        return
+    try:
+        mtime = lock_path.stat().st_mtime
+        if time.time() - mtime < ttl:
+            return
+        raw = lock_path.read_text().strip()
+        holder_pid = int(raw) if raw.isdigit() else -1
+        if holder_pid > 0:
+            import ctypes
+            # Check if process is alive on Windows
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            h = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, holder_pid)
+            if h == 0:
+                # Process is dead, reap stale lock
+                lock_path.unlink(missing_ok=True)
+                logger.info("Reaped stale lock file: %s (PID %s dead)", lock_path.name, holder_pid)
+            else:
+                ctypes.windll.kernel32.CloseHandle(h)
+    except Exception:
+        pass
+
+
 # Canonical 30-minute half-life constant (Qwen F-05, DeepSeek AUD-05)
 
 # Half-life t_half = tau * ln(2) = 1800 s => tau = 1800 / ln(2) ~= 2596.8437 s

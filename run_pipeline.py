@@ -202,6 +202,13 @@ def print_schedule():
 
 def scheduler_daemon():
     print_schedule()
+    try:
+        from coinglass_common import ChromeWatchdog
+        watchdog = ChromeWatchdog(probe_interval_s=30.0)
+        watchdog.start()
+        logger.info("🛡️ ChromeWatchdog liveness probe initialized.")
+    except Exception as e:
+        logger.warning("Could not start ChromeWatchdog: %s", e)
     logger.info("Pipeline scheduler daemon running. Waiting for next trigger slot...")
     last_dispatched_minute = -1
 

@@ -263,8 +263,23 @@ def compute_rdnl_confluence(
             synergy_bonus += bonus
             active_couplings.append(f"{p_a}x{p_b}(+{round(bonus * 100, 1)}%)")
 
-    m_interact = 1.0 + min(synergy_bonus, 0.40)
-    s_final = min(round(s_base * m_interact, 2), 100.0)
+    # Z.ai Correlation discount rho_ij to prevent double-counting orderbook & flow overlap
+    rho = {
+        ("W3", "W4"): 0.10,  # Whale Blotter x Liq Heatmap correlation discount
+    }
+    if regime == "EXPANSION":
+        rho[("W1", "W5")] = 0.08  # Footprint Delta x TV Liq Volume correlation discount
+
+    correlation_discount = 0.0
+    for (p_a, p_b), r_val in rho.items():
+        discount_term = r_val * min(x[p_a], x[p_b])
+        correlation_discount += discount_term
+        if discount_term > 0.02:
+            active_couplings.append(f"{p_a}x{p_b}_discount(-{round(discount_term * 100, 1)}%)")
+
+    m_interact = 1.0 + min(synergy_bonus - correlation_discount, 0.40)
+    m_interact = max(0.60, m_interact)
+    s_final = min(max(round(s_base * m_interact, 2), 0.0), 100.0)
 
     return s_final, round(m_interact, 3), active_couplings
 
@@ -793,8 +808,9 @@ class MultiPillarTradeEvaluator:
         entropy = calculate_shannon_entropy(queue_dirs)
         weighted_entropy = calculate_weighted_direction_entropy(recent_window)
         contradiction_veto = False
-        if entropy > 0.95 and primary_trigger.get("priority", 8) > 2:
-            # High chop / split queue and not a top-tier trap/absorption reversal
+        # Z.ai Upgrade 3.2: Strictly enforce Priority-Weighted Recency-Decayed Entropy (PWD-Entropy)
+        if weighted_entropy > 0.95:
+            # High chop / split queue even after recency decay and priority weighting
             contradiction_veto = True
 
         # Load context across all 5 pillars
@@ -1127,6 +1143,21 @@ class MultiPillarTradeEvaluator:
         invalid_risk = (actual_risk <= 0.0)
 
         calc_rr = round(actual_reward / max(actual_risk, 1e-9), 2) if not invalid_risk else 0.0
+
+        # Z.ai Proposed Upgrade 3.4: Effective R:R incorporating taker fees, spread, and slippage
+        fee_taker = 0.0006  # 0.06% round-trip broker CFD commission
+        spread_ratio = 0.0003  # 3 bps spread estimate
+        slippage_est = 0.0005  # 5 bps slippage buffer
+        cost_multi = (2 * fee_taker + 0.5 * spread_ratio + slippage_est) / max(actual_risk / ref_price, 1e-4)
+        eff_rr = round(max(0.0, calc_rr - cost_multi), 2)
+
+        # Z.ai Section 5.8: Quarter-Kelly position sizing fraction
+        # Platt-scaled win probability mapping from RDNL score
+        z_platt = 4.0 * (confluence_score / 100.0) - 2.4
+        p_win = 1.0 / (1.0 + math.exp(-z_platt))
+        b_eff = max(eff_rr, 1.0)
+        f_star = p_win - (1.0 - p_win) / b_eff
+        kelly_fraction = round(0.25 * max(0.0, f_star), 4)
 
         # -------------------------------------------------------------------------
         # Pass Condition Checks
