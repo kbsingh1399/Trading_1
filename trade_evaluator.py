@@ -319,6 +319,11 @@ TRADE_SETUPS_POLARS_SCHEMA = {
     "created_at_us": pl.Int64,
     "created_at_utc": pl.Utf8,
     "created_at_ist": pl.Utf8,
+    "effective_risk_reward_ratio": pl.Float64,
+    "calculated_lots": pl.Float64,
+    "target_risk_usd": pl.Float64,
+    "kelly_fraction": pl.Float64,
+    "concordance_kappa": pl.Float64,
     "queue_snapshot_json": pl.Utf8,
     "evaluation_metrics_json": pl.Utf8,
 }
@@ -569,6 +574,149 @@ class SignalQueueManager:
 # ========================================================================================
 # 2. Multi-Pillar Trade Evaluator
 # ========================================================================================
+
+def compute_chance_corrected_concordance(
+    queue: List[dict],
+    target_direction: str,
+    baseline_pe: float = 0.50
+) -> Tuple[float, float, float]:
+    """
+    Computes Fleiss/Cohen chance-corrected concordance kappa_c = (P_o - P_e) / (1 - P_e).
+    Returns: (kappa_c, P_observed, P_expected)
+    """
+    valid_signals = [s for s in queue if s.get("direction") in ("LONG", "SHORT")]
+    if len(valid_signals) < 2:
+        return 0.0, 0.0, baseline_pe
+    
+    n_total = len(valid_signals)
+    n_long = sum(1 for s in valid_signals if s.get("direction") == "LONG")
+    p_long = n_long / n_total
+    p_short = 1.0 - p_long
+    p_e = max(0.40, min(0.60, p_long**2 + p_short**2))
+    
+    matching = sum(1 for s in valid_signals if s.get("direction") == target_direction)
+    p_o = matching / n_total
+    
+    if p_o <= p_e:
+        kappa_c = 0.0
+    else:
+        kappa_c = (p_o - p_e) / max(1e-6, 1.0 - p_e)
+        
+    return float(round(kappa_c, 4)), float(round(p_o, 4)), float(round(p_e, 4))
+
+
+class CushionKellySizer:
+    """
+    Implements Dynamic Cushion Sizing with strict Cap Dominance:
+    r_t <= min(0.091 * C_t, 0.25 * C_t, $15.00)
+    Stand-down floor C* = $16.48. Clamping to min-lot is strictly forbidden if r_min > Cap.
+    """
+    SYMBOL_SPECS = {
+        "BTC": {"contract": 1.0, "min_vol": 0.01, "max_vol": 5.0, "step": 0.01},
+        "BTCUSD": {"contract": 1.0, "min_vol": 0.01, "max_vol": 5.0, "step": 0.01},
+        "ETH": {"contract": 1.0, "min_vol": 0.01, "max_vol": 20.0, "step": 0.01},
+        "ETHUSD": {"contract": 1.0, "min_vol": 0.01, "max_vol": 20.0, "step": 0.01},
+        "DOGE": {"contract": 1000.0, "min_vol": 0.01, "max_vol": 100.0, "step": 0.01},
+        "DOGEUSD": {"contract": 1000.0, "min_vol": 0.01, "max_vol": 100.0, "step": 0.01},
+        "ADA": {"contract": 100.0, "min_vol": 0.01, "max_vol": 100.0, "step": 0.01},
+        "ADAUSD": {"contract": 100.0, "min_vol": 0.01, "max_vol": 100.0, "step": 0.01},
+        "XRP": {"contract": 100.0, "min_vol": 0.01, "max_vol": 100.0, "step": 0.01},
+        "XRPUSD": {"contract": 100.0, "min_vol": 0.01, "max_vol": 100.0, "step": 0.01},
+        "LTC": {"contract": 1.0, "min_vol": 0.01, "max_vol": 20.0, "step": 0.01},
+        "LTCUSD": {"contract": 1.0, "min_vol": 0.01, "max_vol": 20.0, "step": 0.01},
+        "LINK": {"contract": 1.0, "min_vol": 0.01, "max_vol": 20.0, "step": 0.01},
+        "LINKUSD": {"contract": 1.0, "min_vol": 0.01, "max_vol": 20.0, "step": 0.01},
+    }
+
+    @classmethod
+    def calculate(
+        cls,
+        symbol: str,
+        entry: float,
+        sl: float,
+        confluence_score: float,
+        eff_rr: float,
+        account_cushion: float = 79.37
+    ) -> Dict[str, Any]:
+        distance = abs(entry - sl)
+        if distance <= 1e-8:
+            return {"viable": False, "lots": 0.0, "risk_usd": 0.0, "reason": "ZERO_STOP_DISTANCE"}
+        
+        # Stand-down floor: C* = $16.48 (at universal r_min = $1.50 / 0.091)
+        if account_cushion < 16.48:
+            return {
+                "viable": False,
+                "lots": 0.0,
+                "risk_usd": 0.0,
+                "reason": f"STAND_DOWN_CUSHION_{account_cushion:.2f}_BELOW_16.48"
+            }
+
+        # 1. Platt-scaled win probability from Confluence Score
+        z = 4.0 * (confluence_score / 100.0) - 2.4
+        p_win = 1.0 / (1.0 + math.exp(-z))
+        b_eff = max(eff_rr, 1.0)
+        f_star = (p_win * b_eff - (1.0 - p_win)) / b_eff
+        f_quarter = 0.25 * max(0.0, f_star)
+
+        # 2. Strict Cap Dominance Rule (Proposition 3):
+        # 1% Ruin Limit: xi = 0.091. Contractual Cap: 0.25 * C_t. Absolute max: $15.00
+        cap = min(15.00, account_cushion * 0.25)
+        
+        # Target risk bounded between $10.0 and cap (or cap if cushion < $40)
+        min_risk_bound = min(10.0, cap)
+        target_risk = max(min_risk_bound, min(cap, account_cushion * f_quarter * 2.0))
+
+        # 3. Broker Lot Specs & Discretization
+        sym_clean = symbol.upper().replace("USDT", "").replace("USD", "")
+        spec = cls.SYMBOL_SPECS.get(symbol.upper()) or cls.SYMBOL_SPECS.get(sym_clean, {"contract": 1.0, "min_vol": 0.01, "max_vol": 1.0, "step": 0.01})
+        contract = spec["contract"]
+        min_vol = spec["min_vol"]
+        max_vol = spec["max_vol"]
+        step = spec["step"]
+
+        min_lot_risk = min_vol * contract * distance
+        
+        # Rule of Cap Dominance with Absolute Abstention:
+        # Never round up to min lot if min lot exceeds the risk cap
+        if min_lot_risk > cap:
+            return {
+                "viable": False,
+                "lots": 0.0,
+                "risk_usd": round(min_lot_risk, 2),
+                "cap_usd": round(cap, 2),
+                "reason": f"MIN_LOT_RISK_{min_lot_risk:.2f}_EXCEEDS_CAP_{cap:.2f}"
+            }
+
+        raw_lots = target_risk / max(contract * distance, 1e-8)
+        steps = math.floor(raw_lots / step)
+        lots = max(min_vol, min(max_vol, round(steps * step, 4)))
+        
+        # If stepped lot pushes risk above cap, step down
+        if (lots * contract * distance) > cap and (lots - step) >= min_vol:
+            lots = round(lots - step, 4)
+            
+        actual_risk = round(lots * contract * distance, 2)
+        
+        if actual_risk > cap:
+            return {
+                "viable": False,
+                "lots": 0.0,
+                "risk_usd": actual_risk,
+                "cap_usd": round(cap, 2),
+                "reason": f"ACTUAL_RISK_{actual_risk:.2f}_EXCEEDS_CAP_{cap:.2f}"
+            }
+
+        return {
+            "viable": True,
+            "lots": lots,
+            "risk_usd": actual_risk,
+            "target_risk_usd": round(target_risk, 2),
+            "cap_usd": round(cap, 2),
+            "kelly_fraction": round(f_quarter, 4),
+            "p_win": round(p_win, 4),
+            "reason": "OK"
+        }
+
 class MultiPillarTradeEvaluator:
     @classmethod
     def load_candle_context(cls, symbol: str) -> Dict[str, Any]:
@@ -850,18 +998,18 @@ class MultiPillarTradeEvaluator:
         else:
             w1_score += 7.0
 
-        # Recent signal concordance (requires at least 2 signals to establish genuine multi-signal agreement)
+        # Recent signal concordance with Cohen chance-correction (kappa_c)
+        kappa_c, p_o, p_e = compute_chance_corrected_concordance(recent_window, target_direction)
+        matching_in_queue = sum(1 for s in recent_window if s.get("direction") == target_direction)
         if len(recent_window) >= 2:
-            matching_in_queue = sum(1 for s in recent_window if s.get("direction") == target_direction)
-            concordance_ratio = matching_in_queue / len(recent_window)
-            if concordance_ratio >= 0.75:
+            if kappa_c >= 0.60:
                 w1_score += 8.0
-            elif concordance_ratio >= 0.60:
+            elif kappa_c >= 0.35:
                 w1_score += 5.0
-            elif concordance_ratio >= 0.40:
+            elif kappa_c >= 0.15:
                 w1_score += 3.0
         elif len(recent_window) == 1:
-            # Single isolated signal baseline: no multi-signal concordance bonus awarded
+            # Single isolated signal baseline: baseline points without multi-signal bonus
             w1_score += 3.0
 
         # Burst concordance bonus
@@ -1151,8 +1299,7 @@ class MultiPillarTradeEvaluator:
         cost_multi = (2 * fee_taker + 0.5 * spread_ratio + slippage_est) / max(actual_risk / ref_price, 1e-4)
         eff_rr = round(max(0.0, calc_rr - cost_multi), 2)
 
-        # Z.ai Section 5.8: Quarter-Kelly position sizing fraction
-        # Platt-scaled win probability mapping from RDNL score
+        # Z.ai Section 5.8: Quarter-Kelly position sizing fraction & Effective R:R gate
         z_platt = 4.0 * (confluence_score / 100.0) - 2.4
         p_win = 1.0 / (1.0 + math.exp(-z_platt))
         b_eff = max(eff_rr, 1.0)
@@ -1160,14 +1307,14 @@ class MultiPillarTradeEvaluator:
         kelly_fraction = round(0.25 * max(0.0, f_star), 4)
 
         # -------------------------------------------------------------------------
-        # Pass Condition Checks
+        # Pass Condition Checks (Enforcing Effective R:R >= 2.0)
         # -------------------------------------------------------------------------
         if invalid_risk:
             status = "PASS_INVALID_RISK"
         elif contradiction_veto:
             status = "PASS_CONTRADICTION"
-        elif calc_rr < 2.0:
-            status = "PASS_RR_BELOW_2"
+        elif eff_rr < 2.0:
+            status = "PASS_EFF_RR_BELOW_2"
         elif confluence_score < 75.0:
             status = "PASS_SUB_CONFLUENCE"
         else:
@@ -1197,6 +1344,9 @@ class MultiPillarTradeEvaluator:
             "active_couplings": active_couplings,
             "entropy": round(entropy, 4),
             "weighted_entropy": round(weighted_entropy, 4),
+            "kappa_c": kappa_c,
+            "effective_rr": eff_rr,
+            "kelly_fraction": kelly_fraction,
             "matching_signals": matching_in_queue,
             "total_signals_in_queue": len(queue),
             "val": val,
@@ -1239,6 +1389,11 @@ class MultiPillarTradeEvaluator:
             "created_at_us": now_us,
             "created_at_utc": now_utc.isoformat(),
             "created_at_ist": now_ist.strftime("%Y-%m-%d %H:%M:%S.%f IST"),
+            "effective_risk_reward_ratio": float(eff_rr),
+            "calculated_lots": 0.0,
+            "target_risk_usd": 0.0,
+            "kelly_fraction": float(kelly_fraction),
+            "concordance_kappa": float(kappa_c),
             "queue_snapshot_json": queue_snapshot_json,
             "evaluation_metrics_json": evaluation_metrics_json,
         }
@@ -1387,50 +1542,77 @@ class TrailingState:
     poc: float
     atr_15m: float
     direction: str = "LONG"
+    high_water_mark: float = 0.0
+    low_water_mark: float = float("inf")
+    chandelier_mult: float = 2.5
     in_profit: bool = False
 
 
 class TrailingStopManager:
-    """Implements three-tier trailing stop migration with strict LONG and SHORT direction branching."""
+    """
+    Implements Hybrid Chandelier Volatility Anchor + Monotonic Ratchet.
+    Hard anchor: HH_22 - 2.5 * ATR_14 (Long) / LL_22 + 2.5 * ATR_14 (Short).
+    Monotonicity invariant: Long stops NEVER decrease; Short stops NEVER increase.
+    """
     def update(self, state: TrailingState, price: float) -> TrailingState:
         is_long = str(state.direction).upper() in ("LONG", "BUY", "1")
+        prev_sl = state.sl_current
+        atr = max(state.atr_15m, 1e-6)
 
         if is_long:
-            # LONG TRADE
-            # Tier 1: Breakeven lock if price crosses +0.5 ATR above entry
-            if price >= state.entry + 0.5 * state.atr_15m:
-                breakeven_sl = state.entry + 0.1 * state.atr_15m
-                state.sl_current = max(state.sl_current, breakeven_sl)
+            state.high_water_mark = max(state.high_water_mark, price, state.entry)
+            candidates = [state.sl_current]
+
+            # Tier 1: Breakeven Lock at +0.5 ATR
+            if state.high_water_mark >= state.entry + 0.5 * atr:
+                candidates.append(state.entry + 0.1 * atr)
                 state.in_profit = True
 
-            # Tier 2: Trail +1 sigma VWAP once price reaches +1 sigma
-            if price >= state.vwap_sigma1:
-                state.sl_current = max(state.sl_current, state.vwap_sigma1)
+            # Tier 2: Chandelier Volatility Ratchet (HWM - 2.5 * ATR) once in profit >= 1.0 ATR
+            if state.high_water_mark >= state.entry + 1.0 * atr:
+                candidates.append(state.high_water_mark - state.chandelier_mult * atr)
                 state.in_profit = True
 
-            # Tier 3: Aggressive trailing once price breaks beyond +2 sigma
-            if price >= state.vwap_sigma2:
-                aggressive_sl = max(state.vwap_sigma1, state.vwap_sigma2 - 0.5 * state.atr_15m)
-                state.sl_current = max(state.sl_current, aggressive_sl)
+            # Tier 3: VWAP +1 sigma Lock
+            if state.high_water_mark >= state.vwap_sigma1:
+                candidates.append(state.vwap_sigma1)
                 state.in_profit = True
+
+            # Tier 4: Aggressive VWAP +2 sigma Lock
+            if state.high_water_mark >= state.vwap_sigma2:
+                candidates.append(max(state.vwap_sigma1, state.vwap_sigma2 - 0.5 * atr))
+                state.in_profit = True
+
+            # MONOTONIC RATCHET INVARIANT: SL must NEVER decrease for LONG
+            new_sl = max(candidates)
+            state.sl_current = max(prev_sl, round(new_sl, 5))
         else:
-            # SHORT TRADE
-            # Tier 1: Breakeven lock if price crosses -0.5 ATR below entry
-            if price <= state.entry - 0.5 * state.atr_15m:
-                breakeven_sl = state.entry - 0.1 * state.atr_15m
-                state.sl_current = min(state.sl_current, breakeven_sl)
+            state.low_water_mark = min(state.low_water_mark, price, state.entry)
+            candidates = [state.sl_current]
+
+            # Tier 1: Breakeven Lock at -0.5 ATR
+            if state.low_water_mark <= state.entry - 0.5 * atr:
+                candidates.append(state.entry - 0.1 * atr)
                 state.in_profit = True
 
-            # Tier 2: Trail -1 sigma VWAP once price drops below -1 sigma
-            if price <= state.vwap_sigma1:
-                state.sl_current = min(state.sl_current, state.vwap_sigma1)
+            # Tier 2: Chandelier Volatility Ratchet (LWM + 2.5 * ATR) once in profit >= 1.0 ATR
+            if state.low_water_mark <= state.entry - 1.0 * atr:
+                candidates.append(state.low_water_mark + state.chandelier_mult * atr)
                 state.in_profit = True
 
-            # Tier 3: Aggressive trailing once price drops below -2 sigma
-            if price <= state.vwap_sigma2:
-                aggressive_sl = min(state.vwap_sigma1, state.vwap_sigma2 + 0.5 * state.atr_15m)
-                state.sl_current = min(state.sl_current, aggressive_sl)
+            # Tier 3: VWAP -1 sigma Lock
+            if state.low_water_mark <= state.vwap_sigma1:
+                candidates.append(state.vwap_sigma1)
                 state.in_profit = True
+
+            # Tier 4: Aggressive VWAP -2 sigma Lock
+            if state.low_water_mark <= state.vwap_sigma2:
+                candidates.append(min(state.vwap_sigma1, state.vwap_sigma2 + 0.5 * atr))
+                state.in_profit = True
+
+            # MONOTONIC RATCHET INVARIANT: SL must NEVER increase for SHORT
+            new_sl = min(candidates)
+            state.sl_current = min(prev_sl, round(new_sl, 5))
 
         return state
 

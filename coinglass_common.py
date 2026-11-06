@@ -38,6 +38,11 @@ class FileMutex:
 
     def __enter__(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        # Reap stale lock if older than 120.0s and holding PID is dead
+        try:
+            _reap_stale_lock(self.path, ttl=120.0)
+        except Exception:
+            pass
         self.handle = self.path.open('a+b')
         try:
             if self.path.stat().st_size == 0:

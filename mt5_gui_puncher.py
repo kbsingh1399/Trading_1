@@ -212,14 +212,109 @@ def modify_position_sltp(ticket: int, sl: str, tp: str, max_retries: int = 3) ->
         time.sleep(1.0)
 
     logger.critical(f"🚨 EMERGENCY: Failed to attach Stop Loss to Ticket {ticket} after {max_retries} attempts!")
+    # Immediate Flatten Kill-Switch
+    emergency_market_close(ticket, symbol=str(ticket))
     return False
 
+
+
+def check_spread_gate(symbol: str, entry: float = 0.0, sl: float = 0.0, max_spread_bps: float = 8.0) -> Tuple[bool, float, str]:
+    """
+    Verifies broker spread is <= 8.0 bps and <= 15% of total stop distance before order dispatch.
+    """
+    if not mt5.initialize():
+        return False, 0.0, "MT5_INIT_FAILED"
+    tick = mt5.symbol_info_tick(symbol)
+    mt5.shutdown()
+    if not tick or tick.ask <= 0 or tick.bid <= 0:
+        return False, 0.0, "TICK_UNAVAILABLE"
+    
+    spread = tick.ask - tick.bid
+    spread_bps = (spread / tick.ask) * 10_000.0
+    stop_dist = abs(entry - sl) if (entry > 0 and sl > 0) else 0.0
+    
+    if spread_bps > max_spread_bps:
+        return False, spread_bps, f"SPREAD_TOO_WIDE_{spread_bps:.1f}bps_GT_{max_spread_bps}bps"
+    if stop_dist > 0 and (spread / stop_dist) > 0.15:
+        return False, spread_bps, f"SPREAD_BURDENS_STOP_LOSS_{(spread/stop_dist)*100:.1f}PCT"
+        
+    return True, spread_bps, "OK"
+
+
+def emergency_market_close(ticket: int, symbol: str) -> bool:
+    """
+    EMERGENCY CIRCUIT BREAKER: Immediately liquidates unprotected position on broker server
+    to prevent naked execution disaster if SL attachment fails.
+    """
+    logger.critical(f"🚨 EXECUTING EMERGENCY MARKET FLATTEN ON TICKET {ticket} ({symbol})!")
+    if not mt5.initialize():
+        logger.error("Emergency close failed: Could not initialize MT5.")
+        return False
+        
+    positions = mt5.positions_get(ticket=ticket)
+    if not positions:
+        logger.info(f"Emergency close: Position {ticket} is already closed.")
+        mt5.shutdown()
+        return True
+        
+    p = positions[0]
+    close_type = mt5.ORDER_TYPE_SELL if p.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
+    tick = mt5.symbol_info_tick(symbol)
+    price = tick.bid if p.type == mt5.ORDER_TYPE_BUY else tick.ask
+    
+    req = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": symbol,
+        "volume": p.volume,
+        "type": close_type,
+        "position": ticket,
+        "price": price,
+        "deviation": 1000,
+        "type_filling": mt5.ORDER_FILLING_IOC,
+    }
+    
+    res = mt5.order_send(req)
+    mt5.shutdown()
+    if res and res.retcode == mt5.TRADE_RETCODE_DONE:
+        logger.info(f"✅ EMERGENCY FLATTEN SUCCESSFUL for Ticket {ticket}.")
+        return True
+    else:
+        logger.critical(f"❌ API DEAL CLOSE REJECTED: {getattr(res, 'comment', 'Unknown error')}. Attempting GUI close fallback...")
+        try:
+            pyautogui.press('esc')
+            time.sleep(0.2)
+            # Find MT5 main window and click Trade tab first row
+            mt5_hwnd = find_mt5_window()
+            if mt5_hwnd:
+                trade_lv = find_trade_listview(mt5_hwnd)
+                if trade_lv:
+                    win32gui.SetForegroundWindow(mt5_hwnd)
+                    time.sleep(0.2)
+                    rect = win32gui.GetWindowRect(trade_lv)
+                    # Right click on first row and press 'c' (Close Position)
+                    pyautogui.rightClick(rect[0] + 50, rect[1] + 35)
+                    time.sleep(0.3)
+                    pyautogui.press('c')
+                    time.sleep(0.5)
+                    pyautogui.press('enter')
+                    logger.info("GUI emergency close keystroke sequence dispatched.")
+                    return True
+        except Exception as e:
+            logger.critical(f"GUI emergency close fallback exception: {e}")
+            
+    return False
 
 def punch_market_order(symbol: str, volume: str, sl: str, tp: str, order_type: str = "BUY") -> bool:
     """
     Punches a market order via MT5 GUI Order Dialog (<F9>) and automatically
     attaches hard SL and TP via the Modify dialog.
     """
+    # Pre-Flight Spread Gate Check
+    passed, spread_bps, reason = check_spread_gate(symbol, float(volume if volume else 0.0), float(sl if sl else 0.0))
+    if not passed:
+        logger.error(f"Pre-flight spread gate rejected {symbol} order: {reason}")
+        return False
+
     if not attach_desktop():
         logger.error("Could not attach to default interactive desktop.")
         return False

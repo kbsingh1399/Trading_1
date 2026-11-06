@@ -1,3 +1,4 @@
+import math
 """
 ================================================================================
 Institutional Multi-Agent Council & Consensus Orchestrator
@@ -63,6 +64,8 @@ class CouncilDecision:
     ballots: List[Dict[str, Any]]
     ts_us: int
     confluence_score: float = 0.0
+    dissent_jsd: float = 0.0
+    dissent_escalated: bool = False
 
 
 def _safe_float(val: Any, default: float = 0.0) -> float:
@@ -176,6 +179,18 @@ class RiskGovernor(BaseCouncilAgent):
 
         # Retrieve live account cushion from evidence or default to $79.37
         account_cushion = _safe_float(evidence.get("account_cushion"), 79.37)
+        
+        # Stand-down floor: C* = $16.48
+        if account_cushion < 16.48:
+            return Ballot(
+                agent=self.name,
+                vote=Vote.NAY,
+                confidence=1.0,
+                veto=True,
+                rationale=f"VETO: Account cushion {account_cushion:.2f} USD is below minimum stand-down floor 16.48 USD.",
+                grounding_results=grounding
+            )
+
         max_allowed_risk = min(15.00, account_cushion * 0.25)
         grounding.extend([round(account_cushion, 2), round(max_allowed_risk, 2)])
 
@@ -189,8 +204,9 @@ class RiskGovernor(BaseCouncilAgent):
                 grounding_results=grounding
             )
             
-        # Target risk is bounded between $10.0 and max_allowed_risk
-        target_risk = max(10.0, min(max_allowed_risk, 12.50))
+        # Target risk is bounded between $10.0 and max_allowed_risk (strictly enforcing Cap Dominance)
+        min_risk_bound = min(10.0, max_allowed_risk)
+        target_risk = max(min_risk_bound, min(max_allowed_risk, 12.50))
         grounding.append(round(target_risk, 2))
 
         return Ballot(
@@ -255,8 +271,12 @@ class OrderExecutionAgent(BaseCouncilAgent):
     name = "OrderExecution"
     weight = 1.0
 
-    # Unlisted or unsupported symbols on broker MT5
-    UNSUPPORTED_MT5_SYMBOLS = {"SOL", "SOLUSD", "AVAX", "AVAXUSD", "NEAR", "NEARUSD", "SUI", "SUIUSD", "PEPE", "PEPEUSD"}
+    # Authorized FundedNext MT5 crypto CFD positive whitelist
+    SUPPORTED_MT5_SYMBOLS = {
+        "BTC", "BTCUSD", "ETH", "ETHUSD", "DOGE", "DOGEUSD",
+        "ADA", "ADAUSD", "XRP", "XRPUSD", "LTC", "LTCUSD",
+        "LINK", "LINKUSD"
+    }
 
     def vote(self, candidate: Dict[str, Any], evidence: Dict[str, Any]) -> Ballot:
         symbol = str(candidate.get("symbol", "")).upper()
@@ -266,14 +286,14 @@ class OrderExecutionAgent(BaseCouncilAgent):
         
         grounding = [spread_pct, margin_required, account_free_margin]
         
-        # Check 1: Symbol broker availability
-        if symbol in self.UNSUPPORTED_MT5_SYMBOLS:
+        # Check 1: Positive Symbol Whitelist Verification
+        if symbol not in self.SUPPORTED_MT5_SYMBOLS:
             return Ballot(
                 agent=self.name,
                 vote=Vote.NAY,
                 confidence=1.0,
                 veto=True,
-                rationale=f"VETO: Asset {symbol} is unlisted on FundedNext MT5 broker terminal.",
+                rationale=f"VETO: Asset {symbol} is not on the authorized FundedNext MT5 crypto CFD whitelist.",
                 grounding_results=grounding
             )
 
@@ -318,6 +338,42 @@ class Arbiter(BaseCouncilAgent):
         )
 
 
+
+def compute_council_jsd(ballots: List[Ballot], agents: List[BaseCouncilAgent]) -> float:
+    """
+    Computes Generalized Jensen-Shannon Divergence across agent discrete probability distributions:
+    P_i = [p_yea, p_nay, p_abstain] derived from vote and confidence.
+    0 <= JSD <= 1.0 (base-2).
+    """
+    if not ballots:
+        return 0.0
+    dists = []
+    weights = []
+    for b, agent in zip(ballots, agents):
+        c = max(0.01, min(0.99, b.confidence))
+        if b.vote == Vote.YEA:
+            p = [c, (1.0 - c) / 2.0, (1.0 - c) / 2.0]
+        elif b.vote == Vote.NAY:
+            p = [(1.0 - c) / 2.0, c, (1.0 - c) / 2.0]
+        else:  # ABSTAIN
+            p = [(1.0 - c) / 2.0, (1.0 - c) / 2.0, c]
+        dists.append(p)
+        weights.append(getattr(agent, "weight", 1.0))
+        
+    w_sum = sum(weights)
+    w_norm = [w / w_sum for w in weights]
+    
+    # Mixture distribution M
+    m_dist = [sum(w * d[k] for w, d in zip(w_norm, dists)) for k in range(3)]
+    
+    def entropy(dist):
+        return -sum(p * math.log2(p) for p in dist if p > 0)
+    
+    h_mixture = entropy(m_dist)
+    h_agents = sum(w * entropy(d) for w, d in zip(w_norm, dists))
+    jsd = max(0.0, min(1.0, h_mixture - h_agents))
+    return float(round(jsd, 4))
+
 class AgentCouncil:
     QUORUM = 4 # At least 4 of 5 agents must cast non-abstaining votes
 
@@ -358,8 +414,10 @@ class AgentCouncil:
         ungrounded = {n for n in text_nums if n not in grounded_nums and abs(n) not in allowed_nums}
         if ungrounded:
             logger.warning(
-                f"[{b.agent}] Ballot rationale references ungrounded numbers: {ungrounded}. Grounding check flag."
+                f"[{b.agent}] Ballot rationale references ungrounded numbers: {ungrounded}. Forcing ABSTAIN."
             )
+            b.vote = Vote.ABSTAIN
+            b.confidence = 0.0
 
     def deliberate(self, candidate: Dict[str, Any], evidence: Optional[Dict[str, Any]] = None) -> CouncilDecision:
         evidence = evidence or {}
@@ -389,8 +447,16 @@ class AgentCouncil:
         quorum = sum(1 for b in ballots if b.vote != Vote.ABSTAIN)
         veto_fired = any(b.veto for b in ballots)
         
-        # Z.ai Publication Invariant: net > 0 AND quorum >= QUORUM AND no veto
-        published = bool(net_vote > 0 and quorum >= self.QUORUM and not veto_fired)
+        jsd = compute_council_jsd(ballots, self.agents)
+        dissent_escalated = bool(jsd > 0.38)
+        
+        # If severe dissent, require Supermajority (Quorum 5/5 non-abstaining YEA with net_vote >= 2.0)
+        if dissent_escalated:
+            published = bool(net_vote >= 2.0 and quorum == len(self.agents) and not veto_fired)
+            if not published:
+                logger.warning(f"🚨 Dissent Escalation: JSD {jsd:.4f} > 0.38 threshold. Quorum requires unanimous supermajority. Publication suppressed.")
+        else:
+            published = bool(net_vote > 0 and quorum >= self.QUORUM and not veto_fired)
         
         serializable_ballots = [
             {
@@ -414,7 +480,9 @@ class AgentCouncil:
             veto_fired=veto_fired,
             ballots=serializable_ballots,
             ts_us=int(time.time() * 1_000_000),
-            confluence_score=float(candidate.get("confluence_score", 0.0))
+            confluence_score=float(candidate.get("confluence_score", 0.0)),
+            dissent_jsd=float(jsd),
+            dissent_escalated=bool(dissent_escalated)
         )
 
         self._record_decision(decision)
