@@ -18,6 +18,12 @@ import win32con
 import win32api
 import pyautogui
 import MetaTrader5 as mt5
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).resolve().parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+from coinglass_common import FileMutex, LOCK_DIR
 
 pyautogui.FAILSAFE = False
 
@@ -308,7 +314,12 @@ def punch_market_order(symbol: str, volume: str, sl: str, tp: str, order_type: s
     """
     Punches a market order via MT5 GUI Order Dialog (<F9>) and automatically
     attaches hard SL and TP via the Modify dialog.
+    Guarded by order_execution_inflight.lock to prevent Cloudflare WARP IP rotation during execution.
     """
+    with FileMutex(str(LOCK_DIR / "order_execution_inflight.lock"), timeout=5.0) as inflight_guard:
+        return _punch_market_order_impl(symbol, volume, sl, tp, order_type)
+
+def _punch_market_order_impl(symbol: str, volume: str, sl: str, tp: str, order_type: str = "BUY") -> bool:
     # Pre-Flight Spread Gate Check
     passed, spread_bps, reason = check_spread_gate(symbol, float(volume if volume else 0.0), float(sl if sl else 0.0))
     if not passed:

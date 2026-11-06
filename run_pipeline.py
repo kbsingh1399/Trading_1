@@ -176,6 +176,9 @@ def run_all_sequentially():
         ("1_coinglass_footprint_scraper.py", "👣 Footprint Scraper & Signal Evaluator"),
         ("2_coinglass_whales.py", "🐋 Whales Scraper"),
         ("3_coinglass_liquidation_levels.py", "💧 Liquidation Levels Scraper"),
+        ("6_coinglass_oi_funding.py", "📈 Pillar 6: Open Interest & Predicted Funding"),
+        ("7_coinglass_sentiment_divergence.py", "📊 Pillar 7: Top Trader Sentiment Divergence"),
+        ("8_coinglass_heatmap_density.py", "🔥 Pillar 8: Liquidation Heatmap Intensity"),
         ("5_trade_evaluator.py", "🎯 Multi-Pillar Trade Evaluator"),
     ]
     for script, desc in components:
@@ -231,6 +234,9 @@ def scheduler_daemon():
             # At each 15m candle close (:00, :15, :30, :45), immediately execute trade evaluator across all new signals
             if cur_min in (0, 15, 30, 45):
                 logger.info(f"🎯 Triggering 15m Candle Close Trade Evaluation pass at minute :{cur_min:02d}...")
+                run_scraper("6_coinglass_oi_funding.py", "📈 Pillar 6: Open Interest & Predicted Funding", flag="--once", timeout_secs=30.0)
+                run_scraper("7_coinglass_sentiment_divergence.py", "📊 Pillar 7: Top Trader Sentiment Divergence", flag="--once", timeout_secs=30.0)
+                run_scraper("8_coinglass_heatmap_density.py", "🔥 Pillar 8: Liquidation Heatmap Intensity", flag="--once", timeout_secs=30.0)
                 run_scraper("5_trade_evaluator.py", "🎯 Multi-Pillar Trade Evaluator (15m Close)", flag="--all")
 
                 # Hourly Database Maintenance at top of hour (:00)
