@@ -121,6 +121,9 @@ def cleanup_scraper_orphaned_tabs(baseline_tab_ids: set, grace_s: float = TAB_GR
 
 
 def run_scraper(script_name: str, desc: str, flag: str = "--once", timeout_secs: float = 300.0) -> bool:
+    # 31 symbols on footprint scraper require extended 420s window to avoid premature truncation
+    if "1_coinglass_footprint" in script_name and timeout_secs <= 300.0:
+        timeout_secs = 420.0
     script_path = ROOT_DIR / script_name
     if not script_path.exists():
         logger.error(f"Script not found: {script_path}")
@@ -209,6 +212,10 @@ def scheduler_daemon():
         logger.info("🛡️ ChromeWatchdog liveness probe initialized.")
     except Exception as e:
         logger.warning("Could not start ChromeWatchdog: %s", e)
+    from coinglass_common import clean_all_abandoned_locks
+    reaped = clean_all_abandoned_locks(ttl=120.0)
+    if reaped > 0:
+        logger.info(f"🧹 Initialized clean slate: purged {reaped} abandoned locks.")
     logger.info("Pipeline scheduler daemon running. Waiting for next trigger slot...")
     last_dispatched_minute = -1
 

@@ -26,6 +26,9 @@ import tempfile
 import time
 from contextlib import contextmanager
 from pathlib import Path
+import threading
+
+_THREAD_WRITER_LOCKS = threading.local()
 
 
 class FileMutex:
@@ -118,10 +121,33 @@ def writer_lock(path, timeout=5.0):
     except ValueError:
         lock_path = Path(str(p) + ".writer.lock")
 
+    lock_str = str(lock_path.resolve())
+    held = getattr(_THREAD_WRITER_LOCKS, "held", None)
+    if held is None:
+        held = {}
+        _THREAD_WRITER_LOCKS.held = held
+
+    # Re-entrant fast path: current thread already holds the underlying OS lock
+    if lock_str in held:
+        held[lock_str] += 1
+        try:
+            yield
+        finally:
+            held[lock_str] -= 1
+            if held[lock_str] <= 0:
+                del held[lock_str]
+        return
+
     with FileMutex(str(lock_path), timeout=timeout) as lock:
         if not lock.acquired:
             raise TimeoutError(f'Writer busy: {path}')
-        yield
+        held[lock_str] = 1
+        try:
+            yield
+        finally:
+            held[lock_str] -= 1
+            if held[lock_str] <= 0:
+                del held[lock_str]
 
 
 def _publish(path, write):
@@ -760,29 +786,55 @@ class ChromeWatchdog:
             time.sleep(self.probe_interval_s)
 
 
-def _reap_stale_lock(lock_path: Path, ttl: float = 300.0) -> None:
-    """Z.ai Domain 1 Upgrade: Remove stale PID lock if its holder has been dead >= ttl."""
+def _reap_stale_lock(lock_path: Path, ttl: float = 120.0) -> None:
+    """Remove stale lock if older than ttl and not held by any living process."""
     if not lock_path.exists():
         return
     try:
         mtime = lock_path.stat().st_mtime
         if time.time() - mtime < ttl:
             return
-        raw = lock_path.read_text().strip()
-        holder_pid = int(raw) if raw.isdigit() else -1
-        if holder_pid > 0:
-            import ctypes
-            # Check if process is alive on Windows
-            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-            h = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, holder_pid)
-            if h == 0:
-                # Process is dead, reap stale lock
+        if os.name == "nt":
+            import msvcrt
+            try:
+                with open(lock_path, "r+b") as f:
+                    msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                    msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                # Success proves no live process holds this lock
                 lock_path.unlink(missing_ok=True)
-                logger.info("Reaped stale lock file: %s (PID %s dead)", lock_path.name, holder_pid)
-            else:
-                ctypes.windll.kernel32.CloseHandle(h)
+                logger.debug("Reaped abandoned lock: %s (age > %ss)", lock_path.name, ttl)
+            except (OSError, PermissionError):
+                pass
+        else:
+            import fcntl
+            try:
+                with open(lock_path, "r+b") as f:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                lock_path.unlink(missing_ok=True)
+            except (OSError, PermissionError):
+                pass
     except Exception:
         pass
+
+
+def clean_all_abandoned_locks(ttl: float = 120.0) -> int:
+    """Sweeps Database/.locks/ and unlinks any abandoned locks older than ttl."""
+    locks_dir = Path(__file__).resolve().parent / "Database" / ".locks"
+    if not locks_dir.exists():
+        return 0
+    reaped = 0
+    for p in locks_dir.glob("*.lock"):
+        if not p.is_file():
+            continue
+        try:
+            if time.time() - p.stat().st_mtime >= ttl:
+                _reap_stale_lock(p, ttl=ttl)
+                if not p.exists():
+                    reaped += 1
+        except Exception:
+            pass
+    return reaped
 
 
 # Canonical 30-minute half-life constant (Qwen F-05, DeepSeek AUD-05)

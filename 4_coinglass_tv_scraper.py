@@ -192,6 +192,10 @@ async def setup_cdp_session(ws) -> bool:
     inserted = await cdp_eval(ws, ensure_study, msg_id=50, await_promise=True)
     if not inserted or not inserted.get("ok"):
         logger.warning(f"Could not ensure liquidation study: {inserted}")
+        try:
+            rotate_warp_ip("TVScraper-Setup", reason="CHALLENGE")
+        except Exception:
+            pass
         return False
 
     logger.info("TradingView chart collection and liquidation study ready.")
@@ -320,9 +324,7 @@ def process_and_persist(base_sym: str, tv_sym: str, raw_rows: List[List], last_p
     df.loc[df["is_spike"] & (df["long_ratio"] >= 0.70), "reversal_bias"] = "BULLISH_REVERSAL"
     df.loc[df["is_spike"] & (df["long_ratio"] <= 0.30), "reversal_bias"] = "BEARISH_REVERSAL"
 
-    from coinglass_common import writer_lock
-    with writer_lock(out_file):
-        atomic_parquet(df, out_file)
+    atomic_parquet(df, out_file)
 
     closed_df = df[df["bar_closed"]]
     if closed_df.empty:
@@ -394,9 +396,21 @@ async def run_sweep(symbols: Optional[Dict[str, str]] = None) -> bool:
                 reversal_signals = {}
 
                 t0 = time.time()
+                consecutive_empty = 0
                 for base_sym, tv_sym in target_map.items():
                     try:
                         raw_rows, last_price = await fetch_symbol_liquidations(ws, tv_sym)
+                        if not raw_rows:
+                            consecutive_empty += 1
+                            if consecutive_empty >= 4:
+                                logger.warning(f"[Cloudflare WARP] Detected {consecutive_empty} consecutive empty scrapes. Auto-rotating IP...")
+                                try:
+                                    rotate_warp_ip("TVScraper-EmptyLoop", reason="CONSECUTIVE_EMPTY_SCRAPES")
+                                except Exception:
+                                    pass
+                                consecutive_empty = 0
+                        else:
+                            consecutive_empty = 0
                         summary = process_and_persist(base_sym, tv_sym, raw_rows, last_price)
                         if summary:
                             summary_records.append(summary)

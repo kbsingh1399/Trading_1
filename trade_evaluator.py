@@ -918,6 +918,78 @@ class MultiPillarTradeEvaluator:
             return {}
 
     @classmethod
+    def load_oi_funding_context(cls, symbol: str) -> dict:
+        """Pillar 6: Loads Open Interest and Predicted Funding Rate telemetry."""
+        p = DB_DIR / "Market_Data" / "oi_and_funding.parquet"
+        if not p.exists():
+            return {}
+        try:
+            df = pd.read_parquet(p)
+            match = df[df["symbol"].str.upper() == symbol.upper()]
+            if match.empty:
+                return {}
+            row = match.iloc[0].to_dict()
+            return {
+                "open_interest_usd": safe_float(row.get("open_interest_usd"), 0.0),
+                "funding_rate": safe_float(row.get("funding_rate"), 0.0),
+                "funding_rate_pct": safe_float(row.get("funding_rate_pct"), 0.0),
+                "squeeze_bias": str(row.get("squeeze_bias") or "NEUTRAL"),
+            }
+        except Exception as e:
+            logger.debug(f"[{symbol}] Failed reading OI/Funding data: {e}")
+            return {}
+
+    @classmethod
+    def load_sentiment_context(cls, symbol: str) -> dict:
+        """Pillar 7: Loads Top Trader vs Global Retail Sentiment Divergence."""
+        p = DB_DIR / "Market_Data" / "sentiment_divergence.parquet"
+        if not p.exists():
+            return {}
+        try:
+            df = pd.read_parquet(p)
+            match = df[df["symbol"].str.upper() == symbol.upper()]
+            if match.empty:
+                return {}
+            row = match.iloc[0].to_dict()
+            return {
+                "top_long_pct": safe_float(row.get("top_long_pct"), 50.0),
+                "top_short_pct": safe_float(row.get("top_short_pct"), 50.0),
+                "global_long_pct": safe_float(row.get("global_long_pct"), 50.0),
+                "global_short_pct": safe_float(row.get("global_short_pct"), 50.0),
+                "divergence_spread": safe_float(row.get("divergence_spread"), 0.0),
+                "sentiment_bias": str(row.get("sentiment_bias") or "NEUTRAL"),
+            }
+        except Exception as e:
+            logger.debug(f"[{symbol}] Failed reading Sentiment data: {e}")
+            return {}
+
+    @classmethod
+    def load_heatmap_density_context(cls, symbol: str, current_price: float) -> dict:
+        """Pillar 8: Loads Multi-Timeframe Liquidation Heatmap Intensity."""
+        p = DB_DIR / "Market_Data" / "heatmap_density.parquet"
+        if not p.exists():
+            return {}
+        try:
+            df = pd.read_parquet(p)
+            match = df[df["symbol"].str.upper() == symbol.upper()]
+            if match.empty:
+                return {}
+            row = match.iloc[0].to_dict()
+            return {
+                "upper_magnet_price": safe_float(row.get("upper_magnet_price")),
+                "upper_magnet_dist_pct": safe_float(row.get("upper_magnet_dist_pct")),
+                "lower_magnet_price": safe_float(row.get("lower_magnet_price")),
+                "lower_magnet_dist_pct": safe_float(row.get("lower_magnet_dist_pct")),
+                "asymmetry_ratio": safe_float(row.get("asymmetry_ratio"), 1.0),
+                "magnet_bias": str(row.get("magnet_bias") or "BALANCED"),
+                "is_magnet_pool": bool(row.get("is_magnet_pool", False)),
+            }
+        except Exception as e:
+            logger.debug(f"[{symbol}] Failed reading Heatmap Density data: {e}")
+            return {}
+
+
+    @classmethod
     def evaluate_symbol(
         cls,
         symbol: str,
@@ -978,6 +1050,9 @@ class MultiPillarTradeEvaluator:
         whale_ctx = cls.load_whale_context(symbol, ref_price)
         magnet_ctx = cls.load_magnet_context(symbol, ref_price)
         tv_liq_ctx = cls.load_tv_liquidation_context(symbol)
+        oi_ctx = cls.load_oi_funding_context(symbol)
+        sentiment_ctx = cls.load_sentiment_context(symbol)
+        heatmap_ctx = cls.load_heatmap_density_context(symbol, ref_price)
 
         # -------------------------------------------------------------------------
         # Pillar 1: Footprint Signal Quality & Queue Alignment (Max 30)
@@ -1162,14 +1237,41 @@ class MultiPillarTradeEvaluator:
 
         w5_score = min(w5_score, 15.0)
 
+        # -------------------------------------------------------------------------
+        # Pillars 6, 7, 8: Microstructure Confluence Expansion Modifiers
+        # -------------------------------------------------------------------------
+        expansion_boost = 0.0
+
+        # Pillar 6: Open Interest & Predicted Funding Rate Squeeze Acceleration
+        squeeze_bias = oi_ctx.get("squeeze_bias", "NEUTRAL")
+        if target_direction == "LONG" and squeeze_bias == "BULLISH_SHORT_SQUEEZE":
+            expansion_boost += 8.0
+        elif target_direction == "SHORT" and squeeze_bias == "BEARISH_LONG_SQUEEZE":
+            expansion_boost += 8.0
+
+        # Pillar 7: Top Trader Sentiment Divergence (Smart vs Retail Money)
+        sentiment_bias = sentiment_ctx.get("sentiment_bias", "NEUTRAL")
+        div_spread = sentiment_ctx.get("divergence_spread", 0.0)
+        if target_direction == "LONG" and (sentiment_bias == "BULLISH_SMART_MONEY" or div_spread >= 5.0):
+            expansion_boost += 6.0
+        elif target_direction == "SHORT" and (sentiment_bias == "BEARISH_SMART_MONEY" or div_spread <= -5.0):
+            expansion_boost += 6.0
+
+        # Pillar 8: Multi-Timeframe Heatmap Magnet Intensity
+        mag_bias = heatmap_ctx.get("magnet_bias", "BALANCED")
+        if target_direction == "LONG" and mag_bias == "BULLISH_UPPER_MAGNET":
+            expansion_boost += 6.0
+        elif target_direction == "SHORT" and mag_bias == "BEARISH_LOWER_MAGNET":
+            expansion_boost += 6.0
+
         # Total Confluence Score via Non-Linear Regime-Dependent Confluence Scoring (RDNL-CS)
-        raw_confluence = round(w1_score + w2_score + w3_score + w4_score + w5_score, 2)
+        raw_confluence = round(w1_score + w2_score + w3_score + w4_score + w5_score + expansion_boost, 2)
         regime = classify_market_regime(candle_ctx, auction_ctx, whale_ctx, tv_liq_ctx)
         rdnl_score, m_interact, active_couplings = compute_rdnl_confluence(
             {"W1": w1_score, "W2": w2_score, "W3": w3_score, "W4": w4_score, "W5": w5_score},
             regime
         )
-        confluence_score = rdnl_score
+        confluence_score = min(100.0, round(rdnl_score + expansion_boost, 2))
 
         # -------------------------------------------------------------------------
         # Dynamic Risk Management & Levels Formulation
