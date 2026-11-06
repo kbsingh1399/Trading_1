@@ -363,6 +363,17 @@ class AgentCouncil:
 
     def deliberate(self, candidate: Dict[str, Any], evidence: Optional[Dict[str, Any]] = None) -> CouncilDecision:
         evidence = evidence or {}
+        if "account_cushion" not in evidence or "free_margin" not in evidence:
+            try:
+                import MetaTrader5 as mt5
+                if mt5.initialize():
+                    acc = mt5.account_info()
+                    if acc:
+                        evidence.setdefault("free_margin", float(acc.margin_free))
+                        evidence.setdefault("account_cushion", max(0.0, float(acc.equity - 4600.00)))
+                    mt5.shutdown()
+            except Exception:
+                pass
         ballots: List[Ballot] = []
         
         for agent in self.agents:

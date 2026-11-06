@@ -108,7 +108,7 @@ def cleanup_scraper_orphaned_tabs(baseline_tab_ids: set, grace_s: float = TAB_GR
                 url = t.get("url", "").lower()
                 # If tab was created during this scraper run AND is a CoinGlass route OR blank/failed tab
                 if tid and tid not in baseline_tab_ids and t.get("type") == "page":
-                    is_cg = any(k in url for k in ["coinglass.com/large-orderbook", "coinglass.com/liquidation-levels", "coinglass.com/tv/", "coinglass.com/footprint", "bot="])
+                    is_cg = any(k in url for k in ["coinglass.com/large-orderbook", "coinglass.com/liquidation-levels", "coinglass.com/tv/", "coinglass.com/footprint", "bot=", "cloudflare", "turnstile", "challenges.cloudflare.com"])
                     is_blank = url in ("about:blank", "", "chrome-error://chromewebdata/")
                     if is_cg or is_blank:
                         try:

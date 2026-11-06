@@ -70,9 +70,11 @@ def find_child_by_id(parent, target_id, cls_name=None):
     return res
 
 
-def modify_position_sltp(ticket: int, sl: str, tp: str) -> bool:
+def modify_position_sltp(ticket: int, sl: str, tp: str, max_retries: int = 3) -> bool:
     """
     Automates MT5 Position Modification dialog to attach SL and TP.
+    Uses dynamic SysListView32 row targeting with keyboard shortcut 'm' (Modify or Delete),
+    retrying up to max_retries with verification against mt5.positions_get().
     """
     attach_desktop()
     mt5_hwnd = find_mt5_window()
@@ -80,104 +82,137 @@ def modify_position_sltp(ticket: int, sl: str, tp: str) -> bool:
         logger.error("MT5 window not found for SL/TP modification.")
         return False
 
-    ctypes.windll.user32.ShowWindow(mt5_hwnd, 9)
-    ctypes.windll.user32.SetForegroundWindow(mt5_hwnd)
-    time.sleep(0.4)
+    for attempt in range(1, max_retries + 1):
+        logger.info(f"Attempt {attempt}/{max_retries} to attach SL={sl}, TP={tp} on ticket {ticket}...")
+        ctypes.windll.user32.ShowWindow(mt5_hwnd, 9)
+        ctypes.windll.user32.SetForegroundWindow(mt5_hwnd)
+        time.sleep(0.4)
 
-    # Double-click row 0 of Trade tab (SL column area at x=865, y=855)
-    logger.info("Opening Modify Position dialog via Trade tab double-click...")
-    pyautogui.doubleClick(865, 855)
-    time.sleep(1.0)
+        # Dynamically locate Trade SysListView32
+        trade_lv = None
+        def c_cb(h, _):
+            nonlocal trade_lv
+            if win32gui.GetClassName(h) == "SysListView32":
+                r = win32gui.GetWindowRect(h)
+                cnt = win32gui.SendMessage(h, 4100, 0, 0)
+                if r[1] > 500 and cnt >= 1:
+                    trade_lv = h
+            return True
+        win32gui.EnumChildWindows(mt5_hwnd, c_cb, None)
 
-    dlg = None
-    def find_dlg(h, _):
-        nonlocal dlg
-        if win32gui.GetClassName(h) == '#32770' and 'Position:' in win32gui.GetWindowText(h):
-            dlg = h
-        return True
-    win32gui.EnumWindows(find_dlg, None)
+        if trade_lv:
+            lv_rect = win32gui.GetWindowRect(trade_lv)
+            row0_x = lv_rect[0] + 250
+            row0_y = lv_rect[1] + 32
+            logger.info(f"Targeting Trade ListView row 0 at ({row0_x}, {row0_y})...")
+            pyautogui.click(row0_x, row0_y, button='right')
+            time.sleep(0.4)
+            pyautogui.press('m')
+            time.sleep(0.8)
+        else:
+            logger.info("Opening Modify Position dialog via fallback Trade tab double-click...")
+            pyautogui.doubleClick(865, 855)
+            time.sleep(1.0)
 
-    if not dlg:
-        logger.error("Modify dialog did not open.")
-        return False
+        dlg = None
+        def find_dlg(h, _):
+            nonlocal dlg
+            cls = win32gui.GetClassName(h)
+            t = win32gui.GetWindowText(h)
+            if cls == '#32770' and ('Position:' in t or 'Modify' in t or 'Order' in t):
+                dlg = h
+            return True
+        win32gui.EnumWindows(find_dlg, None)
 
-    ctypes.windll.user32.SetForegroundWindow(dlg)
-    time.sleep(0.3)
+        if not dlg:
+            logger.warning(f"Modify dialog did not open on attempt {attempt}.")
+            time.sleep(1.0)
+            continue
 
-    # Find controls
-    sl_edit = None
-    tp_edit = None
-    mod_btn = None
-    submit_btn = None
+        ctypes.windll.user32.SetForegroundWindow(dlg)
+        time.sleep(0.3)
 
-    def cc(h, _):
-        nonlocal sl_edit, tp_edit, mod_btn, submit_btn
-        cid = win32api.GetWindowLong(h, win32con.GWL_ID)
-        vis = win32gui.IsWindowVisible(h)
-        if cid == 11120:
-            mod_btn = h
-        elif cid == 10334 and vis:
-            sl_edit = h
-        elif cid == 10336 and vis:
-            tp_edit = h
-        elif cid == 10351:
-            submit_btn = h
-        return True
-    win32gui.EnumChildWindows(dlg, cc, None)
+        # Find controls
+        sl_edit = None
+        tp_edit = None
+        mod_btn = None
+        submit_btn = None
 
-    if not sl_edit or not submit_btn:
-        if mod_btn:
-            logger.info("Clicking Modify Position mode button (ID 11120)...")
-            win32gui.SendMessage(mod_btn, win32con.BM_CLICK, 0, 0)
-            time.sleep(0.5)
-            win32gui.EnumChildWindows(dlg, cc, None)
+        def cc(h, _):
+            nonlocal sl_edit, tp_edit, mod_btn, submit_btn
+            cid = win32api.GetWindowLong(h, win32con.GWL_ID)
+            vis = win32gui.IsWindowVisible(h)
+            if cid == 11120:
+                mod_btn = h
+            elif cid == 10334 and vis:
+                sl_edit = h
+            elif cid == 10336 and vis:
+                tp_edit = h
+            elif cid == 10351:
+                submit_btn = h
+            return True
+        win32gui.EnumChildWindows(dlg, cc, None)
 
-    if not sl_edit or not tp_edit or not submit_btn:
-        logger.error("Could not find all modify edit controls.")
-        return False
+        if not sl_edit or not submit_btn:
+            if mod_btn:
+                logger.info("Clicking Modify Position mode button (ID 11120)...")
+                win32gui.SendMessage(mod_btn, win32con.BM_CLICK, 0, 0)
+                time.sleep(0.5)
+                win32gui.EnumChildWindows(dlg, cc, None)
 
-    sl_rect = win32gui.GetWindowRect(sl_edit)
-    tp_rect = win32gui.GetWindowRect(tp_edit)
-    sub_rect = win32gui.GetWindowRect(submit_btn)
+        if not sl_edit or not tp_edit or not submit_btn:
+            logger.warning("Could not find all modify edit controls on dialog. Closing dialog to retry...")
+            win32gui.PostMessage(dlg, win32con.WM_CLOSE, 0, 0)
+            time.sleep(1.0)
+            continue
 
-    sl_x = (sl_rect[0] + sl_rect[2]) // 2
-    sl_y = (sl_rect[1] + sl_rect[3]) // 2
-    tp_x = (tp_rect[0] + tp_rect[2]) // 2
-    tp_y = (tp_rect[1] + tp_rect[3]) // 2
-    sub_x = (sub_rect[0] + sub_rect[2]) // 2
-    sub_y = (sub_rect[1] + sub_rect[3]) // 2
+        sl_rect = win32gui.GetWindowRect(sl_edit)
+        tp_rect = win32gui.GetWindowRect(tp_edit)
+        sub_rect = win32gui.GetWindowRect(submit_btn)
 
-    logger.info(f"Setting SL={sl} and TP={tp}...")
-    pyautogui.click(sl_x, sl_y)
-    time.sleep(0.1)
-    pyautogui.hotkey('ctrl', 'a')
-    time.sleep(0.1)
-    pyautogui.write(str(sl), interval=0.04)
-    time.sleep(0.2)
+        sl_x = (sl_rect[0] + sl_rect[2]) // 2
+        sl_y = (sl_rect[1] + sl_rect[3]) // 2
+        tp_x = (tp_rect[0] + tp_rect[2]) // 2
+        tp_y = (tp_rect[1] + tp_rect[3]) // 2
+        sub_x = (sub_rect[0] + sub_rect[2]) // 2
+        sub_y = (sub_rect[1] + sub_rect[3]) // 2
 
-    pyautogui.click(tp_x, tp_y)
-    time.sleep(0.1)
-    pyautogui.hotkey('ctrl', 'a')
-    time.sleep(0.1)
-    pyautogui.write(str(tp), interval=0.04)
-    time.sleep(0.4)
+        logger.info(f"Setting SL={sl} and TP={tp}...")
+        pyautogui.click(sl_x, sl_y)
+        time.sleep(0.1)
+        pyautogui.hotkey('ctrl', 'a')
+        time.sleep(0.1)
+        pyautogui.write(str(sl), interval=0.04)
+        time.sleep(0.2)
 
-    logger.info("Clicking Submit Modify button...")
-    pyautogui.click(sub_x, sub_y)
-    time.sleep(1.2)
-    pyautogui.press('enter')
-    time.sleep(0.5)
+        pyautogui.click(tp_x, tp_y)
+        time.sleep(0.1)
+        pyautogui.hotkey('ctrl', 'a')
+        time.sleep(0.1)
+        pyautogui.write(str(tp), interval=0.04)
+        time.sleep(0.4)
 
-    # Verification
-    if mt5.initialize():
-        pos = mt5.positions_get(ticket=ticket)
-        if pos:
-            p = pos[0]
-            logger.info(f"Verified Position {p.ticket}: SL={p.sl}, TP={p.tp}, PnL=${p.profit:.2f}")
+        logger.info("Clicking Submit Modify button...")
+        pyautogui.click(sub_x, sub_y)
+        time.sleep(1.2)
+        pyautogui.press('enter')
+        time.sleep(0.5)
+
+        # Verification via MT5 API
+        if mt5.initialize():
+            pos = mt5.positions_get(ticket=ticket)
+            if pos:
+                p = pos[0]
+                logger.info(f"Verification: Ticket {p.ticket} | SL={p.sl} | TP={p.tp} | PnL=${p.profit:.2f}")
+                mt5.shutdown()
+                if p.sl > 0:
+                    logger.info("✅ Stop Loss successfully verified on broker server.")
+                    return True
             mt5.shutdown()
-            return p.sl > 0
-        mt5.shutdown()
-    return True
+        time.sleep(1.0)
+
+    logger.critical(f"🚨 EMERGENCY: Failed to attach Stop Loss to Ticket {ticket} after {max_retries} attempts!")
+    return False
 
 
 def punch_market_order(symbol: str, volume: str, sl: str, tp: str, order_type: str = "BUY") -> bool:

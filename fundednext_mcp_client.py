@@ -132,25 +132,63 @@ class FundedNextMCPClient:
         return self.call_tool("get_account_overview", {"account_id": acc_id})
 
     def get_risk_cushion(self) -> Dict[str, float]:
-        """Extract exact real-time drawdown cushion and loss limits."""
-        overview = self.get_account_overview()
-        objectives = overview.get("objectives", {})
-        threshold = overview.get("threshold", {})
-        stats = overview.get("stats", {})
+        """Extract exact real-time drawdown cushion and loss limits.
+        Fails closed with live MetaTrader 5 fallback if MCP server is offline or returns empty.
+        """
+        try:
+            overview = self.get_account_overview()
+            threshold = overview.get("threshold", {})
+            stats = overview.get("stats", {})
 
-        daily_loss_rem = float(threshold.get("daily_loss_threshold", 98.66))
-        max_loss_rem = float(threshold.get("max_loss_threshold", 98.66))
-        equity = float(stats.get("equity", 4698.66))
-        balance = float(stats.get("balance", 4698.66))
-        profit_target = float(stats.get("profit_target", 400.0))
+            daily_loss_rem = float(threshold.get("daily_loss_threshold", 0.0))
+            max_loss_rem = float(threshold.get("max_loss_threshold", 0.0))
+            equity = float(stats.get("equity", 0.0))
+            balance = float(stats.get("balance", 0.0))
+            profit_target = float(stats.get("profit_target", 400.0))
 
+            if daily_loss_rem > 0 and max_loss_rem > 0 and equity > 0:
+                return {
+                    "balance": balance,
+                    "equity": equity,
+                    "daily_loss_remaining": daily_loss_rem,
+                    "max_loss_remaining": max_loss_rem,
+                    "profit_target": profit_target,
+                    "effective_risk_buffer": min(daily_loss_rem, max_loss_rem),
+                }
+        except Exception as e:
+            logger.warning(f"FundedNext MCP cushion fetch failed ({e}). Falling back to live MT5 terminal check...")
+
+        # Live fail-safe fallback directly from broker MetaTrader 5 terminal
+        try:
+            import MetaTrader5 as mt5
+            if mt5.initialize():
+                acc = mt5.account_info()
+                if acc:
+                    balance = float(acc.balance)
+                    equity = float(acc.equity)
+                    # FundedNext Stellar Lite $5K breach boundary is strictly at $4,600.00
+                    cushion = max(0.0, round(equity - 4600.00, 2))
+                    mt5.shutdown()
+                    return {
+                        "balance": balance,
+                        "equity": equity,
+                        "daily_loss_remaining": cushion,
+                        "max_loss_remaining": cushion,
+                        "profit_target": 400.0,
+                        "effective_risk_buffer": cushion,
+                    }
+                mt5.shutdown()
+        except Exception as e:
+            logger.error(f"MT5 fallback failed during cushion audit: {e}")
+
+        # Complete fail-closed boundary
         return {
-            "balance": balance,
-            "equity": equity,
-            "daily_loss_remaining": daily_loss_rem,
-            "max_loss_remaining": max_loss_rem,
-            "profit_target": profit_target,
-            "effective_risk_buffer": min(daily_loss_rem, max_loss_rem),
+            "balance": 0.0,
+            "equity": 0.0,
+            "daily_loss_remaining": 0.0,
+            "max_loss_remaining": 0.0,
+            "profit_target": 400.0,
+            "effective_risk_buffer": 0.0,
         }
 
     def get_recent_trades(self, page: int = 1) -> list:

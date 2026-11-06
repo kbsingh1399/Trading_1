@@ -834,15 +834,18 @@ class MultiPillarTradeEvaluator:
         else:
             w1_score += 7.0
 
-        # Recent signal concordance
-        matching_in_queue = sum(1 for s in recent_window if s.get("direction") == target_direction)
-        total_recent = max(len(recent_window), 1)
-        concordance_ratio = matching_in_queue / total_recent
-        if concordance_ratio >= 0.75:
-            w1_score += 8.0
-        elif concordance_ratio >= 0.60:
-            w1_score += 5.0
-        elif concordance_ratio >= 0.40:
+        # Recent signal concordance (requires at least 2 signals to establish genuine multi-signal agreement)
+        if len(recent_window) >= 2:
+            matching_in_queue = sum(1 for s in recent_window if s.get("direction") == target_direction)
+            concordance_ratio = matching_in_queue / len(recent_window)
+            if concordance_ratio >= 0.75:
+                w1_score += 8.0
+            elif concordance_ratio >= 0.60:
+                w1_score += 5.0
+            elif concordance_ratio >= 0.40:
+                w1_score += 3.0
+        elif len(recent_window) == 1:
+            # Single isolated signal baseline: no multi-signal concordance bonus awarded
             w1_score += 3.0
 
         # Burst concordance bonus
