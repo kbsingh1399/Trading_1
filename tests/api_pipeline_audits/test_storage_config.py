@@ -39,8 +39,9 @@ def test_lock_inode_never_unlinked_on_contention(tmp_path):
     with cc.FileMutex(p, timeout=0) as first:
         assert first.acquired
         inode = p.stat().st_ino
-        with cc.FileMutex(p, timeout=0.01) as second:
-            assert not second.acquired
+        with pytest.raises((cc.WriterLockTimeout, TimeoutError)):
+            with cc.FileMutex(p, timeout=0.01) as second:
+                pass
         assert p.stat().st_ino == inode
     assert p.exists()
     with cc.FileMutex(p, timeout=0) as third:

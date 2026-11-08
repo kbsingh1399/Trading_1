@@ -316,8 +316,12 @@ def punch_market_order(symbol: str, volume: str, sl: str, tp: str, order_type: s
     attaches hard SL and TP via the Modify dialog.
     Guarded by order_execution_inflight.lock to prevent Cloudflare WARP IP rotation during execution.
     """
-    with FileMutex(str(LOCK_DIR / "order_execution_inflight.lock"), timeout=5.0) as inflight_guard:
-        return _punch_market_order_impl(symbol, volume, sl, tp, order_type)
+    try:
+        with FileMutex(str(LOCK_DIR / "order_execution_inflight.lock"), timeout=5.0) as inflight_guard:
+            return _punch_market_order_impl(symbol, volume, sl, tp, order_type)
+    except (TimeoutError, RuntimeError) as e:
+        logger.error(f"Cannot execute market order on {symbol}: lock acquisition failed ({e})")
+        return False
 
 def _punch_market_order_impl(symbol: str, volume: str, sl: str, tp: str, order_type: str = "BUY") -> bool:
     # Pre-Flight Spread Gate Check

@@ -34,6 +34,13 @@ from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 _THREAD_WRITER_LOCKS = threading.local()
 
 
+class WriterLockTimeout(TimeoutError):
+    """Raised when FileMutex cannot be acquired within timeout.
+    Enforces fail-closed mutual exclusion (Finding H7 / Condition Precedent CP1).
+    """
+    pass
+
+
 class FileMutex:
     """Lock a persistent inode; never expire or unlink another writer's lock."""
     def __init__(self, path, timeout=2.0):
@@ -71,7 +78,7 @@ class FileMutex:
                     if remaining <= 0:
                         self.handle.close()
                         self.handle = None
-                        return self
+                        raise WriterLockTimeout(f"FileMutex {self.path!r} timed out after {self.timeout:.2f}s (busy)")
                     time.sleep(min(0.02, remaining))
         except BaseException:
             if self.handle is not None:
@@ -615,12 +622,13 @@ def rotate_warp_ip(context: str = "Collector", reason: str = "NORMAL", force: bo
     if reason not in valid_reasons:
         logger.info("[%s] WARP rotation skipped: non-reactive reason %s", context, reason)
         return get_current_ip()
-    with FileMutex(str(LOCK_DIR / "order_execution_inflight.lock"), timeout=0.0) as order_guard:
-        if not order_guard.acquired:
-            raise RuntimeError("WARP rotation blocked: Delta order execution in flight")
+    try:
+        with FileMutex(str(LOCK_DIR / "order_execution_inflight.lock"), timeout=0.0):
+            pass
+    except (WriterLockTimeout, TimeoutError):
+        raise RuntimeError("WARP rotation blocked: Delta order execution in flight")
+    try:
         with FileMutex(str(LOCK_DIR / "warp_execution.lock"), timeout=1.0) as mutex:
-            if not mutex.acquired:
-                raise RuntimeError("WARP rotation already in progress")
             # Re-read cooldown under the cross-process execution mutex.
             now = time.time()
             elapsed = now - _get_last_rotation_time()
@@ -657,6 +665,8 @@ def rotate_warp_ip(context: str = "Collector", reason: str = "NORMAL", force: bo
                 except Exception as restore_error:
                     logger.critical("[%s] WARP connectivity restore failed: %s", context, restore_error)
                 raise
+    except (WriterLockTimeout, TimeoutError):
+        raise RuntimeError("WARP rotation already in progress")
 
 
 
