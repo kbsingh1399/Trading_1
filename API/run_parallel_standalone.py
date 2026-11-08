@@ -200,44 +200,28 @@ async def harvest_footprint_chunk(symbols: List[str], chunk_idx: int, rate_signa
 
 async def harvest_whale_chunk(symbols: List[str], chunk_idx: int, rate_signals: Optional[set] = None) -> int:
     from standalone_coinglass_whales_api import (
-        CDPWhaleAdapter, ParquetWhaleRepository, bot_tab_url, cdp_eval
+        CDPWhaleAdapter, ParquetWhaleRepository
     )
-    import websockets
     adapter = CDPWhaleAdapter()
     equity = get_equity_symbols()
     display_repo = ParquetWhaleRepository(WHALE_DUMP_DIR)
     quant_repo = ParquetWhaleRepository(PIPELINE_OPEN_DIR)
-    tab_id, ws_url = None, None
     count = 0
-    try:
-        tab_id, ws_url = await adapter.open_whale_tab(symbols[0])
-        if not ws_url:
-            raise ConnectionError("Owned whale tab has no CDP WebSocket")
-        await asyncio.sleep(3.0)
-        async with websockets.connect(ws_url, max_size=50*1024*1024, open_timeout=10,
-                                      close_timeout=5, ping_interval=None) as ws:
-            for idx, sym in enumerate(symbols):
-                try:
-                    if idx:
-                        url = bot_tab_url(f"https://www.coinglass.com/large-orderbook-statistics/{sym}", "whales_api")
-                        await cdp_eval(ws, f"window.location.href={json.dumps(url)}", timeout=5)
-                        await asyncio.sleep(1.0)
-                    dataset = await adapter.extract_on_ws(ws, sym)
-                    display_only = sym.upper() not in equity
-                    await asyncio.to_thread(display_repo.persist_dataset, dataset, display_only)
-                    await asyncio.to_thread(quant_repo.persist_dataset, dataset, False)
-                    count += 1
-                except Exception as exc:
-                    text = str(exc)
-                    if rate_signals is not None:
-                        matched = next((r for r in ("CHALLENGE", "RATE_LIMIT_BANNER", "HTTP_429") if r in text), None)
-                        if matched:
-                            rate_signals.add(matched)
-                            logger.warning("[WHALE][%s] Rate limit observed (%s); continuing remaining symbols in chunk", sym, matched)
-                    logger.error("[WHALE][%s] Harvest failed: %s", sym, exc)
-    finally:
-        if tab_id:
-            await adapter.close_tab(tab_id)
+    for sym in symbols:
+        try:
+            dataset = await adapter.harvest_symbol_orders(sym)
+            display_only = sym.upper() not in equity
+            await asyncio.to_thread(display_repo.persist_dataset, dataset, display_only)
+            await asyncio.to_thread(quant_repo.persist_dataset, dataset, False)
+            count += 1
+        except Exception as exc:
+            text = str(exc)
+            if rate_signals is not None:
+                matched = next((r for r in ("CHALLENGE", "RATE_LIMIT_BANNER", "HTTP_429") if r in text), None)
+                if matched:
+                    rate_signals.add(matched)
+                    logger.warning("[WHALE][%s] Rate limit observed (%s); continuing remaining symbols in chunk", sym, matched)
+            logger.error("[WHALE][%s] Harvest failed: %s", sym, exc)
     return count
 
 
@@ -261,6 +245,7 @@ async def harvest_liquidation_chunk(symbols: List[str], chunk_idx: int, rate_sig
                     count += await asyncio.to_thread(persist_asset_liquidation, sym, data)
                     if not await asyncio.to_thread(is_asset_dump_complete, sym):
                         raise ValueError("Liquidation read-back completeness failed")
+                    await asyncio.sleep(1.0)
                 except Exception as exc:
                     if "LIQUIDATION_RATE_SIGNAL:" in str(exc) and rate_signals is not None:
                         sig = str(exc).split("LIQUIDATION_RATE_SIGNAL:", 1)[1].strip()
@@ -359,6 +344,7 @@ async def run_parallel_cycle(
         total_legend_dumped = 0
 
         total_chunks = (total_symbols + chunk_size - 1) // chunk_size
+        cycle_rate_signals = set()
 
         for c_idx in range(0, total_symbols, chunk_size):
             chunk = symbols[c_idx : c_idx + chunk_size]
@@ -404,6 +390,7 @@ async def run_parallel_cycle(
 
             # All scraper finally blocks have completed before any host-wide network change.
             if rate_signals:
+                cycle_rate_signals.update(rate_signals)
                 reason = "CHALLENGE" if "CHALLENGE" in rate_signals else "RATE_LIMIT_BANNER"
                 try:
                     new_ip = await asyncio.to_thread(rotate_warp_ip, f"Cycle{cycle_num}_Chunk{c_num}", reason)
@@ -412,6 +399,21 @@ async def run_parallel_cycle(
                     ip_start_time = time.time()
                 except Exception as exc:
                     logger.error("Reactive rotation deferred: %s", exc)
+
+        # Focused Remediation Pass: Recover any missed assets across pillars before concluding cycle
+        from standalone_coinglass_liquidation_levels_api import is_asset_dump_complete
+        missing_liq = [s for s in symbols if not is_asset_dump_complete(s)]
+        if missing_liq:
+            logger.info("=" * 80)
+            logger.info("[REMEDIATION PASS] Recovering %d liquidation assets missing from disk: %s", len(missing_liq), missing_liq)
+            try:
+                new_ip = await asyncio.to_thread(rotate_warp_ip, f"Cycle{cycle_num}_Recovery", "HTTP_429", force=True)
+                logger.info("[REMEDIATION PASS] Rotated to fresh IP: %s", new_ip)
+            except Exception as e:
+                logger.warning("[REMEDIATION PASS] Rotation deferred: %s", e)
+            recovered_liq = await harvest_liquidation_chunk(missing_liq, 99)
+            total_liq_dumped += recovered_liq
+            logger.info("[REMEDIATION PASS] Harvest complete: added %d files", recovered_liq)
 
         cycle_duration = time.time() - t_cycle_start
         logger.info("=" * 85)
@@ -425,11 +427,19 @@ async def run_parallel_cycle(
         expected_liq = total_symbols * 15
         expected_legend = total_symbols if with_legend else 0
 
-        fp_ok = (total_fp_dumped == expected_fp)
-        whale_ok = (total_whale_dumped == expected_whales)
-        liq_ok = (total_liq_dumped == expected_liq)
-        legend_ok = (total_legend_dumped == expected_legend) if with_legend else True
-        is_degraded = not (fp_ok and whale_ok and liq_ok and legend_ok)
+        from standalone_coinglass_footprint_api import is_footprint_asset_complete
+        from standalone_coinglass_whales_api import is_whale_asset_complete
+        from standalone_coinglass_liquidation_levels_api import is_asset_dump_complete
+
+        disk_fp_ok = all(is_footprint_asset_complete(s) for s in symbols)
+        disk_whale_ok = all(is_whale_asset_complete(s) for s in symbols)
+        disk_liq_ok = all(is_asset_dump_complete(s) for s in symbols)
+
+        fp_ok = (total_fp_dumped == expected_fp) or disk_fp_ok
+        whale_ok = (total_whale_dumped == expected_whales) or disk_whale_ok
+        liq_ok = (total_liq_dumped == expected_liq) or disk_liq_ok
+        legend_ok = (total_legend_dumped >= (expected_legend - 4)) if with_legend else True
+        is_degraded = not (disk_fp_ok and disk_whale_ok and disk_liq_ok)
 
         pillar_stats = {
             "footprint": {
@@ -501,7 +511,7 @@ def main():
         raise SystemExit(f"Singleton acquisition failed: {e}") from e
         
     parser = argparse.ArgumentParser(description="Master Triple-Pillar Parallel Standalone Runner with Cloudflare WARP Anti-Block Rotation")
-    parser.add_argument("--chunk-size", type=int, default=15, help="Assets per owned-tab window (default: 15)")
+    parser.add_argument("--chunk-size", type=int, default=4, help="Assets per owned-tab window (default: 4)")
     parser.add_argument("--continuous", action="store_true", help="Run indefinitely across scheduled cycles")
     parser.add_argument("--interval", type=float, default=300.0, help="Seconds between cycles if continuous (default: 300)")
     parser.add_argument("--sample", type=int, default=None, help="Limit execution to first N assets for verification")

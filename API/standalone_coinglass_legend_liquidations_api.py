@@ -350,7 +350,7 @@ class LegendLiquidationHarvester:
             (() => {{
                 const inst = window.__chartInstance;
                 if (!inst || !inst.indicatorDatas) return null;
-                if (inst.state && inst.state.symbol && !inst.state.symbol.toUpperCase().includes('{asset.upper()}')) return null;
+                if (inst.state && inst.state.symbol && !inst.state.symbol.toUpperCase().includes('{asset.upper()}') && !inst.state.symbol.toUpperCase().includes('{target_token}')) return null;
                 const keys = Object.keys(inst.indicatorDatas);
                 const liqKey = keys.find(k => k.includes('aggregated_liq_kline') && (k.toUpperCase().includes('{asset.upper()}') || k.toUpperCase().includes('{target_token}')));
                 if (!liqKey) return null;

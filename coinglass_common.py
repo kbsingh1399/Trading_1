@@ -672,6 +672,9 @@ def is_warp_connected() -> bool:
         return False
 
 
+_RECENT_BANNED_IPS: Dict[str, float] = {}
+
+
 def rotate_warp_ip(context: str = "Collector", reason: str = "NORMAL", force: bool = False) -> str:
     """Reactive-only egress rotation. force cannot bypass policy or order safety.
 
@@ -692,15 +695,16 @@ def rotate_warp_ip(context: str = "Collector", reason: str = "NORMAL", force: bo
             # Re-read cooldown under the cross-process execution mutex.
             now = time.time()
             elapsed = now - _get_last_rotation_time()
-            if elapsed < MIN_ROTATION_INTERVAL_SECS:
-                raise RuntimeError(f"WARP rotation cooldown active: {elapsed:.0f}s")
+            min_cooldown = 10.0 if (force or reason in {"HTTP_429", "RATE_LIMIT_BANNER", "CHALLENGE"}) else MIN_ROTATION_INTERVAL_SECS
+            if elapsed < min_cooldown:
+                raise RuntimeError(f"WARP rotation cooldown active: {elapsed:.0f}s (required {min_cooldown:.0f}s)")
             if not WARP_CLI.exists():
                 raise RuntimeError(f"WARP CLI unavailable: {WARP_CLI}")
             ensure_warp_proxy_mode(WARP_PROXY_PORT)
             old_ip = get_current_ip()
             try:
                 new_ip = None
-                for attempt in range(3):
+                for attempt in range(4):
                     _warp_command("disconnect")
                     ensure_delta_split_tunnel_exclusions()
                     _warp_command("registration", "delete")

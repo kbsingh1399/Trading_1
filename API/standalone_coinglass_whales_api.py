@@ -87,7 +87,7 @@ WHALE_EXTRACTION_JS = r"""(async (targetSymbol) => {
         }
         await new Promise(r => setTimeout(r, 200));
     }
-    if (performance.getEntriesByType('resource').some(e => e.responseStatus === 429)) {
+    if (performance.getEntriesByType('resource').some(e => (e.name.includes('/api/') || e.name.includes('large-order') || e.name.includes('coinglass')) && e.responseStatus === 429)) {
         return {success:false, error:'rate_limited', rateReason:'HTTP_429', orders:[]};
     }
     while (!document.body) await new Promise(r => setTimeout(r, 100));
@@ -100,10 +100,16 @@ WHALE_EXTRACTION_JS = r"""(async (targetSymbol) => {
         return {success:false, error:'challenge', rateReason:'CHALLENGE', orders:[]};
     }
     const zeroText = s => /^(?:[≥>]=?\s*)?\$0(?:\.0+)?$/.test((s || '').trim());
-    const rail = document.querySelector('.lo-rail') || document.body;
-    const controls = Array.from(rail.querySelectorAll('[class*="ui_select"], [class*="select"], [role="combobox"]'));
-    const control = controls.filter(el => /Size threshold|≥\s*\$/.test(el.innerText || ''))
-        .sort((a,b) => (a.innerText||'').length - (b.innerText||'').length)[0];
+    let control = null;
+    const ctrlDeadline = Date.now() + 8000;
+    while (Date.now() < ctrlDeadline) {
+        const rail = document.querySelector('.lo-rail') || document.body;
+        const controls = Array.from(rail.querySelectorAll('[class*="ui_select"], [class*="select"], [role="combobox"]'));
+        control = controls.filter(el => /Size threshold|≥\s*\$/.test(el.innerText || ''))
+            .sort((a,b) => (a.innerText||'').length - (b.innerText||'').length)[0];
+        if (control) break;
+        await new Promise(r => setTimeout(r, 150));
+    }
     if (!control) return {success:false, error:'threshold_control_missing', orders:[]};
     if (!zeroText((control.innerText || '').replace(/Size threshold/gi, '').trim())) {
         for (const type of ['pointerdown','mousedown','pointerup','mouseup','click']) {
@@ -522,6 +528,10 @@ class CDPWhaleAdapter:
         raise TimeoutError(f"CDP evaluation timed out after {timeout:.1f}s")
 
     async def extract_on_ws(self, ws, symbol: str) -> WhaleDataset:
+        try:
+            await cdp_eval(ws, "performance.clearResourceTimings()", timeout=3)
+        except Exception:
+            pass
         expression = f"({WHALE_EXTRACTION_JS})({json.dumps(symbol.upper())})"
         val = await cdp_eval(ws, expression, timeout=30.0)
         if not val or not val.get("success") or not val.get("complete"):

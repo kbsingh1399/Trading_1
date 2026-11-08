@@ -255,7 +255,7 @@ GET_ALL_AGGREGATED_SYMBOLS_JS = """(() => {
 })()"""
 
 EXTRACT_MULTI_BAR_FOOTPRINT_JS = """(async (targetSymbol) => {
-    if (performance.getEntriesByType('resource').some(e => e.responseStatus === 429)) {
+    if (performance.getEntriesByType('resource').some(e => (e.name.includes('/api/') || e.name.includes('footprint') || e.name.includes('coinglass')) && e.responseStatus === 429)) {
         return {error:'rate_limited', rateReason:'HTTP_429'};
     }
     if (document.querySelector('iframe[src*="challenges.cloudflare.com"], #turnstile-wrapper')) {
@@ -590,6 +590,10 @@ class CDPBrowserAdapter:
                 raise ConnectionError(f"Chrome CDP not accessible at {self.cdp_url}")
             if not await self.hook_terminal(ws_url):
                 raise RuntimeError("Failed to attach window.__cg_term")
+            try:
+                await self.execute_js(ws_url, "performance.clearResourceTimings()", timeout=3)
+            except Exception:
+                pass
             js_call = f"({EXTRACT_MULTI_BAR_FOOTPRINT_JS})({json.dumps(symbol.upper())})"
             data = await self.execute_js(ws_url, js_call, timeout=70.0)
             if not data or data.get("error") or data.get("symbol") != symbol.upper():

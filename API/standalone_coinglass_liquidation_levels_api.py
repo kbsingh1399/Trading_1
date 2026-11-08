@@ -106,7 +106,7 @@ EXTRACTION_JS = r"""(async () => {
         { label: '30D · 15m', key: '30D' }
     ];
 
-    if (performance.getEntriesByType('resource').some(e => e.responseStatus === 429)) {
+    if (performance.getEntriesByType('resource').some(e => (e.name.includes('/api/') || e.name.includes('liquidationLevels') || e.name.includes('coinglass')) && e.responseStatus === 429)) {
         return {allData:{}, isRateLimited:true, rateReason:'HTTP_429'};
     }
     const allData = {};
@@ -130,25 +130,45 @@ EXTRACTION_JS = r"""(async () => {
 
     for (const h of horizons) {
         // 1. Switch horizon tab
-        const horizonRegex = new RegExp('^' + h.key + '([\\s\u00b7\\.-].*)?$', 'i');
-
-        const tfBtn = Array.from(document.querySelectorAll('button, [role="tab"], li, div, span, *')).find(el => (el.children.length === 0 || el.classList.contains('tab-inner-label') || el.hasAttribute('role')) && (horizonRegex.test((el.innerText || '').trim()) || (el.innerText || '').trim() === h.label));
-        if (!tfBtn) return {allData:{}, isRateLimited:false, error:'horizon control missing: '+h.key};
-        tfBtn.click();
-        const horizonDeadline = Date.now() + 8000;
-        while (Date.now() < horizonDeadline) {
-            if (isSelected(tfBtn) && !/Loading(?:…|\.\.\.)/.test(document.body.innerText) && document.querySelectorAll('tbody tr').length) break;
-            await new Promise(r => setTimeout(r, 150));
+        const horizonRegex = new RegExp('^' + h.key + '\\b', 'i');
+        const getHorizonTab = () => Array.from(document.querySelectorAll('li[data-role="Tab"]')).find(t => horizonRegex.test((t.innerText || '').trim()));
+        let hTab = getHorizonTab();
+        if (!hTab) {
+            hTab = Array.from(document.querySelectorAll('button, li, div.tab-inner-label')).find(t => horizonRegex.test((t.innerText || '').trim()) && !t.closest('.ll-eyebrow') && !t.classList.contains('ll-eyebrow'));
         }
-        if (!isSelected(tfBtn)) {
+        if (!hTab) return {allData:{}, isRateLimited:false, error:'horizon control missing: '+h.key};
+
+        const isTabSelected = (el) => {
+            if (!el) return false;
+            const node = el.closest('li[data-role="Tab"]') || el;
+            if (node.classList.contains('c-eUsVIq') || !!node.querySelector('.c-eICIHf')) return true;
+            if (node.hasAttribute('aria-selected')) return node.getAttribute('aria-selected') === 'true';
+            return /\\b(active|selected|is-active)\\b/i.test(node.className || '');
+        };
+
+        if (!isTabSelected(hTab)) {
+            hTab.click();
+            const horizonDeadline = Date.now() + 6000;
+            while (Date.now() < horizonDeadline) {
+                const cur = getHorizonTab() || hTab;
+                if (isTabSelected(cur) && !/Loading(?:…|\.\.\.)/.test(document.body.innerText)) break;
+                await new Promise(r => setTimeout(r, 150));
+            }
+        }
+        const curTab = getHorizonTab() || hTab;
+        if (!isTabSelected(curTab)) {
             return {allData:{}, isRateLimited:false, error:'horizon selection unverified: '+h.key};
         }
 
         // 2. Ensure ±4% tab is selected for Key liquidation levels
-        const pctBtn = Array.from(document.querySelectorAll('.tab-inner-label, button, div, span, *')).find(el => (el.children.length === 0 || el.classList.contains('tab-inner-label')) && el.innerText && el.innerText.trim() === '±4%');
+        const getPctTab = () => Array.from(document.querySelectorAll('li[data-role="Tab"], .tab-inner-label, button')).find(el => /^[±+\\-]?4%$/.test((el.innerText || '').trim()));
+        const pctBtn = getPctTab();
         if (pctBtn) {
-            pctBtn.click();
-            await new Promise(r => setTimeout(r, 400));
+            const pctNode = pctBtn.closest('li[data-role="Tab"]') || pctBtn;
+            if (!isTabSelected(pctNode)) {
+                pctBtn.click();
+                await new Promise(r => setTimeout(r, 400));
+            }
         }
 
         // 3. Active Hydration Polling: Wait for Loading... to clear
@@ -450,6 +470,10 @@ async def harvest_symbol_liquidation(ws, symbol: str) -> Tuple[Dict[str, Any], b
         curr_path = ""
     if not curr_path or not str(curr_path).upper().endswith(f"/{symbol.upper()}"):
         await cdp_eval(ws, f"window.location.href={json.dumps(target_url)}", timeout=5)
+    try:
+        await cdp_eval(ws, "performance.clearResourceTimings()", timeout=3)
+    except Exception:
+        pass
     expression = f"""(async () => {{
         const expected = '/{symbol.upper()}';
         const navDeadline = Date.now() + 15000;
