@@ -291,7 +291,7 @@ def is_process_bot_tab(tab: dict, bot: str) -> bool:
     """Exact query matching; a substring in a user's URL is not ownership."""
     parts = urlsplit(tab.get("url", ""))
     query = dict(parse_qsl(parts.query))
-    return (parts.hostname in {"www.coinglass.com", "coinglass.com"}
+    return (parts.hostname in {"www.coinglass.com", "coinglass.com", "legend.coinglass.com"}
             and query.get("bot") == bot and query.get("owner") == CDP_OWNER_ID)
 
 

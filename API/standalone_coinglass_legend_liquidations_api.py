@@ -38,6 +38,7 @@ import asyncio
 import logging
 import argparse
 import urllib.request
+import urllib.parse
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Optional, Tuple, Any
@@ -63,10 +64,19 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 try:
-    from coinglass_common import writer_lock, atomic_parquet
+    from coinglass_common import (
+        writer_lock,
+        atomic_parquet,
+        bot_tab_url,
+        is_process_bot_tab,
+        CDP_OWNER_ID,
+    )
 except ImportError:
     writer_lock = None
     atomic_parquet = None
+    bot_tab_url = None
+    is_process_bot_tab = None
+    CDP_OWNER_ID = None
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -115,7 +125,7 @@ def load_active_universe() -> List[str]:
 
 
 def get_cdp_tab(cdp_port: int = 9222) -> Tuple[Optional[str], Optional[str]]:
-    """Locate existing legend tab or create a new one."""
+    """Locate existing legend bot tab or create an isolated ephemeral one."""
     try:
         url = f"http://127.0.0.1:{cdp_port}/json"
         with urllib.request.urlopen(url, timeout=5) as resp:
@@ -124,21 +134,23 @@ def get_cdp_tab(cdp_port: int = 9222) -> Tuple[Optional[str], Optional[str]]:
         logger.error(f"CDP connection error on port {cdp_port}: {e}")
         return None, None
 
-    # Check for existing legend tab
+    # Check for existing owned bot tab for this process
     for t in tabs:
-        t_url = t.get("url", "")
-        if "legend.coinglass.com" in t_url:
+        if is_process_bot_tab and is_process_bot_tab(t, "legend_api"):
             return t.get("webSocketDebuggerUrl"), t.get("id")
 
-    # If not found, open a new tab
+    # If not found, open a new isolated bot tab tagged with bot=legend_api and owner ID
     try:
-        create_url = f"http://127.0.0.1:{cdp_port}/json/new?{LEGEND_TEMPLATE_URL}"
+        tagged_url = bot_tab_url(LEGEND_TEMPLATE_URL, "legend_api") if bot_tab_url else LEGEND_TEMPLATE_URL
+        encoded_url = urllib.parse.quote(tagged_url, safe="")
+        create_url = f"http://127.0.0.1:{cdp_port}/json/new?{encoded_url}"
         req = urllib.request.Request(create_url, method="PUT")
         with urllib.request.urlopen(req, timeout=10) as resp:
             new_tab = json.loads(resp.read().decode())
-            logger.info(f"Opened new Legend tab (id: {new_tab.get('id')})")
-            time.sleep(3.0)  # Allow page to bootstrap
-            return new_tab.get("webSocketDebuggerUrl"), new_tab.get("id")
+            tab_id = new_tab.get("id")
+            logger.info(f"Opened isolated Legend tab ({tab_id}) - Registered active.")
+            time.sleep(3.5)  # Allow page and canvas runtime to bootstrap
+            return new_tab.get("webSocketDebuggerUrl"), tab_id
     except Exception as e:
         logger.error(f"Failed to open Legend tab via CDP: {e}")
         return None, None
@@ -169,8 +181,8 @@ class LegendLiquidationHarvester:
             logger.error(f"WebSocket connection failure: {e}")
             return False
 
-    async def _evaluate(self, expression: str, await_promise: bool = False) -> Any:
-        """Executes JavaScript expression in target page."""
+    async def _evaluate(self, expression: str, await_promise: bool = False, timeout: float = 12.0) -> Any:
+        """Executes JavaScript expression in target page with timeout and message id filtering."""
         if not self.ws:
             return None
         msg_id = int(time.time() * 1000) % 1_000_000
@@ -184,10 +196,23 @@ class LegendLiquidationHarvester:
             }
         }
         await self.ws.send(json.dumps(payload))
-        resp = await self.ws.recv()
-        data = json.loads(resp)
-        result = data.get("result", {}).get("result", {})
-        return result.get("value")
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                raw = await asyncio.wait_for(self.ws.recv(), timeout=max(0.2, deadline - time.monotonic()))
+                resp = json.loads(raw)
+                if resp.get("id") == msg_id:
+                    res_obj = resp.get("result", {})
+                    if "exceptionDetails" in res_obj:
+                        logger.warning(f"JS Exception: {res_obj['exceptionDetails']}")
+                        return None
+                    return res_obj.get("result", {}).get("value")
+            except asyncio.TimeoutError:
+                break
+            except Exception as e:
+                logger.warning(f"CDP recv error: {e}")
+                break
+        return None
 
     async def _hook_chart_instance(self) -> bool:
         """Locates and exposes the live Chart instance on window.__chartInstance."""
@@ -442,13 +467,25 @@ class LegendLiquidationHarvester:
 
         return results
 
-    async def close(self):
-        """Closes CDP WebSocket."""
+    async def close(self, close_tab: bool = True):
+        """Closes CDP WebSocket and terminates the browser tab."""
         if self.ws:
             try:
                 await self.ws.close()
             except Exception:
                 pass
+            self.ws = None
+
+        if close_tab and self.tab_id:
+            tab_id = self.tab_id
+            self.tab_id = None
+            def _do_close():
+                try:
+                    urllib.request.urlopen(f"http://127.0.0.1:{self.cdp_port}/json/close/{tab_id}", timeout=3)
+                    logger.info(f"Closed Legend tab ({tab_id}) - Tab isolation verified.")
+                except Exception as e:
+                    logger.warning(f"Could not close Legend tab {tab_id}: {e}")
+            await asyncio.to_thread(_do_close)
 
 
 async def run_collector(symbols: Optional[List[str]] = None, once: bool = True, interval_sec: int = 300):
@@ -475,11 +512,16 @@ async def run_collector(symbols: Optional[List[str]] = None, once: bool = True, 
             if once:
                 break
 
+            await harvester.close(close_tab=True)
             logger.info(f"Sleeping {interval_sec}s until next 5m candle cycle...")
             await asyncio.sleep(interval_sec)
+            connected = await harvester.connect()
+            if not connected:
+                logger.error("Could not reconnect to Legend tab for next cycle.")
+                break
 
     finally:
-        await harvester.close()
+        await harvester.close(close_tab=True)
 
 
 def main():

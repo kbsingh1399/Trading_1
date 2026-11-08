@@ -285,10 +285,11 @@ async def harvest_legend_chunk(symbols: List[str], chunk_idx: int, rate_signals:
                 if raw_data:
                     total, non_zero, path = harvester.persist_asset_parquets(sym, raw_data)
                     count += 1
+                    logger.info("[LEGEND][%s] Dumped %d bars (%d active) -> %s", sym, total, non_zero, Path(path).name)
             except Exception as exc:
                 logger.error("[LEGEND][%s] Harvest failed: %s", sym, exc)
     finally:
-        await harvester.close()
+        await harvester.close(close_tab=True)
     return count
 
 
