@@ -542,6 +542,15 @@ def is_warp_rotating() -> bool:
 
 
 
+def is_warp_connected() -> bool:
+    """Returns True if Cloudflare WARP client status is currently connected."""
+    try:
+        p = subprocess.run([str(WARP_CLI), "status"], capture_output=True, text=True, timeout=3)
+        return "Connected" in p.stdout and "Disconnected" not in p.stdout
+    except Exception:
+        return False
+
+
 def rotate_warp_ip(context: str = "Collector", reason: str = "SCHEDULED", force: bool = False) -> str:
 
     """
@@ -616,37 +625,29 @@ def rotate_warp_ip(context: str = "Collector", reason: str = "SCHEDULED", force:
 
             try:
 
-                # Stage 1: Fast toggle (Disconnect to revert to Direct ISP IP)
-
-                if old_ip.startswith("104.28.") or old_ip.startswith("104."):
-
+                # Stage 1: Fast toggle (Disconnect to revert to Direct ISP IP if currently connected)
+                if is_warp_connected() or old_ip.startswith("104.") or old_ip.startswith("2a09:"):
                     logger.info(f"[{context}] [Cloudflare WARP] Disconnecting WARP to switch to Direct ISP IP...")
-
                     subprocess.run([str(WARP_CLI), "disconnect"], capture_output=True, text=True, timeout=8)
-
                     stable, new_ip = verify_network_stabilization(expected_change_from=old_ip, max_timeout=8.0)
-
                     if stable and new_ip != old_ip:
-
                         _set_last_rotation_time(time.time(), new_ip, reason)
-
                         logger.info(f"[{context}] [Cloudflare WARP] Toggled to Direct ISP IP: {new_ip}")
-
                         return new_ip
 
-
-
-                # Stage 2: Resilient Re-Connect (toggle session without registration deletion)
-                logger.info(f"[{context}] [Cloudflare WARP] Performing Non-Destructive Connection Reset...")
+                # Stage 2: True Edge IP Re-provisioning via Registration Reset
+                logger.info(f"[{context}] [Cloudflare WARP] Performing True Edge IP Re-provisioning (Registration Reset)...")
                 subprocess.run([str(WARP_CLI), "disconnect"], capture_output=True, text=True, timeout=8)
-                time.sleep(2.5)
+                time.sleep(1.0)
+                subprocess.run([str(WARP_CLI), "registration", "delete"], capture_output=True, text=True, timeout=8)
+                time.sleep(0.5)
+                subprocess.run([str(WARP_CLI), "registration", "new"], capture_output=True, text=True, timeout=8)
+                time.sleep(0.5)
                 subprocess.run([str(WARP_CLI), "connect"], capture_output=True, text=True, timeout=8)
 
                 ensure_delta_split_tunnel_exclusions()
 
-
-
-                stable, new_ip = verify_network_stabilization(expected_change_from=old_ip, max_timeout=10.0)
+                stable, new_ip = verify_network_stabilization(expected_change_from=old_ip, max_timeout=12.0)
 
                 _set_last_rotation_time(time.time(), new_ip, reason)
 
