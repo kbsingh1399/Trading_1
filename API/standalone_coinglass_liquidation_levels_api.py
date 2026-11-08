@@ -158,8 +158,12 @@ EXTRACTION_JS = r"""(async () => {
             await new Promise(r => setTimeout(r, 200));
         }
 
-        if (/failed to load|Too Many Requests|HTTP 429|rate limit/i.test(document.body.innerText)) {
+        // 'Failed to load liquidation levels' = chart backend error; not our rate limit.
+        if (/Too Many Requests|HTTP 429|rate limit/i.test(document.body.innerText)) {
             return {allData:{}, isRateLimited:true, rateReason:'RATE_LIMIT_BANNER'};
+        }
+        if (/failed to load/i.test(document.body.innerText)) {
+            return {allData:{}, isRateLimited:false, error:'PAGE_LOAD_FAILURE'};
         }
         if (document.querySelector('iframe[src*="challenges.cloudflare.com"], #turnstile-wrapper')) {
             return {allData:{}, isRateLimited:true, rateReason:'CHALLENGE'};
@@ -454,8 +458,18 @@ async def harvest_symbol_liquidation(ws, symbol: str) -> Tuple[Dict[str, Any], b
         return await ({EXTRACTION_JS});
     }})()"""
     res = await cdp_eval(ws, expression, timeout=40.0)
-    if not res or res.get("error"):
+    if not res or (res.get("error") and res.get("error") != "PAGE_LOAD_FAILURE"):
         raise RuntimeError(f"Liquidation extraction rejected: {res}")
+    if res.get("error") == "PAGE_LOAD_FAILURE":
+        # Hard-reload retry: CoinGlass chart backend failed transiently.
+        logger.warning("[%s] PAGE_LOAD_FAILURE detected; reloading and retrying once...", symbol)
+        await cdp_eval(ws, "window.location.reload()", timeout=5)
+        await asyncio.sleep(8.0)
+        res = await cdp_eval(ws, expression, timeout=45.0)
+        if not res or res.get("error"):
+            raise RuntimeError(f"Liquidation extraction failed after reload: {res}")
+        if res.get("isRateLimited"):
+            raise RuntimeError(f"LIQUIDATION_RATE_SIGNAL:{res.get('rateReason', 'RATE_LIMIT_BANNER')}")
     if res.get("isRateLimited"):
         raise RuntimeError(f"LIQUIDATION_RATE_SIGNAL:{res.get('rateReason', 'RATE_LIMIT_BANNER')}")
     return res.get("allData", {}), False

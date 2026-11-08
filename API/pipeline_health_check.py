@@ -208,6 +208,8 @@ def audit_universe_parquets(db_dir: Path, symbols: List[str], max_age_secs: floa
         # 4. Live Legend Liquidations
         legend_path = legend_dump / f"{sym}_Live_Liquidation.parquet"
         if not legend_path.exists():
+            legend_path = legend_alt / f"{sym}_Live_Liquidation.parquet"
+        if not legend_path.exists():
             legend_path = legend_alt / f"{sym}_tv_liquidations.parquet"
         asset_report["live_legend"] = audit_parquet_freshness(legend_path, max_age_secs)
 
