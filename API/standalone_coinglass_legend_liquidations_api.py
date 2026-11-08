@@ -352,8 +352,11 @@ class LegendLiquidationHarvester:
                 continue
             dt_ist = datetime.fromtimestamp(ts_ms / 1000.0, tz=IST)
             time_str = dt_ist.strftime("%Y-%m-%d %H:%M:%S")
-            long_liq = float(item.get("open") or 0.0)
-            short_liq = float(item.get("high") or 0.0)
+            # CoinGlass Legend aggregated_liq_kline schema:
+            # item["high"] -> Long Liquidation (Yellow bar, positive / above 0)
+            # item["open"] -> Short Liquidation (Red bar, negative / below 0)
+            long_liq = float(item.get("high") or 0.0)
+            short_liq = float(item.get("open") or 0.0)
             rows.append({
                 "Candle_Type": "5_Minute",
                 "Time": time_str,
