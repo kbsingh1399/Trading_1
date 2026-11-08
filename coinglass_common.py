@@ -302,7 +302,7 @@ async def cdp_eval(ws, expression: str, timeout: float = 20.0):
             return await cdp_result(ws, {
                 "id": next(_CDP_IDS), "method": "Runtime.evaluate",
                 "params": {"expression": expression, "returnByValue": True, "awaitPromise": True},
-            }, timeout=min(15.0, max(1.0, deadline - time.monotonic())))
+            }, timeout=max(1.0, deadline - time.monotonic()))
         except RuntimeError as e:
             if "Execution context was destroyed" in str(e) and time.monotonic() < deadline:
                 await asyncio.sleep(0.4)
