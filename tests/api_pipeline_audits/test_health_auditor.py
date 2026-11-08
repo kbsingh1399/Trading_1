@@ -55,7 +55,7 @@ def test_audit_parquet_freshness_missing(tmp_path):
     assert res["status"] == "MISSING"
 
 
-def test_audit_lock_files_detects_stale(tmp_path):
+def test_audit_lock_files_detects_stale(tmp_path, monkeypatch):
     lock_dir = tmp_path / "locks"
     lock_dir.mkdir()
     stale_lock = lock_dir / "writer.lock"
@@ -65,6 +65,8 @@ def test_audit_lock_files_detects_stale(tmp_path):
 
     fresh_lock = lock_dir / "fresh.lock"
     fresh_lock.write_text("pid:5678")
+
+    monkeypatch.setattr(auditor, "is_lock_held", lambda path: True)
 
     stale_list = auditor.audit_lock_files(lock_dir, stale_threshold_secs=180.0)
     assert len(stale_list) == 1

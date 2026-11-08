@@ -3,7 +3,7 @@ pipeline_health_check.py
 ========================================================================================
 Independent Telemetry Health Auditor for Multi-Pillar Order Flow Pipeline
 ========================================================================================
-Audits Parquet dumps freshness, row counts, atomic heartbeat status, and stale locks.
+Audits Parquet dumps freshness, row counts, atomic heartbeat status, and actively wedged locks.
 Exits 0 on HEALTHY, 1 on DEGRADED / STALE / UNHEALTHY.
 ========================================================================================
 """
@@ -83,8 +83,34 @@ def audit_parquet_freshness(path: Path, max_age_secs: float = 900.0, min_rows: i
         }
 
 
+def is_lock_held(path: Path) -> bool:
+    """Non-destructively probes whether a byte lock is currently held by any process."""
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+            with open(path, "a+b") as f:
+                f.seek(0)
+                try:
+                    msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                    msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                    return False
+                except (OSError, BlockingIOError, PermissionError):
+                    return True
+        else:
+            import fcntl
+            with open(path, "a+b") as f:
+                try:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                    return False
+                except (OSError, BlockingIOError, PermissionError):
+                    return True
+    except Exception:
+        return True
+
+
 def audit_lock_files(lock_dir: Path, stale_threshold_secs: float = 180.0) -> List[Dict[str, Any]]:
-    """Detects any orphaned lock files lingering longer than the stale threshold."""
+    """Detects any orphaned lock files actively held longer than the stale threshold."""
     stale_locks = []
     p = Path(lock_dir)
     if not p.exists():
@@ -95,7 +121,7 @@ def audit_lock_files(lock_dir: Path, stale_threshold_secs: float = 180.0) -> Lis
         try:
             stat = lock_path.stat()
             age = max(0.0, now - stat.st_mtime)
-            if age > stale_threshold_secs:
+            if age > stale_threshold_secs and is_lock_held(lock_path):
                 stale_locks.append({
                     "path": str(lock_path),
                     "name": lock_path.name,
@@ -159,6 +185,8 @@ def audit_universe_parquets(db_dir: Path, symbols: List[str], max_age_secs: floa
 
         # 1. Footprint (Time 15m)
         fp_path = fp_dir / f"{sym}_Time_15m_footprint.parquet"
+        if not fp_path.exists():
+            fp_path = fp_dir / f"{sym}_15Min_time_footprint.parquet"
         asset_report["footprint"] = audit_parquet_freshness(fp_path, max_age_secs)
 
         # 2. Whales
@@ -167,6 +195,8 @@ def audit_universe_parquets(db_dir: Path, symbols: List[str], max_age_secs: floa
 
         # 3. Liquidation Levels (3d or key levels)
         liq_path = liq_dir / f"{sym}_3d_liquidation_levels.parquet"
+        if not liq_path.exists():
+            liq_path = liq_dir / f"{sym}_3D_{sym}_KeyLiquidationLevel.parquet"
         if not liq_path.exists():
             liq_path = db_dir / "Liquidation_Data" / "Key_Levels" / f"{sym}_key_levels.parquet"
         asset_report["liquidation_levels"] = audit_parquet_freshness(liq_path, max_age_secs)
