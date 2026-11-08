@@ -20,6 +20,10 @@ import argparse
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
+API_DIR = Path(__file__).resolve().parent
+ROOT_DIR = API_DIR.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 from coinglass_common import writer_lock, atomic_json
 
 try:
@@ -27,8 +31,6 @@ try:
 except Exception:
     pass
 
-API_DIR = Path(__file__).resolve().parent
-ROOT_DIR = API_DIR.parent
 ACTIVE_ASSETS_FILE = API_DIR / "active_assets.json"
 REGISTRY_FILE = ROOT_DIR / "Database" / "mutual_asset_capability_registry.json"
 
