@@ -13,8 +13,10 @@ __pycache__/
 # Environment and editor files
 .env
 .venv/
+node_modules/
 env/
 venv/
+node_modules/
 .vscode/
 .idea/
 
