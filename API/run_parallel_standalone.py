@@ -187,9 +187,10 @@ async def harvest_footprint_chunk(symbols: List[str], chunk_idx: int, rate_signa
                 count += len(dumps)
             except Exception as exc:
                 if rate_signals is not None:
-                    for reason in ("CHALLENGE", "RATE_LIMIT_BANNER", "HTTP_429"):
-                        if reason in str(exc):
-                            rate_signals.add(reason)
+                    matched = next((r for r in ("CHALLENGE", "RATE_LIMIT_BANNER", "HTTP_429") if r in str(exc)), None)
+                    if matched:
+                        rate_signals.add(matched)
+                        logger.warning("[FP][%s] Rate limit observed (%s); continuing remaining symbols in chunk", sym, matched)
                 logger.error("[FP][%s] Harvest failed: %s", sym, exc)
     finally:
         if tab_id:
@@ -229,9 +230,10 @@ async def harvest_whale_chunk(symbols: List[str], chunk_idx: int, rate_signals: 
                 except Exception as exc:
                     text = str(exc)
                     if rate_signals is not None:
-                        for reason in ("CHALLENGE", "RATE_LIMIT_BANNER", "HTTP_429"):
-                            if reason in text:
-                                rate_signals.add(reason)
+                        matched = next((r for r in ("CHALLENGE", "RATE_LIMIT_BANNER", "HTTP_429") if r in text), None)
+                        if matched:
+                            rate_signals.add(matched)
+                            logger.warning("[WHALE][%s] Rate limit observed (%s); continuing remaining symbols in chunk", sym, matched)
                     logger.error("[WHALE][%s] Harvest failed: %s", sym, exc)
     finally:
         if tab_id:
@@ -261,7 +263,9 @@ async def harvest_liquidation_chunk(symbols: List[str], chunk_idx: int, rate_sig
                         raise ValueError("Liquidation read-back completeness failed")
                 except Exception as exc:
                     if "LIQUIDATION_RATE_SIGNAL:" in str(exc) and rate_signals is not None:
-                        rate_signals.add(str(exc).split("LIQUIDATION_RATE_SIGNAL:", 1)[1].strip())
+                        sig = str(exc).split("LIQUIDATION_RATE_SIGNAL:", 1)[1].strip()
+                        rate_signals.add(sig)
+                        logger.warning("[LIQ][%s] Rate limit observed (%s); continuing remaining symbols in chunk", sym, sig)
                     logger.error("[LIQ][%s] Harvest failed: %s", sym, exc)
     finally:
         if tab_id:

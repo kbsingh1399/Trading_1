@@ -163,7 +163,14 @@ EXTRACTION_JS = r"""(async () => {
             return {allData:{}, isRateLimited:true, rateReason:'RATE_LIMIT_BANNER'};
         }
         if (/failed to load/i.test(document.body.innerText)) {
-            return {allData:{}, isRateLimited:false, error:'PAGE_LOAD_FAILURE'};
+            const retryBtn = Array.from(document.querySelectorAll('button')).find(b => /Retry/i.test(b.innerText || ''));
+            if (retryBtn) {
+                retryBtn.click();
+                await new Promise(r => setTimeout(r, 2500));
+            }
+            if (/failed to load/i.test(document.body.innerText)) {
+                return {allData:{}, isRateLimited:true, rateReason:'HTTP_429'};
+            }
         }
         if (document.querySelector('iframe[src*="challenges.cloudflare.com"], #turnstile-wrapper')) {
             return {allData:{}, isRateLimited:true, rateReason:'CHALLENGE'};

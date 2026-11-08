@@ -489,6 +489,7 @@ def get_current_ip(via_proxy: bool = True) -> str:
                 return ip
         except Exception:
             pass
+        return "unknown"
     try:
         req = urllib.request.Request("https://api.ipify.org?format=json", headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=4) as response:
@@ -548,11 +549,14 @@ POST_ROTATION_GRACE_SECS = 45.0     # Grace window post-rotation before empty-sc
 
 
 
-def verify_network_stabilization(expected_change_from: str = "", max_timeout: float = 12.0, via_proxy: bool = True) -> Tuple[bool, str]:
+def verify_network_stabilization(expected_change_from: str = "", max_timeout: float = 15.0, via_proxy: bool = True) -> Tuple[bool, str]:
     """Polls external IP until network is online and verifies DNS/IP connectivity."""
     deadline = time.time() + max_timeout
     while time.time() < deadline:
         try:
+            if not is_warp_connected():
+                time.sleep(0.5)
+                continue
             ip = get_current_ip(via_proxy=via_proxy)
             if ip and ip != "unknown":
                 changed = (ip != expected_change_from) if expected_change_from else True
@@ -662,7 +666,8 @@ def is_warp_connected() -> bool:
     """Returns True if Cloudflare WARP client status is currently connected."""
     try:
         p = subprocess.run([str(WARP_CLI), "status"], capture_output=True, text=True, timeout=3)
-        return "Connected" in p.stdout and "Disconnected" not in p.stdout
+        out = p.stdout.strip()
+        return "Connected" in out and "Disconnected" not in out and "Connecting" not in out
     except Exception:
         return False
 
@@ -694,26 +699,44 @@ def rotate_warp_ip(context: str = "Collector", reason: str = "NORMAL", force: bo
             ensure_warp_proxy_mode(WARP_PROXY_PORT)
             old_ip = get_current_ip()
             try:
-                _warp_command("disconnect")
-                ensure_delta_split_tunnel_exclusions()
-                _warp_command("registration", "delete")
-                _warp_command("registration", "new")
-                ensure_delta_split_tunnel_exclusions()
-                _warp_command("connect")
-                stable, new_ip = verify_network_stabilization(old_ip, max_timeout=12.0)
-                if not stable or new_ip == old_ip or new_ip == "unknown":
+                new_ip = None
+                for attempt in range(3):
+                    _warp_command("disconnect")
+                    ensure_delta_split_tunnel_exclusions()
+                    _warp_command("registration", "delete")
+                    time.sleep(1.0)
+                    for _ in range(5):
+                        try:
+                            _warp_command("registration", "new")
+                            break
+                        except Exception:
+                            time.sleep(1.0)
+                    ensure_delta_split_tunnel_exclusions()
+                    _warp_command("connect")
+                    stable, cand_ip = verify_network_stabilization(old_ip, max_timeout=15.0)
+                    if stable and cand_ip != old_ip and cand_ip != "unknown":
+                        new_ip = cand_ip
+                        break
+                    time.sleep(1.0)
+                if not new_ip:
                     raise RuntimeError(f"WARP egress did not change from {old_ip}")
-                if not is_warp_connected():
-                    raise RuntimeError("WARP registration reset finished disconnected")
                 _set_last_rotation_time(time.time(), new_ip, reason)
-                logger.info("[%s] Reactive WARP rotation complete: %s", context, reason)
+                logger.info("[%s] Reactive WARP rotation complete: %s (new IP: %s)", context, reason, new_ip)
                 return new_ip
             except Exception:
                 # Best-effort restore connectivity; never report a failed reset as success.
                 try:
                     _warp_command("connect")
+                    ensure_warp_proxy_mode(WARP_PROXY_PORT)
                     # Do not mutate routes while connected: some clients disconnect per host add.
-                    dump = _warp_command("tunnel", "dump")
+                    dump = ""
+                    try:
+                        dump = _warp_command("tunnel", "dump")
+                    except RuntimeError as e:
+                        if "WARP is not connected" in str(e):
+                            dump = "Split tunnel mode: exclude"
+                        else:
+                            raise
                     listed = _warp_command("tunnel", "host", "list")
                     hosts = {line.replace("(CLI exclude)", "").strip().lower() for line in listed.splitlines()}
                     is_ex = bool(re.search(r"Split tunnel mode:\s*exclude", dump, re.I) or ("Excluded:" in dump))
