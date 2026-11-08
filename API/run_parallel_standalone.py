@@ -20,10 +20,10 @@ Institutional Architecture:
    - Reads dynamically from API/active_assets.json via API/active_assets_manager.py on EVERY cycle.
    - Assets can be added/removed at runtime without modifying code or restarting the daemon.
 
-4. Reactive-Only Cloudflare WARP Anti-Block Rotation Engine:
-   - Scheduled chunk/cycle rotation is permanently disabled.
-   - Only HTTP 429, challenge, or rate-limit evidence may trigger rotation.
-   - Reactive In-Flight Failover: Immediate IP rotation and retry if 429 / 'failed to load' is encountered.
+4. Egress Cloudflare WARP Anti-Block Rotation Engine:
+   - Reactive in-flight rotation on 429, challenge, or rate-limit banners.
+   - Controlled inter-cycle rotation ceiling (CYCLE_AGE_CEILING) at rest boundary (every 3 cycles / 15 min).
+   - In-process telemetry heartbeat publication to Database/pipeline_health.json.
 ========================================================================================
 """
 
@@ -76,6 +76,7 @@ logger.setLevel(logging.INFO)
 logger.handlers = [handler]
 
 DB_DIR = ROOT_DIR / "Database"
+HEALTH_FILE = DB_DIR / "pipeline_health.json"
 FP_DUMP_DIR = DB_DIR / "Footprint_Dumps"
 WHALE_DUMP_DIR = DB_DIR / "Whale_Dumps"
 LIQ_DUMP_DIR = DB_DIR / "Liquidation_Level_Dumps"
@@ -87,6 +88,46 @@ LIQ_DUMP_DIR.mkdir(parents=True, exist_ok=True)
 PIPELINE_OPEN_DIR.mkdir(parents=True, exist_ok=True)
 
 CDP_BASE_URL = "http://127.0.0.1:9222"
+
+
+def emit_pipeline_health(
+    cycle_num: int,
+    current_ip: str,
+    cycles_on_ip: int,
+    ip_age_sec: float,
+    pillar_stats: Dict[str, Any],
+    symbols: List[str],
+    is_degraded: bool = False
+) -> Path:
+    """Publishes atomic, crash-proof pipeline heartbeat telemetry to Database/pipeline_health.json."""
+    from datetime import datetime, timezone, timedelta
+    ist_tz = timezone(timedelta(hours=5, minutes=30))
+    now_ist = datetime.now(ist_tz).strftime("%Y-%m-%d %H:%M:%S IST")
+
+    health_payload = {
+        "timestamp_ist": now_ist,
+        "timestamp_epoch": time.time(),
+        "cycle_number": cycle_num,
+        "current_ip": current_ip,
+        "cycles_on_current_ip": cycles_on_ip,
+        "ip_age_seconds": round(ip_age_sec, 1),
+        "status": "DEGRADED" if is_degraded else "HEALTHY",
+        "pillars": pillar_stats,
+        "symbols": symbols,
+        "total_symbols": len(symbols),
+    }
+
+    target_path = Path(HEALTH_FILE)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = target_path.with_suffix(".tmp")
+
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump(health_payload, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+
+    os.replace(temp_path, target_path)
+    return target_path
 
 
 async def async_cdp_request(url: str, method: str = "GET", timeout: float = 4.0) -> Any:
@@ -254,19 +295,30 @@ async def harvest_legend_chunk(symbols: List[str], chunk_idx: int, rate_signals:
 # MASTER SCHEDULER & CONCURRENCY ORCHESTRATOR
 # ======================================================================================
 
-async def run_parallel_cycle(chunk_size: int = 15, continuous: bool = False, delay_between_cycles: float = 300.0, sample_limit: Optional[int] = None, symbols_override: Optional[List[str]] = None, rotate_chunks: bool = False, with_legend: bool = False):
+async def run_parallel_cycle(
+    chunk_size: int = 15,
+    continuous: bool = False,
+    delay_between_cycles: float = 300.0,
+    sample_limit: Optional[int] = None,
+    symbols_override: Optional[List[str]] = None,
+    rotate_chunks: bool = False,
+    with_legend: bool = False,
+    max_cycles_per_ip: int = 3,
+    max_ip_age_min: float = 15.0
+):
     """
     Executes complete cycles across active assets with:
-    - Triple-Pillar Concurrency: Footprint, Whales, and Liquidation Levels run simultaneously in 3 parallel tabs.
+    - Triple/Quad-Pillar Concurrency: Footprint, Whales, Liquidation Levels, and Legend run simultaneously.
     - Dynamic Universe: Reloads active assets from API/active_assets.json inside the while True: loop.
-    - No scheduled IP rotation. Only observed blocking signals can request rotation.
+    - Proactive + Reactive Egress Rotation: Rotates reactively on 429/Challenge, or at rest window after cycle/age ceiling.
     - Rotation is coordinated after all owned tabs close, never inside a pillar.
     - 4 Deterministic Checkpoints validating streaming feed through local disk parity.
     - Protected asyncio.gather(return_exceptions=True) isolating sub-pillar exceptions.
+    - Atomic pipeline health heartbeat published after each cycle to Database/pipeline_health.json.
     """
     logger.info("=" * 85)
-    logger.info(f"STARTING TRIPLE-PILLAR PARALLEL STANDALONE RUNNER")
-    logger.info(f"Target Pillars: 1. Footprint (?bot=footprint_api) | 2. Whales (?bot=whales_api) | 3. Liquidation Levels (?bot=liq_levels_api)")
+    logger.info(f"STARTING MULTI-PILLAR PARALLEL STANDALONE RUNNER")
+    logger.info(f"Target Pillars: 1. Footprint | 2. Whales | 3. Liquidation Levels" + (" | 4. Live Legend" if with_legend else ""))
     if chunk_size <= 0 or delay_between_cycles < 0:
         raise ValueError("chunk_size must be positive and interval nonnegative")
     if rotate_chunks:
@@ -275,6 +327,10 @@ async def run_parallel_cycle(chunk_size: int = 15, continuous: bool = False, del
     logger.info("=" * 85)
 
     cycle_num = 1
+    cycles_on_current_ip = 0
+    ip_start_time = time.time()
+    max_ip_age_sec = max_ip_age_min * 60.0
+
     while True:
         t_cycle_start = time.time()
         logger.info(f">>>>>>>>>>>> BEGINNING HARVEST CYCLE #{cycle_num} <<<<<<<<<<<<")
@@ -303,7 +359,7 @@ async def run_parallel_cycle(chunk_size: int = 15, continuous: bool = False, del
             c_num = (c_idx // chunk_size) + 1
             
             logger.info("-" * 80)
-            logger.info(f"CHUNK [{c_num}/{total_chunks}] ({len(chunk)} assets: {chunk[0]}..{chunk[-1]}) - 3 PARALLEL TABS ACTIVE")
+            logger.info(f"CHUNK [{c_num}/{total_chunks}] ({len(chunk)} assets: {chunk[0]}..{chunk[-1]}) - PARALLEL TABS ACTIVE")
             logger.info(f"Active Egress IP: {get_current_ip()}")
             logger.info("-" * 80)
 
@@ -340,12 +396,14 @@ async def run_parallel_cycle(chunk_size: int = 15, continuous: bool = False, del
             extra_msg = f", Legend: {legend_res} assets" if with_legend else ""
             logger.info(f"Chunk [{c_num}/{total_chunks}] Complete in {chunk_duration:.1f}s. (FP: {fp_res} files, Whales: {whale_res} assets, Liq: {liq_res} files{extra_msg})")
 
-            # All three finally blocks have completed before any host-wide network change.
+            # All scraper finally blocks have completed before any host-wide network change.
             if rate_signals:
                 reason = "CHALLENGE" if "CHALLENGE" in rate_signals else "RATE_LIMIT_BANNER"
                 try:
                     new_ip = await asyncio.to_thread(rotate_warp_ip, f"Cycle{cycle_num}_Chunk{c_num}", reason)
                     logger.info("Reactive rotation after observed %s: %s", reason, new_ip)
+                    cycles_on_current_ip = 0
+                    ip_start_time = time.time()
                 except Exception as exc:
                     logger.error("Reactive rotation deferred: %s", exc)
 
@@ -356,13 +414,74 @@ async def run_parallel_cycle(chunk_size: int = 15, continuous: bool = False, del
         logger.info(f"Summary: Footprint Parquets = {total_fp_dumped} | Whale Asset Blotters = {total_whale_dumped} | Liquidation Parquets = {total_liq_dumped}{extra_summary}")
         logger.info("=" * 85)
 
+        expected_fp = total_symbols * 3
+        expected_whales = total_symbols
+        expected_liq = total_symbols * 15
+        expected_legend = total_symbols if with_legend else 0
+
+        fp_ok = (total_fp_dumped == expected_fp)
+        whale_ok = (total_whale_dumped == expected_whales)
+        liq_ok = (total_liq_dumped == expected_liq)
+        legend_ok = (total_legend_dumped == expected_legend) if with_legend else True
+        is_degraded = not (fp_ok and whale_ok and liq_ok and legend_ok)
+
+        pillar_stats = {
+            "footprint": {
+                "dumped_files": total_fp_dumped,
+                "expected_files": expected_fp,
+                "status": "HEALTHY" if fp_ok else "DEGRADED"
+            },
+            "whales": {
+                "dumped_assets": total_whale_dumped,
+                "expected_assets": expected_whales,
+                "status": "HEALTHY" if whale_ok else "DEGRADED"
+            },
+            "liquidation_levels": {
+                "dumped_files": total_liq_dumped,
+                "expected_files": expected_liq,
+                "status": "HEALTHY" if liq_ok else "DEGRADED"
+            }
+        }
+        if with_legend:
+            pillar_stats["live_legend"] = {
+                "dumped_assets": total_legend_dumped,
+                "expected_assets": expected_legend,
+                "status": "HEALTHY" if legend_ok else "DEGRADED"
+            }
+
+        current_ip = get_current_ip()
+        ip_age_sec = time.time() - ip_start_time
+
+        emit_pipeline_health(
+            cycle_num=cycle_num,
+            current_ip=current_ip,
+            cycles_on_ip=cycles_on_current_ip + 1,
+            ip_age_sec=ip_age_sec,
+            pillar_stats=pillar_stats,
+            symbols=symbols,
+            is_degraded=is_degraded
+        )
+
         if not continuous:
-            expected_legend = total_symbols if with_legend else 0
-            legend_mismatch = (total_legend_dumped != expected_legend) if with_legend else False
-            if total_fp_dumped != total_symbols*3 or total_whale_dumped != total_symbols or total_liq_dumped != total_symbols*15 or legend_mismatch:
+            if is_degraded:
                 raise RuntimeError("Cycle incomplete: inspect per-asset errors; historical files were preserved")
             logger.info("Single-cycle execution complete. Exiting master runner.")
             break
+
+        cycles_on_current_ip += 1
+        now = time.time()
+        if cycles_on_current_ip >= max_cycles_per_ip or (now - ip_start_time) >= max_ip_age_sec:
+            logger.info(
+                "IP age ceiling reached (%d cycles, %.1fs elapsed); rotating egress IP in inter-cycle window...",
+                cycles_on_current_ip, now - ip_start_time
+            )
+            try:
+                new_ip = await asyncio.to_thread(rotate_warp_ip, f"Cycle{cycle_num}_Ceiling", "CYCLE_AGE_CEILING")
+                logger.info("Inter-cycle rotation successful: new egress IP is %s", new_ip)
+                cycles_on_current_ip = 0
+                ip_start_time = time.time()
+            except Exception as exc:
+                logger.error("Inter-cycle rotation deferred: %s", exc)
 
         logger.info(f"Sleeping {delay_between_cycles:.1f}s until next scheduled cycle...")
         await asyncio.sleep(delay_between_cycles)
@@ -383,6 +502,8 @@ def main():
     parser.add_argument("--symbols", nargs="+", default=None, help="Specific symbols to harvest (e.g. --symbols BTC ETH SOL)")
     parser.add_argument("--rotate-chunks", action="store_true", help="Retired compatibility flag; never enables scheduled rotation")
     parser.add_argument("--with-legend", action="store_true", help="Harvest 5m Live Liquidations from CoinGlass Legend in parallel")
+    parser.add_argument("--max-cycles-per-ip", type=int, default=3, help="Max harvest cycles on single egress IP before inter-cycle rotation (default: 3)")
+    parser.add_argument("--max-ip-age-min", type=float, default=15.0, help="Max IP age in minutes before inter-cycle rotation (default: 15.0)")
     args = parser.parse_args()
 
     asyncio.run(run_parallel_cycle(
@@ -392,7 +513,9 @@ def main():
         sample_limit=args.sample,
         symbols_override=args.symbols,
         rotate_chunks=args.rotate_chunks,
-        with_legend=args.with_legend
+        with_legend=args.with_legend,
+        max_cycles_per_ip=args.max_cycles_per_ip,
+        max_ip_age_min=args.max_ip_age_min
     ))
 
 

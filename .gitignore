@@ -64,3 +64,4 @@ archive/
 
 .arena/run-*
 .arena/LATEST
+Database/pipeline_health.json
