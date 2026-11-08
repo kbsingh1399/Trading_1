@@ -442,24 +442,58 @@ if not logger.handlers:
 
 
 
-def get_current_ip() -> str:
+WARP_PROXY_PORT = 40000
+WARP_PROXY_HOST = "127.0.0.1"
+WARP_PROXY_URL = f"{WARP_PROXY_HOST}:{WARP_PROXY_PORT}"
+CHROME_EXE_PATH = Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe")
+CHROME_SCRAPER_PROFILE = Path(r"C:\Users\SIGMA\chrome_debug_profile")
 
-    """Queries external IP via ipify."""
 
-    if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("OFFLINE_MODE", "").lower() in ("true", "1"):
-
-        return "127.0.0.1"
-
+def ensure_warp_proxy_mode(port: int = 40000) -> bool:
+    """Ensures Cloudflare WARP is running strictly in local SOCKS5 proxy mode on 127.0.0.1:{port}.
+    Guarantees zero interference with the host PC's primary network adapter / IP.
+    """
+    if not WARP_CLI.exists():
+        return False
     try:
+        settings = _warp_command("settings", "list")
+        if "Mode: WarpProxy" in settings or settings == "OK":
+            return True
+        if f"Mode: WarpProxy on port {port}" not in settings:
+            _warp_command("disconnect")
+            _warp_command("mode", "proxy")
+            _warp_command("proxy", "port", str(port))
+            _warp_command("connect")
+            logger.info("Configured Cloudflare WARP in WarpProxy mode on port %d", port)
+        return True
+    except Exception as e:
+        logger.warning("Could not verify/set WARP proxy mode: %s", e)
+        return False
 
+
+def get_current_ip(via_proxy: bool = True) -> str:
+    """Queries external egress IP.
+    If via_proxy is True, checks the WARP SOCKS5 proxy (127.0.0.1:40000).
+    If via_proxy is False or proxy query fails, checks direct host connection.
+    """
+    if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("OFFLINE_MODE", "").lower() in ("true", "1"):
+        return "127.0.0.1"
+    if via_proxy:
+        try:
+            res = subprocess.run(
+                ["curl.exe", "-s", "--max-time", "4", "--socks5-hostname", WARP_PROXY_URL, "https://api.ipify.org"],
+                capture_output=True, text=True, timeout=5, check=False
+            )
+            ip = res.stdout.strip()
+            if ip and re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", ip):
+                return ip
+        except Exception:
+            pass
+    try:
         req = urllib.request.Request("https://api.ipify.org?format=json", headers={"User-Agent": "Mozilla/5.0"})
-
         with urllib.request.urlopen(req, timeout=4) as response:
-
             return json.loads(response.read().decode()).get("ip", "unknown")
-
     except Exception:
-
         return "unknown"
 
 
@@ -514,39 +548,46 @@ POST_ROTATION_GRACE_SECS = 45.0     # Grace window post-rotation before empty-sc
 
 
 
-def verify_network_stabilization(expected_change_from: str = "", max_timeout: float = 10.0) -> Tuple[bool, str]:
-
+def verify_network_stabilization(expected_change_from: str = "", max_timeout: float = 12.0, via_proxy: bool = True) -> Tuple[bool, str]:
     """Polls external IP until network is online and verifies DNS/IP connectivity."""
-
     deadline = time.time() + max_timeout
-
     while time.time() < deadline:
-
         try:
-
-            req = urllib.request.Request("https://api.ipify.org?format=json", headers={"User-Agent": "Mozilla/5.0"})
-
-            with urllib.request.urlopen(req, timeout=2.5) as resp:
-
-                data = json.loads(resp.read().decode())
-
-                ip = data.get("ip", "")
-
-                if ip and ip != "unknown":
-
-                    changed = (ip != expected_change_from) if expected_change_from else True
-
-                    if changed:
-
-                        return True, ip
-
+            ip = get_current_ip(via_proxy=via_proxy)
+            if ip and ip != "unknown":
+                changed = (ip != expected_change_from) if expected_change_from else True
+                if changed:
+                    return True, ip
         except Exception:
-
             pass
-
         time.sleep(0.75)
+    return False, get_current_ip(via_proxy=via_proxy)
 
-    return False, get_current_ip()
+
+def launch_scraper_chrome(proxy_port: int = 40000, debug_port: int = 9222) -> bool:
+    """Launches dedicated scraper Chrome on debug_port routed through WARP SOCKS5 proxy."""
+    if not CHROME_EXE_PATH.exists():
+        logger.error("Chrome executable not found at %s", CHROME_EXE_PATH)
+        return False
+    cmd = [
+        str(CHROME_EXE_PATH),
+        f"--remote-debugging-port={debug_port}",
+        f"--proxy-server=socks5://127.0.0.1:{proxy_port}",
+        f"--user-data-dir={CHROME_SCRAPER_PROFILE}",
+        "--no-first-run",
+        "--no-default-browser-check"
+    ]
+    try:
+        subprocess.Popen(cmd)
+        for _ in range(15):
+            time.sleep(0.5)
+            if is_cdp_alive():
+                logger.info("Dedicated Scraper Chrome launched on port %d with proxy 127.0.0.1:%d", debug_port, proxy_port)
+                return True
+        return False
+    except Exception as e:
+        logger.error("Failed to launch Scraper Chrome: %s", e)
+        return False
 
 
 
@@ -650,6 +691,7 @@ def rotate_warp_ip(context: str = "Collector", reason: str = "NORMAL", force: bo
                 raise RuntimeError(f"WARP rotation cooldown active: {elapsed:.0f}s")
             if not WARP_CLI.exists():
                 raise RuntimeError(f"WARP CLI unavailable: {WARP_CLI}")
+            ensure_warp_proxy_mode(WARP_PROXY_PORT)
             old_ip = get_current_ip()
             try:
                 _warp_command("disconnect")
