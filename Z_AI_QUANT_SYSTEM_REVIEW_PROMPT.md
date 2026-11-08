@@ -11,7 +11,7 @@
 You are acting as an Elite Quantitative Portfolio Manager and High-Frequency Market Microstructure Architect.
 You are tasked with conducting an exhaustive, file-by-file quantitative code review, risk evaluation, and architectural audit of the cryptocurrency trading pipeline located in:
 `C:\Users\SIGMA\Documents\_Trading_1`
-GitHub: `https://github.com/kbsingh1399/_Trading_1`
+GitHub: `https://github.com/kbsingh1399/Trading_1`
 
 The repository implements a production 5-Pillar Standalone Cryptocurrency Microstructure & Order Flow Pipeline operating across 31 cryptocurrency perpetual futures assets on Binance and Bybit. Data ingestion runs strictly via headless Chrome DevTools Protocol (CDP) on `127.0.0.1:9222` with a 60-minute Time Division Multiple Access (TDMA) zero-overlap scheduler.
 
