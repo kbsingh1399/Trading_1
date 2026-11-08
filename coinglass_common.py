@@ -673,8 +673,10 @@ def rotate_warp_ip(context: str = "Collector", reason: str = "NORMAL", force: bo
                     # Do not mutate routes while connected: some clients disconnect per host add.
                     dump = _warp_command("tunnel", "dump")
                     listed = _warp_command("tunnel", "host", "list")
-                    hosts = {line.strip().lower() for line in listed.splitlines()}
-                    if not re.search(r"Split tunnel mode:\s*exclude", dump, re.I) or set(DELTA_EXCLUSION_HOSTS) - hosts:
+                    hosts = {line.replace("(CLI exclude)", "").strip().lower() for line in listed.splitlines()}
+                    is_ex = bool(re.search(r"Split tunnel mode:\s*exclude", dump, re.I) or ("Excluded:" in dump))
+                    missing_h = [h for h in DELTA_EXCLUSION_HOSTS if not any(h in line for line in hosts)]
+                    if not is_ex or missing_h:
                         raise RuntimeError("Connectivity restored but Delta exclusions require administrator repair")
                 except Exception as restore_error:
                     logger.critical("[%s] WARP connectivity restore failed: %s", context, restore_error)
