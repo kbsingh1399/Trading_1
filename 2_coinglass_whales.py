@@ -67,10 +67,26 @@ logger = logging.getLogger("WhaleScraper")
 logger.setLevel(logging.INFO)
 logger.handlers = [handler]
 
-# High-liquidity assets with active orderbook walls
-CORE_WHALE_SYMBOLS = [
-    "BTC", "ETH", "SOL", "XRP", "DOGE", "BNB", "ADA", "LINK", "AVAX", "SUI", "NEAR", "HYPE"
-]
+# High-liquidity assets with active orderbook walls dynamically sourced from registry
+REGISTRY_FILE = DB_DIR / "mutual_asset_capability_registry.json"
+
+def load_whale_target_symbols():
+    if not REGISTRY_FILE.exists():
+        return ["BTC", "ETH", "SOL", "XRP", "BNB", "ADA", "LINK", "LTC", "XAU", "XAG"]
+    try:
+        with open(REGISTRY_FILE, "r", encoding="utf-8") as f:
+            reg = json.load(f)
+        syms = []
+        for cat in reg.values():
+            for s, meta in cat.items():
+                if meta.get("whales", True):
+                    syms.append(s.upper())
+        return sorted(list(set(syms))) if syms else ["BTC", "ETH", "SOL", "XRP", "BNB", "ADA", "LINK", "LTC"]
+    except Exception as e:
+        logger.error(f"Error reading registry: {e}")
+        return ["BTC", "ETH", "SOL", "XRP", "BNB", "ADA", "LINK", "LTC"]
+
+CORE_WHALE_SYMBOLS = load_whale_target_symbols()
 
 
 def cleanup_orphan_tabs(keep_tab_id: Optional[str] = None):
@@ -94,7 +110,7 @@ def cleanup_orphan_tabs(keep_tab_id: Optional[str] = None):
 def open_whale_tab(initial_sym: str = "BTC") -> Tuple[Optional[str], Optional[str]]:
     cleanup_orphan_tabs()
     try:
-        url = f"https://www.coinglass.com/large-orderbook-statistics?symbol={initial_sym}&bot=whale_scraper"
+        url = f"https://www.coinglass.com/large-orderbook-statistics/{initial_sym}?bot=whale_scraper"
         req = urllib.request.Request(f"http://127.0.0.1:9222/json/new?{url}", method="PUT")
         resp = urllib.request.urlopen(req, timeout=6)
         data = json.loads(resp.read().decode())
@@ -187,9 +203,36 @@ def persist_whale_open_orders(symbol: str, rows: List[dict]):
         secs = float(r.get("duration_seconds", 0.0) or parse_duration_seconds(r.get("duration_str")))
         df.at[idx, "decay_weight"] = calculate_wall_decay_weight(secs)
 
+    # Enforce 8-column Excel specification compatibility
+    def _format_usd(val):
+        if not val or val == 0: return "$0"
+        if val >= 1e9: return f"${val/1e9:.2f}".rstrip("0").rstrip(".") + "B"
+        if val >= 1e6: return f"${val/1e6:.2f}".rstrip("0").rstrip(".") + "M"
+        if val >= 1e3: return f"${val/1e3:.2f}".rstrip("0").rstrip(".") + "K"
+        return f"${int(val):,}"
+
+    if "Venue/Side" not in df.columns and "venue" in df.columns and "side" in df.columns:
+        df["Venue/Side"] = df["venue"].astype(str) + " " + df["side"].astype(str).str.capitalize()
+    if "Price" not in df.columns and "price" in df.columns:
+        df["Price"] = df["price"].apply(lambda p: f"{p:,.2f}" if p >= 1 else f"{p:.4f}")
+    if "From Price" not in df.columns and "from_price_pct" in df.columns:
+        df["From Price"] = df["from_price_pct"].apply(lambda pct: f"{'+' if pct >= 0 else ''}{pct:.2f}%")
+    if "Initial_USD" not in df.columns and "initial_usd" in df.columns:
+        df["Initial_USD"] = df["initial_usd"].apply(_format_usd)
+    if "Remaining_USD" not in df.columns and "remaining_usd" in df.columns:
+        df["Remaining_USD"] = df["remaining_usd"].apply(_format_usd)
+    if "Filled_USD" not in df.columns and "filled_usd" in df.columns:
+        df["Filled_USD"] = df["filled_usd"].apply(_format_usd)
+    if "Duration" not in df.columns and "duration_str" in df.columns:
+        df["Duration"] = df["duration_str"].astype(str)
+    if "Status" not in df.columns and "filled_usd" in df.columns:
+        df["Status"] = df["filled_usd"].apply(lambda f: "Partially Filled" if (f and f > 0) else "Open")
+
     out_path = OPEN_DIR / f"{symbol}_whale_open_orders.parquet"
+    dump_path = DB_DIR / "Whale_Dumps" / f"{symbol}_whale_open_orders.parquet"
     atomic_parquet(df, out_path)
-    logger.info(f"[{symbol}] Saved {out_path.name}: {len(df)} active open whale walls.")
+    atomic_parquet(df, dump_path)
+    logger.info(f"[{symbol}] Saved {out_path.name}: {len(df)} active open whale walls (Synchronized to Whale_Dumps).")
 
 
 def persist_whale_history_orders(symbol: str, rows: List[dict]):
@@ -230,10 +273,30 @@ async def cdp_eval(ws, expr: str, msg_id: int = 1, await_promise: bool = False):
 
 
 async def harvest_whale_orders_for_symbol(ws, symbol: str) -> dict:
-    url = f"https://www.coinglass.com/large-orderbook-statistics?symbol={symbol}&bot=whale_scraper"
+    url = f"https://www.coinglass.com/large-orderbook-statistics/{symbol}?bot=whale_scraper"
     logger.info(f"[{symbol}] Navigating to {url}...")
     await cdp_result(ws, {"id": next(_cdp_seq), "method": "Page.navigate", "params": {"url": url}}, timeout=10.0)
     await asyncio.sleep(3.5)
+
+    # 0. Enforce Size threshold = $0 (no limit)
+    await cdp_eval(ws, '''(async () => {
+        const rail = document.querySelector(".lo-rail") || document.body;
+        const selects = Array.from(rail.querySelectorAll(".ui_select__YKSW6, [class*=\"select\"]"));
+        const thrSelect = selects.find(el => el.innerText && (el.innerText.includes("Size threshold") || el.innerText.includes("≥$")));
+        if (thrSelect && !thrSelect.innerText.includes("$0")) {
+            thrSelect.click();
+            await new Promise(r => setTimeout(r, 400));
+            const popups = Array.from(document.body.children).filter(c => c.tagName === "DIV" && c.id !== "__next" && (c.innerText.includes("$0") || c.innerText.includes("≥$")));
+            for (const pop of popups) {
+                const items = Array.from(pop.querySelectorAll("*")).filter(e => e.children.length === 0 && e.innerText && e.innerText.trim() === "$0");
+                if (items.length > 0) {
+                    items[0].click();
+                    break;
+                }
+            }
+            await new Promise(r => setTimeout(r, 1200));
+        }
+    })()''', msg_id=next(_cdp_seq), await_promise=True)
 
     # 1. Macro Indicators
     macro = await cdp_eval(ws, '''(() => {

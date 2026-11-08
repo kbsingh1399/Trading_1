@@ -1,0 +1,3082 @@
+[
+  {
+    "symbol": "BTC",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "BTC",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "BTC",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "BTC",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "BTC",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "BTC",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "BTC",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "BTC",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "BTC",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "BTC",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "ETH",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ETH",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "ETH",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ETH",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "ETH",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "ETH",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "ETH",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "ETH",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "ETH",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "SOL",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "SOL",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "SOL",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "SOL",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "SOL",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "SOL",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "SOL",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "SOL",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "XRP",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "XRP",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "XRP",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "XRP",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "XRP",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "XRP",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "XRP",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "XRP",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "XRP",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "DOGE",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "DOGE",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "DOGE",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "DOGE",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "DOGE",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "DOGE",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "DOGE",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "DOGE",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "DOGE",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "BNB",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "BNB",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "BNB",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "BNB",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "BNB",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "ADA",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ADA",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "ADA",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ADA",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ADA",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "ADA",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "ADA",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "ADA",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "ADA",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "ADA",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "SUI",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "SUI",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "LINK",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "LINK",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "LINK",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "LINK",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "LINK",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "LINK",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "LINK",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "AVAX",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "AVAX",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "AVAX",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AVAX",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "AVAX",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "AVAX",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "AVAX",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "AVAX",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "AVAX",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "LTC",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "LTC",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "LTC",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "LTC",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "LTC",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "LTC",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "LTC",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "TRX",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "TRX",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "TRX",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "TRX",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "DOT",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "DOT",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "DOT",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "DOT",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "BCH",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "BCH",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "BCH",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "BCH",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "BCH",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "BCH",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "BCH",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "BCH",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "BCH",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "NEAR",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "NEAR",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "NEAR",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "NEAR",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "APT",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "APT",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "APT",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "APT",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "APT",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "APT",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "HYPE",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "ZEC",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ZEC",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "ZEC",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ZEC",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "ZEC",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "ZEC",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "ZEC",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "UNI",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "UNI",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "UNI",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "UNI",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "UNI",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "UNI",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "ENA",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "ENA",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "WLD",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "WLD",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "TAO",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "TAO",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "ONE",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "ONE",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "INJ",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "INJ",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "INJ",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "INJ",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "AAVE",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "AAVE",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "AAVE",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AAVE",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "AAVE",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "AAVE",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "AAVE",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "AAVE",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "AAVE",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "FIL",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "FIL",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "FIL",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "FIL",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "QNT",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "QNT",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "QNT",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "QNT",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "XMR",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "XLM",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "XLM",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "XLM",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "XLM",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "XLM",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "DASH",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "DASH",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "HBAR",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "HBAR",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "HBAR",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "HBAR",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "HBAR",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "HBAR",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "GTC",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "FET",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "FET",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "FET",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "FET",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "FET",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "FET",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "ZIL",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "ZIL",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "OP",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "OP",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "OP",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "HOT",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "HOT",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "1000SHIB",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "ETC",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ETC",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "ETC",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "ETC",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "ETC",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "ETC",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "CRV",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "CRV",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "CRV",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "CRV",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "ICP",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "ICP",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "ICP",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "ICP",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "XTZ",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "XTZ",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "XTZ",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "XTZ",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "ATOM",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ATOM",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "ATOM",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ATOM",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ATOM",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "ATOM",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "ATOM",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "ATOM",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "ATOM",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "MAGIC",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "ALGO",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ALGO",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "ALGO",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ALGO",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ALGO",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "ALGO",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "ALGO",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "ALGO",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "STX",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "STX",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "STX",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "STX",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "SAND",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "SAND",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "RUNE",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "RUNE",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "RUNE",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "LDO",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "LDO",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "LDO",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "BAT",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "BAT",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "BAT",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "BAT",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "BAT",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "BAT",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "RSR",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "RSR",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "RSR",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "GALA",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "GALA",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "GALA",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "ZEN",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ZEN",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "ZEN",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "IOST",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "IOST",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "AR",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "AR",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "AR",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AR",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "AR",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "AR",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "RLC",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "RLC",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "RVN",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "RVN",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "CELO",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "CELO",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "CELO",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "CELO",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "AXS",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "AXS",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "AXS",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AXS",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "AXS",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "AXS",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "APE",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "APE",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "APE",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "APE",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "APE",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "APE",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "CHZ",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "CHZ",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "CHZ",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "CHZ",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "CHZ",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "CHZ",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "TRB",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "TRB",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "TRB",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "PEOPLE",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "PEOPLE",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "PEOPLE",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "VET",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "VET",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "MINA",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "MINA",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "MINA",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "GMX",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "GMX",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "GMX",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "ENS",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ENS",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "ENS",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "ENS",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "1INCH",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "1INCH",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "1INCH",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "1INCH",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "1INCH",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "CFX",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "CFX",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "CFX",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "CFX",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "MANA",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "MANA",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "KAVA",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "KAVA",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "CELR",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "CELR",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "THETA",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "THETA",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "COMP",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "COMP",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "COMP",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "COMP",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "OGN",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "COTI",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "GRT",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "GRT",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "DYDX",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "DYDX",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "DYDX",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "DYDX",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "T",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "IOTA",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "IOTA",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "EGLD",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "1000LUNC",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "1000LUNC",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "1000LUNC",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "GMT",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "GMT",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "GMT",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "DUSK",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "DUSK",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "JASMY",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "IMX",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "IMX",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "IMX",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "IMX",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "BTCDOM",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "NEO",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "NEO",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "NEO",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "NEO",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "SNX",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "SNX",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "SNX",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "YFI",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "YFI",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "SUSHI",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "SUSHI",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "SUSHI",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "SUSHI",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "WOO",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "WOO",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "API3",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "API3",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "API3",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "API3",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "API3",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "SKL",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "ROSE",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "BAND",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "BAND",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "BAND",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "BAND",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "BAND",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "BAND",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "CKB",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "KSM",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "KSM",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "MASK",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "FLOW",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "LUNA2",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "ANKR",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ANKR",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "ANKR",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ANKR",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "ANKR",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "ANKR",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "ENJ",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "ENJ",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "ENJ",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "ENJ",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "ALICE",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ALICE",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "ALICE",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "QTUM",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "QTUM",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "LPT",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "ONT",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "ONT",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "CHR",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "SFP",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "IOTX",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "IOTX",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "ASTR",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ASTR",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "ASTR",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ASTR",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "SSV",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "ZRX",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "ZRX",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "ZRX",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "ZRX",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "ACH",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ACH",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "ACH",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ACH",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ACH",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "ARPA",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ARPA",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "ARPA",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ARPA",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "1000XEC",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "1000XEC",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "1000XEC",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "C98",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "C98",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "SPELL",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "CTSI",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "BEL",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "MTL",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "MTL",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "KNC",
+    "exchange": "binance-perp"
+  },
+  {
+    "symbol": "CL",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "OKB",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "OKB",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "BZ",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ARB",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ARB",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ARB",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ARB",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "ARB",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "ARB",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "ARB",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "ASTER",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ASTER",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ASTER",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ASTER",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "AAPL",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "AAPL",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AAPL",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ANTHROPIC",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "CAP",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AMD",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AKE",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "AKE",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AKE",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "AERO",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "AERO",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AERO",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "AERO",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "AAOI",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "AAOI",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AAOI",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "AMZN",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "AMZN",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AMZN",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "BEAT",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AVGO",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "AVGO",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AVGO",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "BMNR",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "CC",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "CBRS",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AXTI",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "APR",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "APR",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "APR",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "CHIP",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "BASED",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "BASED",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "DOOD",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "DOOD",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "BONK",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "BTW",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "BE",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "APP",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ACT",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ACT",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ACT",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ACT",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "ALLO",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ALLO",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ALLO",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ALLO",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "ARM",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ARM",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ARM",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "BOME",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "BOME",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "BOME",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "ARX",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ARX",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ARX",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "BLUR",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "BLUR",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "BLUR",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "BSB",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ASML",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ASML",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ASML",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "CASHCAT",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "BICO",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "BIO",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AXIS",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "AXIS",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AXIS",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "AEON",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "AEON",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AEON",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "AEON",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "AUCTION",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "AUCTION",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AUCTION",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "AUCTION",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "ATH",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ATH",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ATH",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ATH",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "0G",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "0G",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "0G",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "BERA",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "2Z",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "2Z",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "2Z",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "2Z",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "A",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "A",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "A",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "A",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "AVNT",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "AVNT",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AVNT",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "AVNT",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "BILL",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AI",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AI",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "AGLD",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "AGLD",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AGLD",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "AGLD",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "AGLD",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "AGLD",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "ASTS",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ASTS",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ASTS",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "BARD",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "BARD",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "AMAT",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "AMAT",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AMAT",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ARKM",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ARKM",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ARKM",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ARKM",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "ANIME",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ANIME",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ANIME",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ANIME",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "BREV",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AIXBT",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "AIXBT",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AIXBT",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "AIXBT",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "CNPY",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ALAB",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ALAB",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ALAB",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "BRKB",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "BSP",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "BABY",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "BABY",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "BBX",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ADBE",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ADBE",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ADBE",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "AEVO",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "AEVO",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AEVO",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "AEVO",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "BLEND",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AEHR",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "AEHR",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AEHR",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "AZTEC",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "BIGTIME",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "BIGTIME",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "BIGTIME",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "BOT",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AT",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "AT",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AT",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "BX",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ACU",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ACU",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ACU",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "BRETT",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "BRETT",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "BRETT",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "APLD",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "APLD",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "APLD",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "CIEN",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ACN",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ACN",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ACN",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "BWET",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "CEG",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "CGNX",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "BAC",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AMC",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "AMC",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AMC",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "AMGN",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "AMGN",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "AMGN",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ABBV",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ABBV",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ABBV",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "BIDU",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ADI",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ADI",
+    "exchange": "okx-perp"
+  },
+  {
+    "symbol": "ADI",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "1000PEPE",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ARIA",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "1000BONK",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "AMDSTOCK",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "APEX",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ALT",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ALT",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ALT",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "AKT",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ARK",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ALCH",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "1000FLOKI",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ARC",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "1000RATS",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "APPSTOCK",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ACE",
+    "exchange": "agg-perp"
+  },
+  {
+    "symbol": "ACE",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ACE",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "ACE",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "4",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "1000CAT",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "1000000MOG",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "AVA",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "AVA",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "AIO",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "1000BTT",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "AWE",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "4STOCK",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "AVAAI",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "1000TAG",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "1000NEIROCTO",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "AIOZ",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "1000TOSHI",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ALPINE",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "AIGENSYN",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "1000TURBO",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "AGI",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "1000000BABYDOGE",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ANET",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ARKK",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "10000SATS",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "10000NEX",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "AGPU",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "AAL",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ASR",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "AKAM",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "AMZU",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ETHBTC",
+    "exchange": "bybit-perp"
+  },
+  {
+    "symbol": "ZRO",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "ZRO",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "KPEPE",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "STRK",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "STRK",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "ONDO",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "ONDO",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "ETHFI",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "PENDLE",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "TIA",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "JUP",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "KBONK",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "POL",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "MNT",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "WIF",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "KSHIB",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "W",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "RENDER",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "RENDER",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "SEI",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "EIGEN",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "PYTH",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "JTO",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "SAGA",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "HMSTR",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "ZK",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "CAKE",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "CAKE",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "KAS",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "REZ",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "GOAT",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "POPCAT",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "ZETA",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "SUPER",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "MERL",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "BSV",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "IO",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "KFLOKI",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "MEME",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "ORDI",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "TURBO",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "MANTA",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "XAI",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "KLUNC",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "DYM",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "NOT",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "YGG",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "UMA",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "BANANA",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "BANANA",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "POLYX",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "GAS",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "TNSR",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "KNEIRO",
+    "exchange": "hyperliquid-perp"
+  },
+  {
+    "symbol": "TUSD",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "USDC",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "USDC",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "USDC",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "ONG",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "TFUEL",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "WIN",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "CVC",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "WBTC",
+    "exchange": "agg-spot"
+  },
+  {
+    "symbol": "WBTC",
+    "exchange": "binance-spot"
+  },
+  {
+    "symbol": "WBTC",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "USDT",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "GEOD",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "PEPE",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "PUMP",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "VVV",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "PAXG",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "LIGHTER",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "BIRB",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "ICNT",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "TRUMP",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "USELESS",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "PROMPT",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "ALIGN",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "ALEO",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "GROVE",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "CLANKER",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "MON",
+    "exchange": "coinbase-spot"
+  },
+  {
+    "symbol": "ARG",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "ASP",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "BABYDOGE",
+    "exchange": "okx-spot"
+  },
+  {
+    "symbol": "WAVES",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "LUNC",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "SHIB",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "FTT",
+    "exchange": "bybit-spot"
+  },
+  {
+    "symbol": "STETH",
+    "exchange": "bybit-spot"
+  }
+]

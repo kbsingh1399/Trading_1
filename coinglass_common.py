@@ -163,17 +163,17 @@ def _publish(path, write):
                 os.fsync(stream.fileno())
         except Exception:
             pass
-        deadline = time.monotonic() + 2.0
-        delay = 0.01
+        deadline = time.monotonic() + 10.0
+        delay = 0.02
         while True:
             try:
                 os.replace(temporary, path)
                 break
-            except PermissionError:
+            except (PermissionError, OSError):
                 if time.monotonic() >= deadline:
                     raise
                 time.sleep(delay)
-                delay = min(delay * 2, 0.25)
+                delay = min(delay * 1.5, 0.35)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -639,7 +639,7 @@ def rotate_warp_ip(context: str = "Collector", reason: str = "SCHEDULED", force:
                 # Stage 2: Resilient Re-Connect (toggle session without registration deletion)
                 logger.info(f"[{context}] [Cloudflare WARP] Performing Non-Destructive Connection Reset...")
                 subprocess.run([str(WARP_CLI), "disconnect"], capture_output=True, text=True, timeout=8)
-                time.sleep(1.0)
+                time.sleep(2.5)
                 subprocess.run([str(WARP_CLI), "connect"], capture_output=True, text=True, timeout=8)
 
                 ensure_delta_split_tunnel_exclusions()

@@ -717,6 +717,30 @@ class CushionKellySizer:
             "reason": "OK"
         }
 
+def _parse_usd(v) -> float:
+    if v is None or pd.isna(v):
+        return 0.0
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = str(v).replace('$', '').replace(',', '').strip().upper()
+    if not s:
+        return 0.0
+    mult = 1.0
+    if s.endswith('K'):
+        mult = 1e3
+        s = s[:-1]
+    elif s.endswith('M'):
+        mult = 1e6
+        s = s[:-1]
+    elif s.endswith('B'):
+        mult = 1e9
+        s = s[:-1]
+    try:
+        return float(s) * mult
+    except Exception:
+        return 0.0
+
+
 class MultiPillarTradeEvaluator:
     @classmethod
     def load_candle_context(cls, symbol: str) -> Dict[str, Any]:
@@ -801,11 +825,23 @@ class MultiPillarTradeEvaluator:
             if df.empty:
                 return {"defending_bid": None, "defending_ask": None, "bid_wall_usd": 0.0, "ask_wall_usd": 0.0}
 
+            # Robust column normalization across 8-column display and legacy quant formats
+            if "side" not in df.columns and "Venue/Side" in df.columns:
+                df["side"] = df["Venue/Side"].astype(str).apply(lambda v: "bid" if "bid" in v.lower() else "ask")
+            if "raw_price" in df.columns:
+                df["price"] = df["raw_price"].astype(float)
+            elif "Price" in df.columns and ("price" not in df.columns or df["price"].dtype == object):
+                df["price"] = df["Price"].astype(str).str.replace("$", "", regex=False).str.replace(",", "", regex=False).str.strip().apply(safe_float)
+            if "raw_remaining_usd" in df.columns:
+                df["remaining_usd"] = df["raw_remaining_usd"].astype(float)
+            elif "Remaining_USD" in df.columns and ("remaining_usd" not in df.columns or df["remaining_usd"].dtype == object):
+                df["remaining_usd"] = df["Remaining_USD"].apply(_parse_usd)
+
             # Filter for orders with decay_weight >= 0.25 (fresh within ~45 min)
             if "decay_weight" in df.columns:
                 df = df[df["decay_weight"] >= 0.25]
 
-            bids = df[df["side"].str.lower() == "bid"].copy()
+            bids = df[df["side"].astype(str).str.lower() == "bid"].copy()
             asks = df[df["side"].str.lower() == "ask"].copy()
 
             # Defending bid: order below current price within 0.1% to 2.5%
