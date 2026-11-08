@@ -787,8 +787,61 @@ class MultiPillarTradeEvaluator:
 
     @classmethod
     def load_auction_context(cls, symbol: str) -> Dict[str, Any]:
-        """Loads latest auction levels from Database/Auction_Levels/<SYM>_auction_levels.parquet."""
-        p = AUCTION_DIR / f"{symbol.upper()}_auction_levels.parquet"
+        """Loads auction profile context from Auction_Levels or fresh Footprint_Dumps."""
+        sym = symbol.upper()
+        p = AUCTION_DIR / f"{sym}_auction_levels.parquet"
+        fp_path = DB_DIR / "Footprint_Dumps" / f"{sym}_15Min_time_footprint.parquet"
+        
+        # Prefer fresh Footprint_Dumps if Auction_Levels is missing or older
+        use_fp = False
+        if fp_path.exists():
+            if not p.exists():
+                use_fp = True
+            else:
+                try:
+                    if fp_path.stat().st_mtime > p.stat().st_mtime + 3600:
+                        use_fp = True
+                except Exception:
+                    pass
+
+        if use_fp:
+            try:
+                df_fp = pd.read_parquet(fp_path)
+                if not df_fp.empty:
+                    last_row = df_fp.iloc[-1].to_dict()
+                    close_p = safe_float(last_row.get("Close"), 0.0)
+                    vwap_p = safe_float(last_row.get("Candle_Vwap_Price"), close_p)
+                    poc_p = safe_float(last_row.get("Candle_POC"), close_p)
+                    vah_p = safe_float(last_row.get("Candle_VAH"), close_p)
+                    val_p = safe_float(last_row.get("Candle_VAL"), close_p)
+                    delta_p = safe_float(last_row.get("Candle_Delta"), 0.0)
+                    
+                    price_vs_vwap = "ABOVE_VWAP" if close_p >= vwap_p else "BELOW_VWAP"
+                    if close_p > vah_p:
+                        val_stat = "ABOVE_VALUE"
+                    elif close_p < val_p:
+                        val_stat = "BELOW_VALUE"
+                    else:
+                        val_stat = "INSIDE_VALUE"
+                    mtf = "BULLISH" if delta_p > 0 else "BEARISH"
+
+                    return {
+                        "day_val": val_p,
+                        "day_vah": vah_p,
+                        "day_poc": poc_p,
+                        "day_vwap": vwap_p,
+                        "value_status": val_stat,
+                        "price_vs_vwap": price_vs_vwap,
+                        "mtf_bias": mtf,
+                        "htf_1h_trend": mtf,
+                        "htf_4h_trend": "UNKNOWN",
+                        "nearest_whale_bid": None,
+                        "nearest_whale_ask": None,
+                        "updated_at_utc": str(last_row.get("Time") or ""),
+                    }
+            except Exception as e:
+                logger.debug(f"[{symbol}] Failed reading footprint auction levels: {e}")
+
         if not p.exists():
             return {}
         try:
@@ -813,11 +866,13 @@ class MultiPillarTradeEvaluator:
         except Exception as e:
             logger.debug(f"[{symbol}] Failed reading auction levels: {e}")
             return {}
-
     @classmethod
     def load_whale_context(cls, symbol: str, current_price: float) -> Dict[str, Any]:
         """Loads active open whale orders and identifies defending bid/ask walls."""
-        p = WHALE_DIR / f"{symbol.upper()}_whale_open_orders.parquet"
+        sym = symbol.upper()
+        p = WHALE_DIR / f"{sym}_whale_open_orders.parquet"
+        if not p.exists():
+            p = DB_DIR / "Whale_Dumps" / f"{sym}_whale_open_orders.parquet"
         if not p.exists() or current_price <= 0:
             return {"defending_bid": None, "defending_ask": None, "bid_wall_usd": 0.0, "ask_wall_usd": 0.0}
         try:
@@ -884,8 +939,14 @@ class MultiPillarTradeEvaluator:
 
     @classmethod
     def load_magnet_context(cls, symbol: str, current_price: float) -> Dict[str, Any]:
-        """Loads nearest liquidation magnet zones from Database/Liquidation_Data/Magnet_Zones/<SYM>_magnet_zones.parquet."""
-        p = MAGNET_DIR / f"{symbol.upper()}_magnet_zones.parquet"
+        """Loads nearest liquidation magnet zones from Liquidation_Level_Dumps or legacy Liquidation_Data."""
+        sym = symbol.upper()
+        # Primary: Standalone API multi-horizon MagnetZones
+        p = DB_DIR / "Liquidation_Level_Dumps" / sym / f"3D_{sym}_MagnetZones.parquet"
+        if not p.exists():
+            p = DB_DIR / "Liquidation_Level_Dumps" / sym / f"7D_{sym}_MagnetZones.parquet"
+        if not p.exists():
+            p = MAGNET_DIR / f"{sym}_magnet_zones.parquet"
         if not p.exists() or current_price <= 0:
             return {"long_magnet": None, "short_magnet": None}
         try:
@@ -893,13 +954,37 @@ class MultiPillarTradeEvaluator:
             if df.empty:
                 return {"long_magnet": None, "short_magnet": None}
 
-            # side: SHORT = short liquidation cluster (above price, magnet for longs)
-            # side: LONG = long liquidation cluster (below price, magnet for shorts)
-            shorts = df[df["side"].str.upper() == "SHORT"]
-            longs = df[df["side"].str.upper() == "LONG"]
+            # Normalize columns from standalone 3D_<SYM>_MagnetZones schema
+            if "Side" in df.columns:
+                df["side"] = df["Side"].astype(str).str.upper()
+            if "zone_price" not in df.columns:
+                if "Price_Low" in df.columns and "Price_High" in df.columns:
+                    p_low = pd.to_numeric(df["Price_Low"], errors="coerce").fillna(0.0)
+                    p_high = pd.to_numeric(df["Price_High"], errors="coerce").fillna(0.0)
+                    df["zone_price"] = (p_low + p_high) / 2.0
+                else:
+                    df["zone_price"] = 0.0
 
-            target_short_liq = None  # Upside target for LONG trade
-            if not shorts.empty:
+            # Robust fallback for zero zone_price parsing Price_Range strings
+            if (df["zone_price"] == 0.0).any() and "Price_Range" in df.columns:
+                def _parse_pr_center(val):
+                    if not val or pd.isna(val) or str(val).lower() == "none":
+                        return 0.0
+                    subparts = re.findall(r'[\d.]+[KMB]?', str(val).replace("$", "").replace(",", ""))
+                    parsed_nums = [_parse_usd(p) for p in subparts if _parse_usd(p) > 0]
+                    return sum(parsed_nums) / len(parsed_nums) if parsed_nums else 0.0
+                zero_mask = df["zone_price"] == 0.0
+                df.loc[zero_mask, "zone_price"] = df.loc[zero_mask, "Price_Range"].apply(_parse_pr_center)
+            if "score" not in df.columns and "Strength" in df.columns:
+                df["score"] = pd.to_numeric(df["Strength"], errors="coerce").fillna(1.0)
+            if "distance_pct" not in df.columns and "Distance" in df.columns:
+                df["distance_pct"] = df["Distance"].astype(str).str.replace("%", "", regex=False).str.replace("+", "", regex=False).str.replace("-", "", regex=False).apply(safe_float)
+
+            shorts = df[df["side"].str.upper().str.contains("SHORT|ABOVE")]
+            longs = df[df["side"].str.upper().str.contains("LONG|BELOW")]
+
+            target_short_liq = None
+            if not shorts.empty and "score" in shorts.columns:
                 s_sorted = shorts.sort_values(by="score", ascending=False).iloc[0]
                 target_short_liq = {
                     "price": safe_float(s_sorted.get("zone_price")),
@@ -907,8 +992,8 @@ class MultiPillarTradeEvaluator:
                     "dist_pct": safe_float(s_sorted.get("distance_pct")),
                 }
 
-            target_long_liq = None  # Downside target for SHORT trade
-            if not longs.empty:
+            target_long_liq = None
+            if not longs.empty and "score" in longs.columns:
                 l_sorted = longs.sort_values(by="score", ascending=False).iloc[0]
                 target_long_liq = {
                     "price": safe_float(l_sorted.get("zone_price")),
@@ -917,33 +1002,62 @@ class MultiPillarTradeEvaluator:
                 }
 
             return {
-                "short_magnet": target_short_liq,  # target above
-                "long_magnet": target_long_liq,    # target below
+                "short_magnet": target_short_liq,
+                "long_magnet": target_long_liq,
             }
         except Exception as e:
             logger.debug(f"[{symbol}] Failed reading magnet zones: {e}")
             return {"long_magnet": None, "short_magnet": None}
-
     @classmethod
     def load_tv_liquidation_context(cls, symbol: str) -> Dict[str, Any]:
-        """Loads latest 15m liquidation spikes from Database/Live_Liquidations/<SYM>_tv_liquidations.parquet."""
-        p = TV_LIQ_DIR / f"{symbol.upper()}_tv_liquidations.parquet"
+        """Loads latest liquidation spikes from Live_Liquidations/<SYM>_Live_Liquidation.parquet or tv_liquidations.parquet."""
+        sym = symbol.upper()
+        p = TV_LIQ_DIR / f"{sym}_Live_Liquidation.parquet"
+        if not p.exists():
+            p = DB_DIR / "Live_Liquidation_Dump" / f"{sym}_Live_Liquidation.parquet"
+        if not p.exists():
+            p = TV_LIQ_DIR / f"{sym}_tv_liquidations.parquet"
         if not p.exists():
             return {}
         try:
             df = pd.read_parquet(p)
             if df.empty:
                 return {}
+            
+            # Map columns across 5m Live_Liquidation and legacy tv_liquidations format
+            long_col = "Long_Liquidation" if "Long_Liquidation" in df.columns else "long_liq_usd"
+            short_col = "Short_Liquidation" if "Short_Liquidation" in df.columns else "short_liq_usd"
+            if long_col not in df.columns or short_col not in df.columns:
+                return {}
+
             last_row = df.iloc[-1].to_dict()
-            recent_4 = df.tail(4)
-            recent_long_liq = float(recent_4["long_liq_usd"].sum())
-            recent_short_liq = float(recent_4["short_liq_usd"].sum())
-            is_spike = bool(last_row.get("is_spike", False))
-            reversal_bias = str(last_row.get("reversal_bias") or "NEUTRAL")
+            latest_long = safe_float(last_row.get(long_col), 0.0)
+            latest_short = safe_float(last_row.get(short_col), 0.0)
+            
+            # 1-hour window: 12 bars for 5m, 4 bars for 15m
+            window_size = 12 if "Candle_Type" in df.columns and "5" in str(df.iloc[-1].get("Candle_Type", "")) else 4
+            recent = df.tail(window_size)
+            recent_long_liq = float(pd.to_numeric(recent[long_col], errors="coerce").fillna(0.0).sum())
+            recent_short_liq = float(pd.to_numeric(recent[short_col], errors="coerce").fillna(0.0).sum())
+
+            # Evaluate spike and reversal exhaustion
+            if "is_spike" in last_row:
+                is_spike = bool(last_row.get("is_spike", False))
+                reversal_bias = str(last_row.get("reversal_bias") or "NEUTRAL")
+            else:
+                rolling_avg = (recent_long_liq + recent_short_liq) / max(1, len(recent))
+                latest_total = latest_long + latest_short
+                is_spike = latest_total > max(150000.0, rolling_avg * 2.0)
+                if recent_long_liq > 2.0 * max(1000.0, recent_short_liq) and recent_long_liq > 80000.0:
+                    reversal_bias = "BULLISH_EXHAUSTION"
+                elif recent_short_liq > 2.0 * max(1000.0, recent_long_liq) and recent_short_liq > 80000.0:
+                    reversal_bias = "BEARISH_EXHAUSTION"
+                else:
+                    reversal_bias = "NEUTRAL"
 
             return {
-                "latest_long_liq": safe_float(last_row.get("long_liq_usd"), 0.0),
-                "latest_short_liq": safe_float(last_row.get("short_liq_usd"), 0.0),
+                "latest_long_liq": latest_long,
+                "latest_short_liq": latest_short,
                 "recent_long_liq_1h": safe_float(recent_long_liq, 0.0),
                 "recent_short_liq_1h": safe_float(recent_short_liq, 0.0),
                 "is_spike": is_spike,
@@ -952,7 +1066,6 @@ class MultiPillarTradeEvaluator:
         except Exception as e:
             logger.debug(f"[{symbol}] Failed reading TV liquidations: {e}")
             return {}
-
     @classmethod
     def load_oi_funding_context(cls, symbol: str) -> dict:
         """Pillar 6: Loads Open Interest and Predicted Funding Rate telemetry."""

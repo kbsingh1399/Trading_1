@@ -104,7 +104,7 @@ DEFAULT_ASSET_SPECS = {
     "PAXG": {"ex": "Binance", "instId": "PAXGUSDT", "name": "6:PAXG:USDT:1", "prec": 2, "tick": 0.01, "coin": "PAX Gold", "ticks": ["0.01", "0.1", "1", "10", "100"]},
     "XAUT": {"ex": "Bybit", "instId": "XAUTUSDT", "name": "1:XAUT:USDT:1", "prec": 2, "tick": 0.01, "coin": "Tether Gold", "ticks": ["0.01", "0.1", "1", "10", "100"]},
     "XAU": {"ex": "Binance", "instId": "PAXGUSDT", "name": "6:PAXG:USDT:1", "prec": 2, "tick": 0.01, "coin": "PAX Gold", "ticks": ["0.01", "0.1", "1", "10", "100"]},
-    "XAG": {"ex": "Bybit", "instId": "XAGUSD", "name": "1:XAG:USD:1", "prec": 3, "tick": 0.001, "coin": "Silver", "ticks": ["0.001", "0.01", "0.1", "1", "10"]}
+    "XAG": {"ex": "Binance", "instId": "XAGUSDT", "name": "6:XAG:USDT:1", "prec": 3, "tick": 0.001, "coin": "Silver", "ticks": ["0.001", "0.01", "0.1", "1", "10"]}
 }
 
 
@@ -350,6 +350,7 @@ class LegendLiquidationHarvester:
             (() => {{
                 const inst = window.__chartInstance;
                 if (!inst || !inst.indicatorDatas) return null;
+                if (inst.state && inst.state.symbol && !inst.state.symbol.toUpperCase().includes('{asset.upper()}')) return null;
                 const keys = Object.keys(inst.indicatorDatas);
                 const liqKey = keys.find(k => k.includes('aggregated_liq_kline') && (k.toUpperCase().includes('{asset.upper()}') || k.toUpperCase().includes('{target_token}')));
                 if (!liqKey) return null;
@@ -379,9 +380,9 @@ class LegendLiquidationHarvester:
             time_str = dt_ist.strftime("%Y-%m-%d %H:%M:%S")
             # CoinGlass Legend aggregated_liq_kline schema:
             # item["high"] -> Long Liquidation (Yellow bar, positive / above 0)
-            # item["open"] -> Short Liquidation (Red bar, negative / below 0)
+            # item["open"] -> Short Liquidation (Red bar, negative in CoinGlass chart, normalized to positive USD volume)
             long_liq = float(item.get("high") or 0.0)
-            short_liq = float(item.get("open") or 0.0)
+            short_liq = abs(float(item.get("open") or 0.0))
             rows.append({
                 "Candle_Type": "5_Minute",
                 "Time": time_str,
@@ -406,6 +407,7 @@ class LegendLiquidationHarvester:
                 combined.drop_duplicates(subset=["Time"], keep="last", inplace=True)
                 combined.sort_values(by=["Time"], ascending=True, inplace=True)
                 combined.reset_index(drop=True, inplace=True)
+                combined["Short_Liquidation"] = combined["Short_Liquidation"].abs()
                 final_df = combined
             except Exception as e:
                 logger.warning(f"Error reading existing parquet for {asset}: {e}. Overwriting.")

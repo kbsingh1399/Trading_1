@@ -762,9 +762,13 @@ class FootprintDumpAdapter:
                         df_existing = df_existing[EXCEL_SPEC_COLUMNS]
                         if not df_existing.empty:
                             combined = pd.concat([df_existing, df], ignore_index=True)
-                            # Deduplicate preserving concurrent bars in same second
-                            keys = [c for c in EXCEL_SPEC_COLUMNS if c not in {"Candle_CVD", "Candle_Signal"}]
-                            df = combined.drop_duplicates(subset=keys, keep="last").sort_values(by="Time", kind="stable").reset_index(drop=True)
+                            # Deduplicate: time bars key strictly on Time to update forming candles cleanly;
+                            # range/volume bars key on OHLC boundaries to allow concurrent closes.
+                            if "time" in file_label.lower():
+                                dedup_subset = ["Time"]
+                            else:
+                                dedup_subset = ["Time", "Open", "High", "Low", "Close"]
+                            df = combined.drop_duplicates(subset=dedup_subset, keep="last").sort_values(by="Time", kind="stable").reset_index(drop=True)
                             df["Candle_CVD"] = df["Candle_Delta"].cumsum()
                             logger.info(f"🔄 Deduplicated merge for {parquet_path.name}: {len(df_existing)} -> {len(df)} rows")
                     except Exception as me:

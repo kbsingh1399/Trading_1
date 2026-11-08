@@ -224,7 +224,7 @@ async def harvest_whale_chunk(symbols: List[str], chunk_idx: int, rate_signals: 
                     dataset = await adapter.extract_on_ws(ws, sym)
                     display_only = sym.upper() not in equity
                     await asyncio.to_thread(display_repo.persist_dataset, dataset, display_only)
-                    await asyncio.to_thread(quant_repo.persist_dataset, dataset, display_only)
+                    await asyncio.to_thread(quant_repo.persist_dataset, dataset, False)
                     count += 1
                 except Exception as exc:
                     text = str(exc)

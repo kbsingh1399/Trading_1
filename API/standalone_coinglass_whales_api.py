@@ -61,7 +61,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 try:
-    from coinglass_common import writer_lock, atomic_parquet, verify_parquet, cdp_eval, bot_tab_url, is_process_bot_tab
+    from coinglass_common import writer_lock, atomic_parquet, verify_parquet, cdp_eval, bot_tab_url, is_process_bot_tab, calculate_wall_decay_weight
 except ImportError:
     writer_lock = None
     atomic_parquet = None
@@ -154,7 +154,9 @@ WHALE_EXTRACTION_JS = r"""(async (targetSymbol) => {
         await new Promise(r => setTimeout(r, 200));
     }
     const parseUsd = s => {
-        const m = String(s || '').replace(/[$,\s]/g,'').match(/^(-?\d+(?:\.\d+)?)([KMB])?$/i);
+        const str = String(s || '').trim();
+        if (str === '-' || str === '--' || str === '') return 0.0;
+        const m = str.replace(/[$,\s]/g,'').match(/^(-?\d+(?:\.\d+)?)([KMB])?$/i);
         return m ? Number(m[1]) * ({K:1e3,M:1e6,B:1e9}[m[2]?.toUpperCase()] || 1) : null;
     };
     const usd = v => {
@@ -250,8 +252,24 @@ AUXILIARY_QUANT_COLUMNS = [
     "exchange",
     "time_ms",
     "snapshot_time_utc",
-    "snapshot_time_ist"
+    "snapshot_time_ist",
+    "decay_weight"
 ]
+
+def parse_duration_seconds(dur_str: Optional[str]) -> float:
+    if not dur_str:
+        return 0.0
+    s = str(dur_str).strip()
+    total = 0.0
+    d_m = re.search(r'(\d+)\s*d', s)
+    if d_m: total += float(d_m.group(1)) * 86400
+    h_m = re.search(r'(\d+)\s*h', s)
+    if h_m: total += float(h_m.group(1)) * 3600
+    m_m = re.search(r'(\d+)\s*m(?!o)', s)
+    if m_m: total += float(m_m.group(1)) * 60
+    s_m = re.search(r'(\d+)\s*s', s)
+    if s_m: total += float(s_m.group(1))
+    return total
 
 # Strict Authorized MT5 whitelist
 AUTHORIZED_MT5_WHITELIST = {
@@ -346,6 +364,7 @@ class WhaleOrder:
     time_ms: int = 0
     snapshot_time_utc: str = ""
     snapshot_time_ist: str = ""
+    decay_weight: float = 1.0
 
     def to_display_dict(self) -> Dict[str, Any]:
         """Returns exact 8-column dictionary matching user's Excel format."""
@@ -372,7 +391,8 @@ class WhaleOrder:
             "exchange": self.exchange,
             "time_ms": self.time_ms,
             "snapshot_time_utc": self.snapshot_time_utc,
-            "snapshot_time_ist": self.snapshot_time_ist
+            "snapshot_time_ist": self.snapshot_time_ist,
+            "decay_weight": self.decay_weight
         })
         return d
 
@@ -508,16 +528,26 @@ class CDPWhaleAdapter:
             raise RuntimeError(f"Whale extraction rejected: {val}")
         now_utc = datetime.now(timezone.utc)
         orders = []
+        now_ms = int(now_utc.timestamp() * 1000)
         for item in val["orders"]:
+            dur_str = item.get("duration", "")
+            start_ms = int(item.get("start_time_ms") or 0)
+            if start_ms > 0:
+                age_secs = max(0.0, (now_ms - start_ms) / 1000.0)
+            else:
+                age_secs = parse_duration_seconds(dur_str)
+            decay_w = calculate_wall_decay_weight(age_secs) if calculate_wall_decay_weight else 1.0
+
             orders.append(WhaleOrder(
                 venue_side=item["venue_side"], price=item["price"], from_price=item["from_price"],
                 initial_usd=item["initial_usd"], remaining_usd=item["remaining_usd"], filled_usd=item["filled_usd"],
                 duration=item["duration"], status=item["status"], raw_price=float(item["raw_price"]),
                 raw_initial_usd=float(item["raw_initial_usd"]), raw_remaining_usd=float(item["raw_remaining_usd"]),
-                raw_filled_usd=float(item["raw_filled_usd"]), start_time_ms=int(item.get("start_time_ms") or 0),
+                raw_filled_usd=float(item["raw_filled_usd"]), start_time_ms=start_ms,
                 order_id=str(item.get("order_id") or ""), exchange=item.get("exchange", ""), side=item["side"],
-                time_ms=int(now_utc.timestamp()*1000), snapshot_time_utc=now_utc.isoformat(),
-                snapshot_time_ist=(now_utc+timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d %H:%M:%S IST")))
+                time_ms=now_ms, snapshot_time_utc=now_utc.isoformat(),
+                snapshot_time_ist=(now_utc+timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d %H:%M:%S IST"),
+                decay_weight=decay_w))
         asks = [o for o in orders if o.side == "ask"]
         bids = [o for o in orders if o.side == "bid"]
         return WhaleDataset(symbol.upper(), float(val.get("mark_price") or 0), now_utc.isoformat(),
@@ -566,10 +596,26 @@ class ParquetWhaleRepository:
             raise ValueError(f"[{symbol}] Empty whale snapshot rejected; disk preserved")
         with writer_lock(out_file):
             if out_file.exists():
-                verify_parquet(out_file, columns)
+                verify_parquet(out_file)
             atomic_parquet(df, out_file)
             verify_parquet(out_file, columns)
         logger.info("[%s] Persisted and read back %s orders", symbol, len(df))
+
+        # Mirror write to Open_Orders for quant trading models when writing to Whale_Dumps
+        try:
+            if self.output_dir.resolve() == DUMP_DIR.resolve():
+                mirror_dir = ROOT_DIR / "Database" / "Whale_Orders" / "Open_Orders"
+                mirror_dir.mkdir(parents=True, exist_ok=True)
+                mirror_file = mirror_dir / f"{symbol}_whale_open_orders.parquet"
+                df_quant = dataset.to_dataframe(display_only=False)
+                with writer_lock(mirror_file):
+                    if mirror_file.exists():
+                        verify_parquet(mirror_file)
+                    atomic_parquet(df_quant, mirror_file)
+                    verify_parquet(mirror_file, EXCEL_SPEC_COLUMNS + AUXILIARY_QUANT_COLUMNS)
+        except Exception as me:
+            logger.debug("[%s] Optional Open_Orders mirror update: %s", symbol, me)
+
         return out_file
 
     def read_dataset(self, symbol: str) -> Optional[pd.DataFrame]:

@@ -254,19 +254,21 @@ EXTRACTION_JS = r"""(async () => {
                     continue;
                 }
                 if (cur) {
-                    if (!cur.Price_Range && ((l.includes('−') && !l.includes('%')) || (l.includes('-') && !l.includes('%')))) {
-                        const parts = l.split(/[−-]/).map(p => parseFloat(p.replace(/[$,]/g, ''))).filter(p => !isNaN(p));
-                        cur.Price_Range = l;
-                        cur.Price_Low = parts[0] || 0.0;
-                        cur.Price_High = parts[1] || parts[0] || 0.0;
-                        continue;
+                    if (!cur.Price_Range && (/[−–—\-]/.test(l) && !l.includes('%'))) {
+                        const parts = l.split(/[−–—\-]/).map(p => numeric(p.trim())).filter(p => p !== null && !isNaN(p));
+                        if (parts.length > 0) {
+                            cur.Price_Range = l;
+                            cur.Price_Low = parts[0] || 0.0;
+                            cur.Price_High = parts[1] || parts[0] || 0.0;
+                            continue;
+                        }
                     }
                     if (cur.Price_Range && !cur.Strength && numeric(l) !== null && numeric(l) >= 0) {
                         cur.Strength = numeric(l);
                         continue;
                     }
-                    if (l.startsWith('+') || l.startsWith('-') || l.startsWith('−')) {
-                        cur.Distance = l.replace(/[−–]/g, '-');
+                    if (l.startsWith('+') || l.startsWith('-') || l.startsWith('−') || l.startsWith('–') || l.startsWith('—')) {
+                        cur.Distance = l.replace(/[−–—]/g, '-');
                         continue;
                     }
                     if (l.toLowerCase().includes('width')) {
