@@ -1,0 +1,653 @@
+/home/user/api-audit-venv/lib/python3.11/site-packages/pytest_asyncio/plugin.py:300: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the "fixture" caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to "function" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+FFFFFFFFF.FFFF.FFFFFFFFFF                                                [100%]
+=================================== FAILURES ===================================
+_______________ test_whale_zero_threshold_keeps_midcap_and_zero ________________
+
+    def test_whale_zero_threshold_keeps_midcap_and_zero():
+>       out=run("whale",whales.WHALE_EXTRACTION_JS)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'standalone_coinglass_whales_api' has no attribute 'WHALE_EXTRACTION_JS'
+
+tests/api_pipeline_audits/test_js_contracts.py:16: AttributeError
+_______________________ test_whale_empty_is_not_success ________________________
+
+    def test_whale_empty_is_not_success():
+>       r=run("whale",whales.WHALE_EXTRACTION_JS,"empty")["result"]
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'standalone_coinglass_whales_api' has no attribute 'WHALE_EXTRACTION_JS'
+
+tests/api_pipeline_audits/test_js_contracts.py:23: AttributeError
+____________________ test_whale_dom_suffix_and_partial_flag ____________________
+
+    def test_whale_dom_suffix_and_partial_flag():
+>       r=run("whale",whales.WHALE_EXTRACTION_JS,"dom")["result"]
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'standalone_coinglass_whales_api' has no attribute 'WHALE_EXTRACTION_JS'
+
+tests/api_pipeline_audits/test_js_contracts.py:27: AttributeError
+________________ test_liq_decimal_suffixes_filters_and_horizons ________________
+
+    def test_liq_decimal_suffixes_filters_and_horizons():
+        r=run("liq",liq.EXTRACTION_JS)["result"]
+        assert not r["isRateLimited"] and set(r["allData"])=={"3D","7D","30D"}
+        d=r["allData"]["3D"]
+>       assert d["horizon"]=="3D" and len(d["keyLevels"])==2
+               ^^^^^^^^^^^^
+E       KeyError: 'horizon'
+
+tests/api_pipeline_audits/test_js_contracts.py:35: KeyError
+_____________________ test_liq_unverified_horizon_rejected _____________________
+
+    def test_liq_unverified_horizon_rejected():
+        r=run("liq",liq.EXTRACTION_JS,"unverified")["result"]
+>       assert r["error"].startswith("horizon selection unverified") and r["allData"]=={}
+               ^^^^^^^^^^
+E       KeyError: 'error'
+
+tests/api_pipeline_audits/test_js_contracts.py:44: KeyError
+________________ test_footprint_forces_15m_and_computes_profile ________________
+
+    def test_footprint_forces_15m_and_computes_profile():
+        out=run("fp",fp.EXTRACT_MULTI_BAR_FOOTPRINT_JS)
+>       assert out["itv"]=="15m"
+E       AssertionError: assert '5m' == '15m'
+E         
+E         - 15m
+E         ? -
+E         + 5m
+
+tests/api_pipeline_audits/test_js_contracts.py:48: AssertionError
+____________________ test_footprint_stale_loading_rejected _____________________
+
+    def test_footprint_stale_loading_rejected():
+        r=run("fp",fp.EXTRACT_MULTI_BAR_FOOTPRINT_JS,"stale")["result"]
+>       assert "hydration unverified" in r["error"]
+                                         ^^^^^^^^^^
+E       KeyError: 'error'
+
+tests/api_pipeline_audits/test_js_contracts.py:56: KeyError
+_______________________ test_parquet_readback_and_schema _______________________
+
+tmp_path = PosixPath('/tmp/pytest-of-user/pytest-6/test_parquet_readback_and_sche0')
+
+    def test_parquet_readback_and_schema(tmp_path):
+        p = tmp_path / "x.parquet"
+        df = pd.DataFrame({"a": [1, 2], "b": ["x", "y"]})
+        cc.atomic_parquet(df, p)
+>       assert cc.verify_parquet(p, ["a", "b"]) == 2
+               ^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'coinglass_common' has no attribute 'verify_parquet'
+
+tests/api_pipeline_audits/test_storage_config.py:16: AttributeError
+_________________ test_failed_write_and_fsync_preserve_history _________________
+
+tmp_path = PosixPath('/tmp/pytest-of-user/pytest-6/test_failed_write_and_fsync_pr0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fa415f2dad0>
+
+    def test_failed_write_and_fsync_preserve_history(tmp_path, monkeypatch):
+        p = tmp_path / "x.parquet"
+        old = pd.DataFrame({"a": [7]})
+        cc.atomic_parquet(old, p)
+        before = p.read_bytes()
+        def broken(*a, **k):
+            raise OSError("simulated disk failure")
+        monkeypatch.setattr(cc.os, "fsync", broken)
+>       with pytest.raises(OSError):
+E       Failed: DID NOT RAISE OSError
+
+tests/api_pipeline_audits/test_storage_config.py:31: Failed
+_______________ test_manager_fails_closed_and_rejects_injection ________________
+
+tmp_path = PosixPath('/tmp/pytest-of-user/pytest-6/test_manager_fails_closed_and_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fa415f3f590>
+
+    def test_manager_fails_closed_and_rejects_injection(tmp_path, monkeypatch):
+        p = tmp_path / "active.json"
+        monkeypatch.setattr(manager, "ACTIVE_ASSETS_FILE", p)
+        p.write_text("{broken")
+>       with pytest.raises(RuntimeError):
+E       Failed: DID NOT RAISE RuntimeError
+
+tests/api_pipeline_audits/test_storage_config.py:54: Failed
+----------------------------- Captured stdout call -----------------------------
+2026-11-08 11:52:13 [WARNING] [AssetsManager] Error reading /tmp/pytest-of-user/pytest-6/test_manager_fails_closed_and_0/active.json: Expecting property name enclosed in double quotes: line 1 column 2 (char 1). Falling back to capability registry.
+------------------------------ Captured log call -------------------------------
+WARNING  ActiveAssetsManager:active_assets_manager.py:75 Error reading /tmp/pytest-of-user/pytest-6/test_manager_fails_closed_and_0/active.json: Expecting property name enclosed in double quotes: line 1 column 2 (char 1). Falling back to capability registry.
+______________ test_manager_concurrent_mutations_no_lost_updates _______________
+
+tmp_path = PosixPath('/tmp/pytest-of-user/pytest-6/test_manager_concurrent_mutati0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fa4160438d0>
+
+    def test_manager_concurrent_mutations_no_lost_updates(tmp_path, monkeypatch):
+        p = tmp_path / "active.json"
+        monkeypatch.setattr(manager, "ACTIVE_ASSETS_FILE", p)
+        manager.save_active_assets(["BTC"])
+        errors = []
+        def worker(i):
+            try:
+                manager.add_active_asset(f"ASSET{i}")
+            except Exception as exc:
+                errors.append(exc)
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(12)]
+        for t in threads: t.start()
+        for t in threads: t.join()
+>       assert not errors
+E       AssertionError: assert not [FileNotFoundError(2, 'No such file or directory'), FileNotFoundError(2, 'No such file or directory'), FileNotFoundErr...e or directory'), FileNotFoundError(2, 'No such file or directory'), FileNotFoundError(2, 'No such file or directory')]
+
+tests/api_pipeline_audits/test_storage_config.py:79: AssertionError
+----------------------------- Captured stdout call -----------------------------
+2026-11-08 11:52:13 [INFO] [AssetsManager] Successfully saved 1 active assets to /tmp/pytest-of-user/pytest-6/test_manager_concurrent_mutati0/active.json
+2026-11-08 11:52:13 [INFO] [AssetsManager] Successfully saved 2 active assets to /tmp/pytest-of-user/pytest-6/test_manager_concurrent_mutati0/active.json
+2026-11-08 11:52:13 [INFO] [AssetsManager] Added 'ASSET0'. Total active assets: 2.
+2026-11-08 11:52:13 [INFO] [AssetsManager] Successfully saved 2 active assets to /tmp/pytest-of-user/pytest-6/test_manager_concurrent_mutati0/active.json
+2026-11-08 11:52:13 [INFO] [AssetsManager] Added 'ASSET2'. Total active assets: 2.
+2026-11-08 11:52:13 [INFO] [AssetsManager] Successfully saved 2 active assets to /tmp/pytest-of-user/pytest-6/test_manager_concurrent_mutati0/active.json
+2026-11-08 11:52:13 [INFO] [AssetsManager] Added 'ASSET1'. Total active assets: 2.
+2026-11-08 11:52:13 [INFO] [AssetsManager] Successfully saved 3 active assets to /tmp/pytest-of-user/pytest-6/test_manager_concurrent_mutati0/active.json
+2026-11-08 11:52:13 [INFO] [AssetsManager] Added 'ASSET7'. Total active assets: 3.
+2026-11-08 11:52:13 [INFO] [AssetsManager] Successfully saved 3 active assets to /tmp/pytest-of-user/pytest-6/test_manager_concurrent_mutati0/active.json
+2026-11-08 11:52:13 [INFO] [AssetsManager] Added 'ASSET10'. Total active assets: 3.
+2026-11-08 11:52:13 [INFO] [AssetsManager] Successfully saved 4 active assets to /tmp/pytest-of-user/pytest-6/test_manager_concurrent_mutati0/active.json
+2026-11-08 11:52:13 [INFO] [AssetsManager] Added 'ASSET9'. Total active assets: 4.
+2026-11-08 11:52:13 [WARNING] [AssetsManager] Error reading /tmp/pytest-of-user/pytest-6/test_manager_concurrent_mutati0/active.json: Extra data: line 15 column 2 (char 338). Falling back to capability registry.
+2026-11-08 11:52:13 [INFO] [AssetsManager] Successfully saved 122 active assets to /tmp/pytest-of-user/pytest-6/test_manager_concurrent_mutati0/active.json
+2026-11-08 11:52:13 [INFO] [AssetsManager] Added 'ASSET11'. Total active assets: 122.
+------------------------------ Captured log call -------------------------------
+INFO     ActiveAssetsManager:active_assets_manager.py:122 Successfully saved 1 active assets to /tmp/pytest-of-user/pytest-6/test_manager_concurrent_mutati0/active.json
+INFO     ActiveAssetsManager:active_assets_manager.py:122 Successfully saved 2 active assets to /tmp/pytest-of-user/pytest-6/test_manager_concurrent_mutati0/active.json
+INFO     ActiveAssetsManager:active_assets_manager.py:134 Added 'ASSET0'. Total active assets: 2.
+INFO     ActiveAssetsManager:active_assets_manager.py:122 Successfully saved 2 active assets to /tmp/pytest-of-user/pytest-6/test_manager_concurrent_mutati0/active.json
+INFO     ActiveAssetsManager:active_assets_manager.py:134 Added 'ASSET2'. Total active assets: 2.
+INFO     ActiveAssetsManager:active_assets_manager.py:122 Successfully saved 2 active assets to /tmp/pytest-of-user/pytest-6/test_manager_concurrent_mutati0/active.json
+INFO     ActiveAssetsManager:active_assets_manager.py:134 Added 'ASSET1'. Total active assets: 2.
+INFO     ActiveAssetsManager:active_assets_manager.py:122 Successfully saved 3 active assets to /tmp/pytest-of-user/pytest-6/test_manager_concurrent_mutati0/active.json
+INFO     ActiveAssetsManager:active_assets_manager.py:134 Added 'ASSET7'. Total active assets: 3.
+INFO     ActiveAssetsManager:active_assets_manager.py:122 Successfully saved 3 active assets to /tmp/pytest-of-user/pytest-6/test_manager_concurrent_mutati0/active.json
+INFO     ActiveAssetsManager:active_assets_manager.py:134 Added 'ASSET10'. Total active assets: 3.
+INFO     ActiveAssetsManager:active_assets_manager.py:122 Successfully saved 4 active assets to /tmp/pytest-of-user/pytest-6/test_manager_concurrent_mutati0/active.json
+INFO     ActiveAssetsManager:active_assets_manager.py:134 Added 'ASSET9'. Total active assets: 4.
+WARNING  ActiveAssetsManager:active_assets_manager.py:75 Error reading /tmp/pytest-of-user/pytest-6/test_manager_concurrent_mutati0/active.json: Extra data: line 15 column 2 (char 338). Falling back to capability registry.
+INFO     ActiveAssetsManager:active_assets_manager.py:122 Successfully saved 122 active assets to /tmp/pytest-of-user/pytest-6/test_manager_concurrent_mutati0/active.json
+INFO     ActiveAssetsManager:active_assets_manager.py:134 Added 'ASSET11'. Total active assets: 122.
+___________________ test_whale_empty_and_corrupt_never_erase ___________________
+
+tmp_path = PosixPath('/tmp/pytest-of-user/pytest-6/test_whale_empty_and_corrupt_n0')
+
+    def test_whale_empty_and_corrupt_never_erase(tmp_path):
+        repo = whales.ParquetWhaleRepository(tmp_path)
+        p = repo.persist_dataset(whale_dataset())
+        before = p.read_bytes()
+>       with pytest.raises(ValueError): repo.persist_dataset(whale_dataset(0))
+E       Failed: DID NOT RAISE ValueError
+
+tests/api_pipeline_audits/test_storage_config.py:95: Failed
+------------------------------ Captured log call -------------------------------
+WARNING  StandaloneWhaleAPI:standalone_coinglass_whales_api.py:788 [BTC] Extracted 0 orders; strictly preserving existing 1 orders on disk.
+___________________ test_liq_15_files_and_empty_preservation ___________________
+
+tmp_path = PosixPath('/tmp/pytest-of-user/pytest-6/test_liq_15_files_and_empty_pr0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fa4160ed690>
+
+    def test_liq_15_files_and_empty_preservation(tmp_path, monkeypatch):
+        monkeypatch.setattr(liq, "LIQ_DUMP_DIR", tmp_path)
+>       assert liq.persist_asset_liquidation("BTC", liq_payload()) == 15
+                                                    ^^^^^^^^^^^^^
+
+tests/api_pipeline_audits/test_storage_config.py:115: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+    def liq_payload():
+        out = {}
+        for tf in ("3D", "7D", "30D"):
+            data = {"horizon": tf}
+>           for structure, (columns, key) in liq.STRUCTURE_SCHEMAS.items():
+                                             ^^^^^^^^^^^^^^^^^^^^^
+E           AttributeError: module 'standalone_coinglass_liquidation_levels_api' has no attribute 'STRUCTURE_SCHEMAS'
+
+tests/api_pipeline_audits/test_storage_config.py:106: AttributeError
+___________________ test_scheduled_rotation_never_calls_cli ____________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fa4160c5210>
+
+    def test_scheduled_rotation_never_calls_cli(monkeypatch):
+>       monkeypatch.setattr(cc, "_warp_command", lambda *a, **k: pytest.fail("CLI called"))
+E       AttributeError: <module 'coinglass_common' from '/home/user/api-audit-baseline/coinglass_common.py'> has no attribute '_warp_command'
+
+tests/api_pipeline_audits/test_warp_cdp.py:10: AttributeError
+___________________ test_reactive_full_registration_sequence ___________________
+
+tmp_path = PosixPath('/tmp/pytest-of-user/pytest-6/test_reactive_full_registratio0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fa4160ed4d0>
+
+    def test_reactive_full_registration_sequence(tmp_path, monkeypatch):
+>       calls = warp_fixture(tmp_path, monkeypatch)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/api_pipeline_audits/test_warp_cdp.py:35: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+tmp_path = PosixPath('/tmp/pytest-of-user/pytest-6/test_reactive_full_registratio0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fa4160ed4d0>
+
+    def warp_fixture(tmp_path, monkeypatch):
+        monkeypatch.setattr(cc, "LOCK_DIR", tmp_path)
+        monkeypatch.setattr(cc, "WARP_ROTATION_FILE", tmp_path / "last.json")
+        cli = tmp_path / "warp-cli.exe"; cli.write_text("")
+        monkeypatch.setattr(cc, "WARP_CLI", cli)
+        monkeypatch.setattr(cc, "get_current_ip", lambda: "old")
+        monkeypatch.setattr(cc, "is_warp_connected", lambda: True)
+        monkeypatch.setattr(cc, "verify_network_stabilization", lambda *a, **k: (True, "new"))
+        calls = []
+        def command(*args, **kwargs):
+            calls.append(args)
+            if args == ("tunnel", "dump"): return "Split tunnel mode: exclude\n"
+            if args == ("tunnel", "host", "list"): return "\n".join(cc.DELTA_EXCLUSION_HOSTS)
+            return "OK"
+>       monkeypatch.setattr(cc, "_warp_command", command)
+E       AttributeError: <module 'coinglass_common' from '/home/user/api-audit-baseline/coinglass_common.py'> has no attribute '_warp_command'
+
+tests/api_pipeline_audits/test_warp_cdp.py:30: AttributeError
+_____________________ test_order_inflight_blocks_rotation ______________________
+
+tmp_path = PosixPath('/tmp/pytest-of-user/pytest-6/test_order_inflight_blocks_rot0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fa415ffad10>
+
+    def test_order_inflight_blocks_rotation(tmp_path, monkeypatch):
+>       calls = warp_fixture(tmp_path, monkeypatch)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/api_pipeline_audits/test_warp_cdp.py:43: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+tmp_path = PosixPath('/tmp/pytest-of-user/pytest-6/test_order_inflight_blocks_rot0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fa415ffad10>
+
+    def warp_fixture(tmp_path, monkeypatch):
+        monkeypatch.setattr(cc, "LOCK_DIR", tmp_path)
+        monkeypatch.setattr(cc, "WARP_ROTATION_FILE", tmp_path / "last.json")
+        cli = tmp_path / "warp-cli.exe"; cli.write_text("")
+        monkeypatch.setattr(cc, "WARP_CLI", cli)
+        monkeypatch.setattr(cc, "get_current_ip", lambda: "old")
+        monkeypatch.setattr(cc, "is_warp_connected", lambda: True)
+        monkeypatch.setattr(cc, "verify_network_stabilization", lambda *a, **k: (True, "new"))
+        calls = []
+        def command(*args, **kwargs):
+            calls.append(args)
+            if args == ("tunnel", "dump"): return "Split tunnel mode: exclude\n"
+            if args == ("tunnel", "host", "list"): return "\n".join(cc.DELTA_EXCLUSION_HOSTS)
+            return "OK"
+>       monkeypatch.setattr(cc, "_warp_command", command)
+E       AttributeError: <module 'coinglass_common' from '/home/user/api-audit-baseline/coinglass_common.py'> has no attribute '_warp_command'
+
+tests/api_pipeline_audits/test_warp_cdp.py:30: AttributeError
+_________________ test_include_mode_fails_closed_and_restores __________________
+
+tmp_path = PosixPath('/tmp/pytest-of-user/pytest-6/test_include_mode_fails_closed0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fa415f93c50>
+
+    def test_include_mode_fails_closed_and_restores(tmp_path, monkeypatch):
+>       calls = warp_fixture(tmp_path, monkeypatch)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/api_pipeline_audits/test_warp_cdp.py:52: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+tmp_path = PosixPath('/tmp/pytest-of-user/pytest-6/test_include_mode_fails_closed0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fa415f93c50>
+
+    def warp_fixture(tmp_path, monkeypatch):
+        monkeypatch.setattr(cc, "LOCK_DIR", tmp_path)
+        monkeypatch.setattr(cc, "WARP_ROTATION_FILE", tmp_path / "last.json")
+        cli = tmp_path / "warp-cli.exe"; cli.write_text("")
+        monkeypatch.setattr(cc, "WARP_CLI", cli)
+        monkeypatch.setattr(cc, "get_current_ip", lambda: "old")
+        monkeypatch.setattr(cc, "is_warp_connected", lambda: True)
+        monkeypatch.setattr(cc, "verify_network_stabilization", lambda *a, **k: (True, "new"))
+        calls = []
+        def command(*args, **kwargs):
+            calls.append(args)
+            if args == ("tunnel", "dump"): return "Split tunnel mode: exclude\n"
+            if args == ("tunnel", "host", "list"): return "\n".join(cc.DELTA_EXCLUSION_HOSTS)
+            return "OK"
+>       monkeypatch.setattr(cc, "_warp_command", command)
+E       AttributeError: <module 'coinglass_common' from '/home/user/api-audit-baseline/coinglass_common.py'> has no attribute '_warp_command'
+
+tests/api_pipeline_audits/test_warp_cdp.py:30: AttributeError
+___________________ test_ownership_exact_query_not_substring ___________________
+
+    def test_ownership_exact_query_not_substring():
+>       owned = cc.bot_tab_url("https://www.coinglass.com/footprint/BTC?x=bot=whales_api", "footprint_api")
+                ^^^^^^^^^^^^^^
+E       AttributeError: module 'coinglass_common' has no attribute 'bot_tab_url'
+
+tests/api_pipeline_audits/test_warp_cdp.py:68: AttributeError
+______________________ test_global_runner_reaper_is_noop _______________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fa4160c5390>
+
+    def test_global_runner_reaper_is_noop(monkeypatch):
+        monkeypatch.setattr(runner.urllib.request, "urlopen", lambda *a, **k: pytest.fail("global tab access"))
+>       runner.cleanup_scraper_tabs()
+
+tests/api_pipeline_audits/test_warp_cdp.py:77: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+../api-audit-baseline/API/run_parallel_standalone.py:123: in cleanup_scraper_tabs
+    with urllib.request.urlopen(req, timeout=3) as resp:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+a = (<urllib.request.Request object at 0x7fa4160c5b50>,), k = {'timeout': 3}
+
+>   monkeypatch.setattr(runner.urllib.request, "urlopen", lambda *a, **k: pytest.fail("global tab access"))
+                                                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   Failed: global tab access
+
+tests/api_pipeline_audits/test_warp_cdp.py:76: Failed
+___________________ test_footprint_owned_tab_closed_on_error ___________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fa4160d3190>
+
+    def test_footprint_owned_tab_closed_on_error(monkeypatch):
+        adapter = fp.CDPBrowserAdapter()
+        closed = []
+        monkeypatch.setattr(adapter, "get_or_create_footprint_tab", lambda sym: ("owned", "ws://owned"))
+        monkeypatch.setattr(adapter, "close_tab", lambda tid: closed.append(tid))
+        async def fail(*a, **k): raise RuntimeError("hydration failed")
+        monkeypatch.setattr(adapter, "hook_terminal", fail)
+        with pytest.raises(RuntimeError): asyncio.run(adapter.fetch_footprint_data("BTC"))
+>       assert closed == ["owned"]
+E       AssertionError: assert [] == ['owned']
+E         
+E         Right contains one more item: 'owned'
+E         Use -v to get more diff
+
+tests/api_pipeline_audits/test_warp_cdp.py:88: AssertionError
+____________________ test_cdp_filters_events_and_unique_ids ____________________
+
+    def test_cdp_filters_events_and_unique_ids():
+        async def run():
+            ws=FakeWS(); assert await cc.cdp_eval(ws,"1") == 42; assert await cc.cdp_eval(ws,"2") == 42
+            assert ws.sent[0]["id"] != ws.sent[1]["id"]
+>       asyncio.run(run())
+
+tests/api_pipeline_audits/test_warp_cdp.py:104: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/lib/python3.11/asyncio/runners.py:190: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/usr/lib/python3.11/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.11/asyncio/base_events.py:653: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+    async def run():
+>       ws=FakeWS(); assert await cc.cdp_eval(ws,"1") == 42; assert await cc.cdp_eval(ws,"2") == 42
+                                  ^^^^^^^^^^^
+E       AttributeError: module 'coinglass_common' has no attribute 'cdp_eval'
+
+tests/api_pipeline_audits/test_warp_cdp.py:102: AttributeError
+_______________ test_runner_rotates_only_after_all_pillars_close _______________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fa4160e4e10>
+
+    def test_runner_rotates_only_after_all_pillars_close(monkeypatch):
+        import threading
+        active = {"n": 0}
+        observed = []
+        lock = threading.Lock()
+        async def pillar(kind):
+            async def harvest(chunk, idx, signals):
+                with lock: active["n"] += 1
+                try:
+                    await asyncio.sleep(0.01)
+                    if kind == "whale": signals.add("HTTP_429")
+                    return len(chunk) * (3 if kind == "footprint" else 15 if kind == "liq" else 1)
+                finally:
+                    with lock: active["n"] -= 1
+            return harvest
+        monkeypatch.setattr(runner, "harvest_footprint_chunk", asyncio.run(pillar("footprint")))
+        monkeypatch.setattr(runner, "harvest_whale_chunk", asyncio.run(pillar("whale")))
+        monkeypatch.setattr(runner, "harvest_liquidation_chunk", asyncio.run(pillar("liq")))
+        monkeypatch.setattr(runner, "get_current_ip", lambda: "offline")
+        def rotate(context, reason):
+            observed.append((active["n"], reason, threading.get_ident()))
+            return "new"
+        monkeypatch.setattr(runner, "rotate_warp_ip", rotate)
+>       asyncio.run(runner.run_parallel_cycle(chunk_size=2, symbols_override=["BTC","ETH"], rotate_chunks=True))
+
+tests/api_pipeline_audits/test_warp_cdp.py:130: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/lib/python3.11/asyncio/runners.py:190: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/usr/lib/python3.11/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.11/asyncio/base_events.py:653: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+chunk_size = 2, continuous = False, delay_between_cycles = 300.0
+sample_limit = None, symbols_override = ['BTC', 'ETH'], rotate_chunks = True
+
+    async def run_parallel_cycle(chunk_size: int = 15, continuous: bool = False, delay_between_cycles: float = 300.0, sample_limit: Optional[int] = None, symbols_override: Optional[List[str]] = None, rotate_chunks: bool = False):
+        """
+        Executes complete cycles across active assets with:
+        - Triple-Pillar Concurrency: Footprint, Whales, and Liquidation Levels run simultaneously in 3 parallel tabs.
+        - Dynamic Universe: Reloads active assets from API/active_assets.json inside the while True: loop.
+        - Proactive Chunk IP Rotation: Rotates WARP IP every 15 assets to stay ahead of rate limits.
+        - Post-Cycle IP Rotation: Rotates WARP IP upon full cycle completion.
+        - 4 Deterministic Checkpoints validating streaming feed through local disk parity.
+        - Protected asyncio.gather(return_exceptions=True) isolating sub-pillar exceptions.
+        """
+        logger.info("=" * 85)
+        logger.info(f"STARTING TRIPLE-PILLAR PARALLEL STANDALONE RUNNER")
+        logger.info(f"Target Pillars: 1. Footprint (?bot=footprint_api) | 2. Whales (?bot=whales_api) | 3. Liquidation Levels (?bot=liq_levels_api)")
+        logger.info(f"Initial Egress IP: {get_current_ip()}")
+        logger.info("=" * 85)
+    
+        cycle_num = 1
+        while True:
+            t_cycle_start = time.time()
+            logger.info(f">>>>>>>>>>>> BEGINNING HARVEST CYCLE #{cycle_num} <<<<<<<<<<<<")
+    
+            # Dynamically reload active assets per cycle
+            if symbols_override:
+                symbols = [s.upper().strip() for s in symbols_override if s.strip()]
+            else:
+                symbols = load_active_assets()
+                if sample_limit and sample_limit > 0:
+                    symbols = symbols[:sample_limit]
+            total_symbols = len(symbols)
+    
+            logger.info(f"Universe for Cycle #{cycle_num}: {total_symbols} Active Assets | Window Chunk Size: {chunk_size}")
+    
+            cleanup_scraper_tabs()
+            total_fp_dumped = 0
+            total_whale_dumped = 0
+            total_liq_dumped = 0
+    
+            total_chunks = (total_symbols + chunk_size - 1) // chunk_size
+    
+            for c_idx in range(0, total_symbols, chunk_size):
+                chunk = symbols[c_idx : c_idx + chunk_size]
+                c_num = (c_idx // chunk_size) + 1
+    
+                logger.info("-" * 80)
+                logger.info(f"CHUNK [{c_num}/{total_chunks}] ({len(chunk)} assets: {chunk[0]}..{chunk[-1]}) - 3 PARALLEL TABS ACTIVE")
+                logger.info(f"Active Egress IP: {get_current_ip()}")
+                logger.info("-" * 80)
+    
+                # RUN FOOTPRINT, WHALES, AND LIQUIDATION LEVELS IN PARALLEL TABS SIMULTANEOUSLY
+                t_chunk_start = time.time()
+>               fp_task = asyncio.create_task(harvest_footprint_chunk(chunk, c_num))
+                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               TypeError: test_runner_rotates_only_after_all_pillars_close.<locals>.pillar.<locals>.harvest() missing 1 required positional argument: 'signals'
+
+../api-audit-baseline/API/run_parallel_standalone.py:592: TypeError
+----------------------------- Captured stdout call -----------------------------
+2026-11-08 11:52:13 [INFO] [PARALLEL-PIPELINE] =====================================================================================
+2026-11-08 11:52:13 [INFO] [PARALLEL-PIPELINE] STARTING TRIPLE-PILLAR PARALLEL STANDALONE RUNNER
+2026-11-08 11:52:13 [INFO] [PARALLEL-PIPELINE] Target Pillars: 1. Footprint (?bot=footprint_api) | 2. Whales (?bot=whales_api) | 3. Liquidation Levels (?bot=liq_levels_api)
+2026-11-08 11:52:13 [INFO] [PARALLEL-PIPELINE] Initial Egress IP: offline
+2026-11-08 11:52:13 [INFO] [PARALLEL-PIPELINE] =====================================================================================
+2026-11-08 11:52:13 [INFO] [PARALLEL-PIPELINE] >>>>>>>>>>>> BEGINNING HARVEST CYCLE #1 <<<<<<<<<<<<
+2026-11-08 11:52:13 [INFO] [PARALLEL-PIPELINE] Universe for Cycle #1: 2 Active Assets | Window Chunk Size: 2
+2026-11-08 11:52:13 [INFO] [PARALLEL-PIPELINE] --------------------------------------------------------------------------------
+2026-11-08 11:52:13 [INFO] [PARALLEL-PIPELINE] CHUNK [1/1] (2 assets: BTC..ETH) - 3 PARALLEL TABS ACTIVE
+2026-11-08 11:52:13 [INFO] [PARALLEL-PIPELINE] Active Egress IP: offline
+2026-11-08 11:52:13 [INFO] [PARALLEL-PIPELINE] --------------------------------------------------------------------------------
+------------------------------ Captured log call -------------------------------
+INFO     ParallelPipeline:run_parallel_standalone.py:552 =====================================================================================
+INFO     ParallelPipeline:run_parallel_standalone.py:553 STARTING TRIPLE-PILLAR PARALLEL STANDALONE RUNNER
+INFO     ParallelPipeline:run_parallel_standalone.py:554 Target Pillars: 1. Footprint (?bot=footprint_api) | 2. Whales (?bot=whales_api) | 3. Liquidation Levels (?bot=liq_levels_api)
+INFO     ParallelPipeline:run_parallel_standalone.py:555 Initial Egress IP: offline
+INFO     ParallelPipeline:run_parallel_standalone.py:556 =====================================================================================
+INFO     ParallelPipeline:run_parallel_standalone.py:561 >>>>>>>>>>>> BEGINNING HARVEST CYCLE #1 <<<<<<<<<<<<
+INFO     ParallelPipeline:run_parallel_standalone.py:572 Universe for Cycle #1: 2 Active Assets | Window Chunk Size: 2
+INFO     ParallelPipeline:run_parallel_standalone.py:585 --------------------------------------------------------------------------------
+INFO     ParallelPipeline:run_parallel_standalone.py:586 CHUNK [1/1] (2 assets: BTC..ETH) - 3 PARALLEL TABS ACTIVE
+INFO     ParallelPipeline:run_parallel_standalone.py:587 Active Egress IP: offline
+INFO     ParallelPipeline:run_parallel_standalone.py:588 --------------------------------------------------------------------------------
+________________ test_runner_scheduled_flag_alone_never_rotates ________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fa415f8bed0>
+
+    def test_runner_scheduled_flag_alone_never_rotates(monkeypatch):
+        async def ok(n):
+            async def harvest(chunk, idx, signals): return len(chunk)*n
+            return harvest
+        monkeypatch.setattr(runner, "harvest_footprint_chunk", asyncio.run(ok(3)))
+        monkeypatch.setattr(runner, "harvest_whale_chunk", asyncio.run(ok(1)))
+        monkeypatch.setattr(runner, "harvest_liquidation_chunk", asyncio.run(ok(15)))
+        monkeypatch.setattr(runner, "get_current_ip", lambda: "offline")
+        monkeypatch.setattr(runner, "rotate_warp_ip", lambda *a, **k: pytest.fail("scheduled rotation"))
+>       asyncio.run(runner.run_parallel_cycle(chunk_size=1, symbols_override=["BTC","ETH"], rotate_chunks=True))
+
+tests/api_pipeline_audits/test_warp_cdp.py:144: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/lib/python3.11/asyncio/runners.py:190: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/usr/lib/python3.11/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.11/asyncio/base_events.py:653: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+chunk_size = 1, continuous = False, delay_between_cycles = 300.0
+sample_limit = None, symbols_override = ['BTC', 'ETH'], rotate_chunks = True
+
+    async def run_parallel_cycle(chunk_size: int = 15, continuous: bool = False, delay_between_cycles: float = 300.0, sample_limit: Optional[int] = None, symbols_override: Optional[List[str]] = None, rotate_chunks: bool = False):
+        """
+        Executes complete cycles across active assets with:
+        - Triple-Pillar Concurrency: Footprint, Whales, and Liquidation Levels run simultaneously in 3 parallel tabs.
+        - Dynamic Universe: Reloads active assets from API/active_assets.json inside the while True: loop.
+        - Proactive Chunk IP Rotation: Rotates WARP IP every 15 assets to stay ahead of rate limits.
+        - Post-Cycle IP Rotation: Rotates WARP IP upon full cycle completion.
+        - 4 Deterministic Checkpoints validating streaming feed through local disk parity.
+        - Protected asyncio.gather(return_exceptions=True) isolating sub-pillar exceptions.
+        """
+        logger.info("=" * 85)
+        logger.info(f"STARTING TRIPLE-PILLAR PARALLEL STANDALONE RUNNER")
+        logger.info(f"Target Pillars: 1. Footprint (?bot=footprint_api) | 2. Whales (?bot=whales_api) | 3. Liquidation Levels (?bot=liq_levels_api)")
+        logger.info(f"Initial Egress IP: {get_current_ip()}")
+        logger.info("=" * 85)
+    
+        cycle_num = 1
+        while True:
+            t_cycle_start = time.time()
+            logger.info(f">>>>>>>>>>>> BEGINNING HARVEST CYCLE #{cycle_num} <<<<<<<<<<<<")
+    
+            # Dynamically reload active assets per cycle
+            if symbols_override:
+                symbols = [s.upper().strip() for s in symbols_override if s.strip()]
+            else:
+                symbols = load_active_assets()
+                if sample_limit and sample_limit > 0:
+                    symbols = symbols[:sample_limit]
+            total_symbols = len(symbols)
+    
+            logger.info(f"Universe for Cycle #{cycle_num}: {total_symbols} Active Assets | Window Chunk Size: {chunk_size}")
+    
+            cleanup_scraper_tabs()
+            total_fp_dumped = 0
+            total_whale_dumped = 0
+            total_liq_dumped = 0
+    
+            total_chunks = (total_symbols + chunk_size - 1) // chunk_size
+    
+            for c_idx in range(0, total_symbols, chunk_size):
+                chunk = symbols[c_idx : c_idx + chunk_size]
+                c_num = (c_idx // chunk_size) + 1
+    
+                logger.info("-" * 80)
+                logger.info(f"CHUNK [{c_num}/{total_chunks}] ({len(chunk)} assets: {chunk[0]}..{chunk[-1]}) - 3 PARALLEL TABS ACTIVE")
+                logger.info(f"Active Egress IP: {get_current_ip()}")
+                logger.info("-" * 80)
+    
+                # RUN FOOTPRINT, WHALES, AND LIQUIDATION LEVELS IN PARALLEL TABS SIMULTANEOUSLY
+                t_chunk_start = time.time()
+>               fp_task = asyncio.create_task(harvest_footprint_chunk(chunk, c_num))
+                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               TypeError: test_runner_scheduled_flag_alone_never_rotates.<locals>.ok.<locals>.harvest() missing 1 required positional argument: 'signals'
+
+../api-audit-baseline/API/run_parallel_standalone.py:592: TypeError
+----------------------------- Captured stdout call -----------------------------
+2026-11-08 11:52:13 [INFO] [PARALLEL-PIPELINE] =====================================================================================
+2026-11-08 11:52:13 [INFO] [PARALLEL-PIPELINE] STARTING TRIPLE-PILLAR PARALLEL STANDALONE RUNNER
+2026-11-08 11:52:13 [INFO] [PARALLEL-PIPELINE] Target Pillars: 1. Footprint (?bot=footprint_api) | 2. Whales (?bot=whales_api) | 3. Liquidation Levels (?bot=liq_levels_api)
+2026-11-08 11:52:13 [INFO] [PARALLEL-PIPELINE] Initial Egress IP: offline
+2026-11-08 11:52:13 [INFO] [PARALLEL-PIPELINE] =====================================================================================
+2026-11-08 11:52:13 [INFO] [PARALLEL-PIPELINE] >>>>>>>>>>>> BEGINNING HARVEST CYCLE #1 <<<<<<<<<<<<
+2026-11-08 11:52:13 [INFO] [PARALLEL-PIPELINE] Universe for Cycle #1: 2 Active Assets | Window Chunk Size: 1
+2026-11-08 11:52:13 [INFO] [PARALLEL-PIPELINE] --------------------------------------------------------------------------------
+2026-11-08 11:52:13 [INFO] [PARALLEL-PIPELINE] CHUNK [1/2] (1 assets: BTC..BTC) - 3 PARALLEL TABS ACTIVE
+2026-11-08 11:52:13 [INFO] [PARALLEL-PIPELINE] Active Egress IP: offline
+2026-11-08 11:52:13 [INFO] [PARALLEL-PIPELINE] --------------------------------------------------------------------------------
+------------------------------ Captured log call -------------------------------
+INFO     ParallelPipeline:run_parallel_standalone.py:552 =====================================================================================
+INFO     ParallelPipeline:run_parallel_standalone.py:553 STARTING TRIPLE-PILLAR PARALLEL STANDALONE RUNNER
+INFO     ParallelPipeline:run_parallel_standalone.py:554 Target Pillars: 1. Footprint (?bot=footprint_api) | 2. Whales (?bot=whales_api) | 3. Liquidation Levels (?bot=liq_levels_api)
+INFO     ParallelPipeline:run_parallel_standalone.py:555 Initial Egress IP: offline
+INFO     ParallelPipeline:run_parallel_standalone.py:556 =====================================================================================
+INFO     ParallelPipeline:run_parallel_standalone.py:561 >>>>>>>>>>>> BEGINNING HARVEST CYCLE #1 <<<<<<<<<<<<
+INFO     ParallelPipeline:run_parallel_standalone.py:572 Universe for Cycle #1: 2 Active Assets | Window Chunk Size: 1
+INFO     ParallelPipeline:run_parallel_standalone.py:585 --------------------------------------------------------------------------------
+INFO     ParallelPipeline:run_parallel_standalone.py:586 CHUNK [1/2] (1 assets: BTC..BTC) - 3 PARALLEL TABS ACTIVE
+INFO     ParallelPipeline:run_parallel_standalone.py:587 Active Egress IP: offline
+INFO     ParallelPipeline:run_parallel_standalone.py:588 --------------------------------------------------------------------------------
+=========================== short test summary info ============================
+FAILED tests/api_pipeline_audits/test_js_contracts.py::test_whale_zero_threshold_keeps_midcap_and_zero
+FAILED tests/api_pipeline_audits/test_js_contracts.py::test_whale_empty_is_not_success
+FAILED tests/api_pipeline_audits/test_js_contracts.py::test_whale_dom_suffix_and_partial_flag
+FAILED tests/api_pipeline_audits/test_js_contracts.py::test_liq_decimal_suffixes_filters_and_horizons
+FAILED tests/api_pipeline_audits/test_js_contracts.py::test_liq_unverified_horizon_rejected
+FAILED tests/api_pipeline_audits/test_js_contracts.py::test_footprint_forces_15m_and_computes_profile
+FAILED tests/api_pipeline_audits/test_js_contracts.py::test_footprint_stale_loading_rejected
+FAILED tests/api_pipeline_audits/test_storage_config.py::test_parquet_readback_and_schema
+FAILED tests/api_pipeline_audits/test_storage_config.py::test_failed_write_and_fsync_preserve_history
+FAILED tests/api_pipeline_audits/test_storage_config.py::test_manager_fails_closed_and_rejects_injection
+FAILED tests/api_pipeline_audits/test_storage_config.py::test_manager_concurrent_mutations_no_lost_updates
+FAILED tests/api_pipeline_audits/test_storage_config.py::test_whale_empty_and_corrupt_never_erase
+FAILED tests/api_pipeline_audits/test_storage_config.py::test_liq_15_files_and_empty_preservation
+FAILED tests/api_pipeline_audits/test_warp_cdp.py::test_scheduled_rotation_never_calls_cli
+FAILED tests/api_pipeline_audits/test_warp_cdp.py::test_reactive_full_registration_sequence
+FAILED tests/api_pipeline_audits/test_warp_cdp.py::test_order_inflight_blocks_rotation
+FAILED tests/api_pipeline_audits/test_warp_cdp.py::test_include_mode_fails_closed_and_restores
+FAILED tests/api_pipeline_audits/test_warp_cdp.py::test_ownership_exact_query_not_substring
+FAILED tests/api_pipeline_audits/test_warp_cdp.py::test_global_runner_reaper_is_noop
+FAILED tests/api_pipeline_audits/test_warp_cdp.py::test_footprint_owned_tab_closed_on_error
+FAILED tests/api_pipeline_audits/test_warp_cdp.py::test_cdp_filters_events_and_unique_ids
+FAILED tests/api_pipeline_audits/test_warp_cdp.py::test_runner_rotates_only_after_all_pillars_close
+FAILED tests/api_pipeline_audits/test_warp_cdp.py::test_runner_scheduled_flag_alone_never_rotates
+23 failed, 2 passed in 2.95s

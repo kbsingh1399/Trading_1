@@ -43,6 +43,7 @@ import logging
 import asyncio
 import argparse
 import urllib.request
+import re
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Tuple
@@ -64,9 +65,10 @@ if str(API_DIR) not in sys.path:
 
 from coinglass_common import (
     acquire_singleton, atomic_parquet, writer_lock,
-    rotate_warp_ip, LOCK_DIR
+    LOCK_DIR, verify_parquet, cdp_eval, bot_tab_url, is_process_bot_tab
 )
 from active_assets_manager import load_active_assets
+from coinglass_common import rotate_warp_ip
 
 DB_DIR = ROOT_DIR / "Database"
 LIQ_DUMP_DIR = DB_DIR / "Liquidation_Level_Dumps"
@@ -103,15 +105,35 @@ EXTRACTION_JS = r"""(async () => {
         { label: '30D · 15m', key: '30D' }
     ];
 
+    if (performance.getEntriesByType('resource').some(e => e.responseStatus === 429)) {
+        return {allData:{}, isRateLimited:true, rateReason:'HTTP_429'};
+    }
     const allData = {};
     let isRateLimited = false;
+    const numeric = (value) => {
+        const m = String(value ?? '').replace(/[$,\s]/g,'').match(/^([+-]?\d+(?:\.\d+)?)([KMB])?$/i);
+        return m ? Number(m[1]) * ({K:1e3,M:1e6,B:1e9}[m[2]?.toUpperCase()] || 1) : null;
+    };
+    const distance = value => numeric(String(value).replace(/[−–—]/g,'-').replace('%',''));
+    const isSelected = el => {
+        const node = el.closest('[aria-selected], [class]');
+        if (!node) return false;
+        if (node.hasAttribute('aria-selected')) return node.getAttribute('aria-selected') === 'true';
+        return String(node.className).split(/\s+/).some(c => /^(active|selected|is-active|is-selected)$/i.test(c));
+    };
 
     for (const h of horizons) {
         // 1. Switch horizon tab
         const tfBtn = Array.from(document.querySelectorAll('*')).find(el => el.children.length === 0 && el.innerText && el.innerText.trim() === h.label);
-        if (tfBtn) {
-            tfBtn.click();
-            await new Promise(r => setTimeout(r, 600));
+        if (!tfBtn) return {allData:{}, isRateLimited:false, error:'horizon control missing: '+h.key};
+        tfBtn.click();
+        const horizonDeadline = Date.now() + 8000;
+        while (Date.now() < horizonDeadline) {
+            if (isSelected(tfBtn) && !/Loading(?:…|\.\.\.)/.test(document.body.innerText) && document.querySelectorAll('tbody tr').length) break;
+            await new Promise(r => setTimeout(r, 150));
+        }
+        if (!isSelected(tfBtn)) {
+            return {allData:{}, isRateLimited:false, error:'horizon selection unverified: '+h.key};
         }
 
         // 2. Ensure ±4% tab is selected for Key liquidation levels
@@ -124,12 +146,15 @@ EXTRACTION_JS = r"""(async () => {
         // 3. Active Hydration Polling: Wait for Loading... to clear
         const t0 = Date.now();
         while (Date.now() - t0 < 6000) {
-            if (!document.body.innerText.includes('Loading…')) break;
+            if (!/Loading(?:…|\.\.\.)/.test(document.body.innerText)) break;
             await new Promise(r => setTimeout(r, 200));
         }
 
-        if (document.body.innerText.includes('failed to load') || document.body.innerText.includes('Too Many Requests')) {
-            isRateLimited = true;
+        if (/failed to load|Too Many Requests|HTTP 429|rate limit/i.test(document.body.innerText)) {
+            return {allData:{}, isRateLimited:true, rateReason:'RATE_LIMIT_BANNER'};
+        }
+        if (document.querySelector('iframe[src*="challenges.cloudflare.com"], #turnstile-wrapper')) {
+            return {allData:{}, isRateLimited:true, rateReason:'CHALLENGE'};
         }
 
         // A. Key Liquidation Levels (Within ±4%)
@@ -139,11 +164,12 @@ EXTRACTION_JS = r"""(async () => {
             const tds = Array.from(tr.querySelectorAll('td')).map(td => td.innerText.trim());
             if (tds.length >= 5 && (tds[0].toLowerCase().includes('short') || tds[0].toLowerCase().includes('long'))) {
                 const side = tds[0].toLowerCase().includes('short') ? 'Short' : 'Long';
-                const pVal = parseFloat(tds[1].replace(/[$,]/g, '')) || 0.0;
+                const pVal = numeric(tds[1]);
                 const dVal = tds[2].replace(/[−–—]/g, '-').trim();
                 const lev = tds[3].trim();
-                const strVal = parseFloat(tds[4].replace(/,/g, '')) || 0.0;
-                if (!isNaN(pVal) && pVal > 0) {
+                const strVal = numeric(tds[4]);
+                const dist = distance(dVal);
+                if (pVal !== null && pVal > 0 && strVal !== null && strVal >= 0 && dist !== null && Math.abs(dist) <= 4) {
                     keyLevels.push({
                         Side: side,
                         Price: pVal,
@@ -162,12 +188,13 @@ EXTRACTION_JS = r"""(async () => {
         const sbdMatch = fullText.match(/Strength by distance[\s\S]*?Total strength in each band[^\n]*\n([\s\S]*?)(?=By leverage tier|Magnet zones|Near-field balance|$)/i);
         if (sbdMatch) {
             const block = sbdMatch[1];
-            const bandRegex = /(\d+[\–\-]\d+%)\s*(?:\n|\s)\s*([\d,]+)\s*(?:\n|\s)\s*·\s*(?:\n|\s)\s*([\d,]+)/g;
+            const bandRegex = /(\d+[\–\-]\d+%)\s*(?:\n|\s)\s*([\d,.]+[KMB]?)\s*(?:\n|\s)\s*·\s*(?:\n|\s)\s*([\d,.]+[KMB]?)/g;
             let m;
             while ((m = bandRegex.exec(block)) !== null) {
                 const band = m[1].replace('–', '-');
-                const sStr = parseFloat(m[2].replace(/,/g, '')) || 0.0;
-                const lStr = parseFloat(m[3].replace(/,/g, '')) || 0.0;
+                const sStr = numeric(m[2]);
+                const lStr = numeric(m[3]);
+                if (sStr === null || lStr === null || sStr < 0 || lStr < 0) continue;
                 const tot = sStr + lStr;
                 sbdList.push({
                     Band: band,
@@ -185,12 +212,13 @@ EXTRACTION_JS = r"""(async () => {
         const levMatch = fullText.match(/By leverage tier[\s\S]*?Open-level strength per leverage tier[^\n]*\n([\s\S]*?)(?=Strength by distance|Magnet zones|Near-field balance|$)/i);
         if (levMatch) {
             const block = levMatch[1];
-            const tierRegex = /(High leverage|Mid leverage|Low leverage)\s*(?:\n|\s)\s*([\d,]+)\s*(?:\n|\s)\s*·\s*(?:\n|\s)\s*([\d,]+)/g;
+            const tierRegex = /(High leverage|Mid leverage|Low leverage)\s*(?:\n|\s)\s*([\d,.]+[KMB]?)\s*(?:\n|\s)\s*·\s*(?:\n|\s)\s*([\d,.]+[KMB]?)/g;
             let m;
             while ((m = tierRegex.exec(block)) !== null) {
                 const tier = m[1];
-                const sStr = parseFloat(m[2].replace(/,/g, '')) || 0.0;
-                const lStr = parseFloat(m[3].replace(/,/g, '')) || 0.0;
+                const sStr = numeric(m[2]);
+                const lStr = numeric(m[3]);
+                if (sStr === null || lStr === null || sStr < 0 || lStr < 0) continue;
                 const tot = sStr + lStr;
                 levList.push({
                     Tier: tier,
@@ -218,15 +246,15 @@ EXTRACTION_JS = r"""(async () => {
                     continue;
                 }
                 if (cur) {
-                    if (!cur.Price_Range && l.includes('−') || (l.includes('-') && !l.includes('%'))) {
+                    if (!cur.Price_Range && ((l.includes('−') && !l.includes('%')) || (l.includes('-') && !l.includes('%')))) {
                         const parts = l.split(/[−-]/).map(p => parseFloat(p.replace(/[$,]/g, ''))).filter(p => !isNaN(p));
                         cur.Price_Range = l;
                         cur.Price_Low = parts[0] || 0.0;
                         cur.Price_High = parts[1] || parts[0] || 0.0;
                         continue;
                     }
-                    if (cur.Price_Range && !cur.Strength && /^\d+$/.test(l.replace(/,/g, ''))) {
-                        cur.Strength = parseFloat(l.replace(/,/g, '')) || 0.0;
+                    if (cur.Price_Range && !cur.Strength && numeric(l) !== null && numeric(l) >= 0) {
+                        cur.Strength = numeric(l);
                         continue;
                     }
                     if (l.startsWith('+') || l.startsWith('-') || l.startsWith('−')) {
@@ -253,7 +281,9 @@ EXTRACTION_JS = r"""(async () => {
                 }
             }
             if (cur) items.push(cur);
-            return items.map(it => ({
+            return items.filter(it => it.Status || (it.Distance && Math.abs(distance(it.Distance)) <= 10))
+                .sort((a,b) => (b.Strength || 0)-(a.Strength || 0)).slice(0,3)
+                .map((it,idx) => ({...it, Rank:idx+1})).map(it => ({
                 Side: it.Side,
                 Rank: it.Rank,
                 Price_Range: it.Price_Range || 'None',
@@ -280,17 +310,17 @@ EXTRACTION_JS = r"""(async () => {
         const nfMatch = fullText.match(/Near-field balance[\s\S]*?Open strength within ±3%[\s\S]*?\n([\s\S]*?)(?=Short share, last 24h|Frequently asked questions|$)/i);
         if (nfMatch) {
             const block = nfMatch[1];
-            const longsM = block.match(/Longs\s*(\d+)%\s*·\s*([\d,]+)/i);
-            const shortsM = block.match(/Shorts\s*(\d+)%\s*·\s*([\d,]+)/i);
+            const longsM = block.match(/Longs\s*([\d.]+)%\s*·\s*([\d,.]+[KMB]?)/i);
+            const shortsM = block.match(/Shorts\s*([\d.]+)%\s*·\s*([\d,.]+[KMB]?)/i);
             const interpM = block.match(/(Heavier on [^\n]+)/i);
             
-            const lPct = longsM ? parseInt(longsM[1]) : 0;
-            const lStr = longsM ? parseFloat(longsM[2].replace(/,/g, '')) : 0.0;
-            const sPct = shortsM ? parseInt(shortsM[1]) : 0;
-            const sStr = shortsM ? parseFloat(shortsM[2].replace(/,/g, '')) : 0.0;
+            const lPct = longsM ? Number(longsM[1]) : null;
+            const lStr = longsM ? numeric(longsM[2]) : null;
+            const sPct = shortsM ? Number(shortsM[1]) : null;
+            const sStr = shortsM ? numeric(shortsM[2]) : null;
             const interp = interpM ? interpM[1].trim() : '';
 
-            nearField = {
+            if (lStr !== null && sStr !== null && lStr >= 0 && sStr >= 0) nearField = {
                 Long_Pct: lPct + '%',
                 Long_Strength: lStr,
                 Short_Pct: sPct + '%',
@@ -302,6 +332,7 @@ EXTRACTION_JS = r"""(async () => {
         }
 
         allData[h.key] = {
+            horizon:h.key,
             keyLevels,
             strengthByDistance: sbdList,
             leverageStrength: levList,
@@ -314,193 +345,100 @@ EXTRACTION_JS = r"""(async () => {
 })()"""
 
 
+STRUCTURE_SCHEMAS = {
+    "KeyLiquidationLevel": (["Asset","Time","Side","Price","Distance","Leverage","Strength"], "keyLevels"),
+    "StrengthByDistance": (["Asset","Time","Band","Short_Strength","Long_Strength","Total_Strength","Short_Share_Pct","Long_Share_Pct"], "strengthByDistance"),
+    "MagnetZones": (["Asset","Time","Side","Rank","Price_Range","Price_Low","Price_High","Distance","Strength","Band_Width","Status"], "magnetZones"),
+    "OpenLevelLeverageStrength": (["Asset","Time","Tier","Short_Strength","Long_Strength","Total_Strength","Short_Share_Pct","Long_Share_Pct"], "leverageStrength"),
+    "NearFieldBalance": (["Asset","Time","Long_Pct","Long_Strength","Short_Pct","Short_Strength","Total_Strength","Bias","Interpretation"], "nearField"),
+}
+
+
 def is_asset_dump_complete(sym: str) -> bool:
-    """Verifies that all 15 Parquet files exist on disk for the specified asset."""
-    sym_dir = LIQ_DUMP_DIR / sym
-    if not sym_dir.exists():
+    try:
+        for tf in ("3D", "7D", "30D"):
+            for structure, (columns, _) in STRUCTURE_SCHEMAS.items():
+                verify_parquet(LIQ_DUMP_DIR / sym / f"{tf}_{sym}_{structure}.parquet", columns)
+        return True
+    except Exception:
         return False
-    for tf in ["3D", "7D", "30D"]:
-        for s in REQUIRED_STRUCTURES:
-            f = sym_dir / f"{tf}_{sym}_{s}.parquet"
-            if not f.exists() or f.stat().st_size == 0:
-                return False
-    return True
 
 
 async def get_or_create_warm_tab(initial_symbol: str = "BTC") -> Tuple[Optional[str], Optional[str]]:
-    """Opens a single warm CDP tab and connects to WebSocket."""
-    url = f"{CDP_BASE_URL}/json/list"
-    try:
-        with urllib.request.urlopen(url, timeout=3) as resp:
-            tabs = json.loads(resp.read().decode())
-            for t in tabs:
-                if "bot=liq_levels_api" in t.get("url", ""):
-                    return t["id"], t.get("webSocketDebuggerUrl")
-    except Exception:
-        pass
-
-    target_url = f"https://www.coinglass.com/liquidation-levels/{initial_symbol}?bot=liq_levels_api"
-    new_url = f"{CDP_BASE_URL}/json/new?{target_url}"
-    try:
-        req = urllib.request.Request(new_url, method="PUT")
+    if not re.fullmatch(r"[A-Z0-9][A-Z0-9_.-]{0,31}", initial_symbol.upper()):
+        raise ValueError(f"Unsafe symbol: {initial_symbol}")
+    target_url = bot_tab_url(f"https://www.coinglass.com/liquidation-levels/{initial_symbol.upper()}", "liq_levels_api")
+    def _open():
+        req = urllib.request.Request(f"{CDP_BASE_URL}/json/new?{target_url}", method="PUT")
         with urllib.request.urlopen(req, timeout=5) as resp:
             tab = json.loads(resp.read().decode())
             return tab.get("id"), tab.get("webSocketDebuggerUrl")
-    except Exception as e:
-        logger.error(f"Failed to create warm liquidation tab: {e}")
+    try:
+        return await asyncio.to_thread(_open)
+    except Exception as exc:
+        logger.error("Failed to create owned liquidation tab: %s", exc)
         return None, None
 
 
 async def close_tab(tab_id: str):
-    """Closes an ephemeral CDP tab."""
     if not tab_id:
         return
-    url = f"{CDP_BASE_URL}/json/close/{tab_id}"
-    try:
-        urllib.request.urlopen(url, timeout=2)
-    except Exception:
-        pass
+    def _close():
+        try:
+            with urllib.request.urlopen(f"{CDP_BASE_URL}/json/close/{tab_id}", timeout=2):
+                pass
+        except Exception as exc:
+            logger.warning("Could not close owned liquidation tab %s: %s", tab_id, exc)
+    await asyncio.to_thread(_close)
 
 
 def persist_asset_liquidation(sym: str, all_data: Dict[str, Any]) -> int:
-    """Persists extracted liquidation structures as atomic Parquet files."""
-    asset_dir = LIQ_DUMP_DIR / sym
-    asset_dir.mkdir(parents=True, exist_ok=True)
-    saved_files = 0
-
-    for tf in ["3D", "7D", "30D"]:
-        data = all_data.get(tf, {})
-
-        # 1. Key Liquidation Level
-        kl_list = data.get("keyLevels", [])
-        f_kl = asset_dir / f"{tf}_{sym}_KeyLiquidationLevel.parquet"
-        if kl_list:
-            df = pd.DataFrame(kl_list)
+    # Validate the entire 15-structure snapshot before publishing any file.
+    prepared = []
+    for tf in ("3D", "7D", "30D"):
+        data = all_data.get(tf)
+        if not isinstance(data, dict) or data.get("horizon") != tf:
+            raise ValueError(f"Missing/unverified liquidation horizon: {tf}")
+        for structure, (columns, key) in STRUCTURE_SCHEMAS.items():
+            rows = data.get(key)
+            rows = [rows] if structure == "NearFieldBalance" and isinstance(rows, dict) else rows
+            if not isinstance(rows, list) or not rows:
+                raise ValueError(f"Empty liquidation structure {tf}/{structure}; disk preserved")
+            df = pd.DataFrame(rows)
             df.insert(0, "Time", tf)
             df.insert(0, "Asset", sym)
-            with writer_lock(f_kl):
-                atomic_parquet(df, f_kl)
-            saved_files += 1
-        elif not f_kl.exists():
-            df = pd.DataFrame(columns=["Asset", "Time", "Side", "Price", "Distance", "Leverage", "Strength"])
-            with writer_lock(f_kl):
-                atomic_parquet(df, f_kl)
-
-        # 2. Strength By Distance
-        sbd_list = data.get("strengthByDistance", [])
-        f_sbd = asset_dir / f"{tf}_{sym}_StrengthByDistance.parquet"
-        if sbd_list:
-            df = pd.DataFrame(sbd_list)
-            df.insert(0, "Time", tf)
-            df.insert(0, "Asset", sym)
-            with writer_lock(f_sbd):
-                atomic_parquet(df, f_sbd)
-            saved_files += 1
-        elif not f_sbd.exists():
-            df = pd.DataFrame(columns=["Asset", "Time", "Band", "Short_Strength", "Long_Strength", "Total_Strength", "Short_Share_Pct", "Long_Share_Pct"])
-            with writer_lock(f_sbd):
-                atomic_parquet(df, f_sbd)
-
-        # 3. Magnet Zones
-        mag_list = data.get("magnetZones", [])
-        f_mag = asset_dir / f"{tf}_{sym}_MagnetZones.parquet"
-        if mag_list:
-            df = pd.DataFrame(mag_list)
-            df.insert(0, "Time", tf)
-            df.insert(0, "Asset", sym)
-            with writer_lock(f_mag):
-                atomic_parquet(df, f_mag)
-            saved_files += 1
-        elif not f_mag.exists():
-            df = pd.DataFrame(columns=["Asset", "Time", "Side", "Rank", "Price_Range", "Price_Low", "Price_High", "Distance", "Strength", "Band_Width", "Status"])
-            with writer_lock(f_mag):
-                atomic_parquet(df, f_mag)
-
-        # 4. Open Level Leverage Strength
-        lev_list = data.get("leverageStrength", [])
-        f_lev = asset_dir / f"{tf}_{sym}_OpenLevelLeverageStrength.parquet"
-        if lev_list:
-            df = pd.DataFrame(lev_list)
-            df.insert(0, "Time", tf)
-            df.insert(0, "Asset", sym)
-            with writer_lock(f_lev):
-                atomic_parquet(df, f_lev)
-            saved_files += 1
-        elif not f_lev.exists():
-            df = pd.DataFrame(columns=["Asset", "Time", "Tier", "Short_Strength", "Long_Strength", "Total_Strength", "Short_Share_Pct", "Long_Share_Pct"])
-            with writer_lock(f_lev):
-                atomic_parquet(df, f_lev)
-
-        # 5. Near Field Balance
-        nf = data.get("nearField")
-        f_nf = asset_dir / f"{tf}_{sym}_NearFieldBalance.parquet"
-        if nf:
-            df = pd.DataFrame([nf])
-            df.insert(0, "Time", tf)
-            df.insert(0, "Asset", sym)
-            with writer_lock(f_nf):
-                atomic_parquet(df, f_nf)
-            saved_files += 1
-        elif not f_nf.exists():
-            df = pd.DataFrame(columns=["Asset", "Time", "Long_Pct", "Long_Strength", "Short_Pct", "Short_Strength", "Total_Strength", "Bias", "Interpretation"])
-            with writer_lock(f_nf):
-                atomic_parquet(df, f_nf)
-
-    return saved_files
+            if list(df.columns) != columns or df.empty:
+                raise ValueError(f"Liquidation schema mismatch {tf}/{structure}: {list(df.columns)}")
+            prepared.append((LIQ_DUMP_DIR / sym / f"{tf}_{sym}_{structure}.parquet", df, columns))
+    saved = 0
+    for path, df, columns in prepared:
+        with writer_lock(path):
+            if path.exists():
+                verify_parquet(path, columns)
+            atomic_parquet(df, path)
+            verify_parquet(path, columns)
+        saved += 1
+    return saved
 
 
 async def harvest_symbol_liquidation(ws, symbol: str) -> Tuple[Dict[str, Any], bool]:
-    """In-page navigation to symbol route and evaluation of liquidation data."""
-    target_url = f"https://www.coinglass.com/liquidation-levels/{symbol}?bot=liq_levels_api"
-    await ws.send(json.dumps({"id": 101, "method": "Page.navigate", "params": {"url": target_url}}))
-    await asyncio.sleep(2.0)
-
-    # Active Hydration Wait Loop
-    wait_js = r"""(() => {
-        return !document.body.innerText.includes('Loading…') && document.querySelectorAll('tbody tr').length > 0;
-    })()"""
-    
-    t0 = time.time()
-    while time.time() - t0 < 6.0:
-        await ws.send(json.dumps({"id": 102, "method": "Runtime.evaluate", "params": {"expression": wait_js, "returnByValue": True}}))
-        try:
-            raw = await asyncio.wait_for(ws.recv(), timeout=1.5)
-            msg = json.loads(raw)
-            if msg.get("id") == 102 and msg.get("result", {}).get("result", {}).get("value") is True:
-                break
-        except asyncio.TimeoutError:
-            pass
-        await asyncio.sleep(0.3)
-
-    # Execute extraction
-    await ws.send(json.dumps({
-        "id": 103,
-        "method": "Runtime.evaluate",
-        "params": {
-            "expression": EXTRACTION_JS,
-            "awaitPromise": True,
-            "returnByValue": True
-        }
-    }))
-
-    res = None
-    t1 = time.time()
-    while time.time() - t1 < 10.0:
-        try:
-            raw = await asyncio.wait_for(ws.recv(), timeout=3.0)
-            msg = json.loads(raw)
-            if msg.get("id") == 103:
-                res = msg.get("result", {}).get("result", {}).get("value")
-                break
-        except asyncio.TimeoutError:
-            continue
-
-    if not res:
-        return {}, False
-
-    all_data = res.get("allData", {})
-    is_rate_limited = res.get("isRateLimited", False)
-    return all_data, is_rate_limited
+    target_url = bot_tab_url(f"https://www.coinglass.com/liquidation-levels/{symbol.upper()}", "liq_levels_api")
+    await cdp_eval(ws, f"window.location.href={json.dumps(target_url)}", timeout=5)
+    expression = f"""(async () => {{
+        if (!window.location.pathname.toUpperCase().endsWith('/{symbol.upper()}')) return {{allData:{{}}, isRateLimited:false}};
+        const deadline = Date.now()+8000;
+        while (Date.now() < deadline) {{
+            if (!/Loading(?:…|\\.\\.\\.)/.test(document.body.innerText) && document.querySelectorAll('tbody tr').length) break;
+            await new Promise(r => setTimeout(r, 150));
+        }}
+        return await ({EXTRACTION_JS});
+    }})()"""
+    res = await cdp_eval(ws, expression, timeout=40.0)
+    if not res or res.get("error"):
+        raise RuntimeError(f"Liquidation extraction rejected: {res}")
+    if res.get("isRateLimited"):
+        raise RuntimeError(f"LIQUIDATION_RATE_SIGNAL:{res.get('rateReason', 'RATE_LIMIT_BANNER')}")
+    return res.get("allData", {}), False
 
 
 async def sweep_active_assets_loop(chunk_size: int = 15, daemon: bool = False, loop_interval: float = 300.0):
@@ -522,7 +460,7 @@ async def sweep_active_assets_loop(chunk_size: int = 15, daemon: bool = False, l
     while True:
         cycle_count += 1
         active_assets = load_active_assets()
-        pending = [s for s in active_assets if not is_asset_dump_complete(s)]
+        pending = active_assets if daemon else [s for s in active_assets if not is_asset_dump_complete(s)]
         
         logger.info(f"[Cycle {cycle_count}] Active assets universe: {len(active_assets)} symbols.")
         if pending:
@@ -557,15 +495,12 @@ async def sweep_active_assets_loop(chunk_size: int = 15, daemon: bool = False, l
                 async with websockets.connect(ws_url, max_size=50 * 1024 * 1024, ping_interval=None) as ws:
                     for sym in chunk:
                         t_sym = time.time()
-                        all_data, is_rate_limited = await harvest_symbol_liquidation(ws, sym)
-
-                        if is_rate_limited:
-                            logger.warning(f"[{sym}] Hit CoinGlass rate limit! Triggering reactive Cloudflare WARP rotation...")
-                            rotate_warp_ip(context=f"Liq_{sym}", reason="RATE_LIMITED", force=True)
-                            await asyncio.sleep(2.0)
-                            all_data, is_rate_limited = await harvest_symbol_liquidation(ws, sym)
-
-                        saved_count = persist_asset_liquidation(sym, all_data)
+                        try:
+                            all_data, _ = await harvest_symbol_liquidation(ws, sym)
+                            saved_count = await asyncio.to_thread(persist_asset_liquidation, sym, all_data)
+                        except Exception as exc:
+                            logger.error("[%s] Liquidation asset failed: %s", sym, exc)
+                            continue
                         dt = time.time() - t_sym
                         logger.info(f" -> [{sym}] Dumped {saved_count}/15 files in {dt:.2f}s -> Database/Liquidation_Level_Dumps/{sym}/")
 
@@ -575,14 +510,12 @@ async def sweep_active_assets_loop(chunk_size: int = 15, daemon: bool = False, l
                 if tab_id:
                     await close_tab(tab_id)
 
-            # Proactive WARP rotation between chunks
-            if chunk_idx < len(chunks):
-                logger.info("Rotating Cloudflare WARP IP between chunk windows...")
-                new_ip = rotate_warp_ip(context=f"Chunk_{chunk_idx}", reason="SCHEDULED", force=True)
-                logger.info(f"Fresh Egress IP established: {new_ip}")
-                await asyncio.sleep(2.5)
-
-        # Loop will re-evaluate pending vs active_assets dynamically on next pass!
+        if not daemon:
+            incomplete = [s for s in load_active_assets() if not is_asset_dump_complete(s)]
+            if incomplete:
+                raise RuntimeError(f"Liquidation sweep incomplete: {incomplete}")
+            break
+        await asyncio.sleep(loop_interval)
 
 
 def main():

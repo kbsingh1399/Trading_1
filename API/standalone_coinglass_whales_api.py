@@ -61,12 +61,15 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 try:
-    from coinglass_common import writer_lock, atomic_parquet, BrowserLock, rotate_warp_ip
+    from coinglass_common import writer_lock, atomic_parquet, verify_parquet, cdp_eval, bot_tab_url, is_process_bot_tab
 except ImportError:
     writer_lock = None
     atomic_parquet = None
     BrowserLock = None
-    rotate_warp_ip = None
+    verify_parquet = None
+    cdp_eval = None
+    bot_tab_url = None
+    is_process_bot_tab = None
 
 logging.basicConfig(
     level=logging.INFO,
@@ -75,7 +78,145 @@ logging.basicConfig(
 )
 logger = logging.getLogger("StandaloneWhaleAPI")
 
-# Canonical rotate_warp_ip imported from coinglass_common
+WHALE_EXTRACTION_JS = r"""(async (targetSymbol) => {
+    const expected = '/' + targetSymbol.toUpperCase();
+    if (!window.location.pathname.toUpperCase().endsWith(expected)) {
+        return {success:false, error:'wrong_symbol_route', orders:[]};
+    }
+    if (performance.getEntriesByType('resource').some(e => e.responseStatus === 429)) {
+        return {success:false, error:'rate_limited', rateReason:'HTTP_429', orders:[]};
+    }
+    const bodyText = document.body.innerText;
+    if (/Too Many Requests|HTTP 429|rate limit|Large-order data failed to load/i.test(bodyText)) {
+        return {success:false, error:'rate_limited', rateReason:'RATE_LIMIT_BANNER', orders:[]};
+    }
+    if (document.querySelector('iframe[src*="challenges.cloudflare.com"], #turnstile-wrapper') ||
+        /Verify you are human|Checking your browser/i.test(document.title + ' ' + bodyText)) {
+        return {success:false, error:'challenge', rateReason:'CHALLENGE', orders:[]};
+    }
+    const zeroText = s => /^(?:[≥>]=?\s*)?\$0(?:\.0+)?$/.test((s || '').trim());
+    const rail = document.querySelector('.lo-rail') || document.body;
+    const controls = Array.from(rail.querySelectorAll('[class*="ui_select"], [class*="select"], [role="combobox"]'));
+    const control = controls.filter(el => /Size threshold|≥\s*\$/.test(el.innerText || ''))
+        .sort((a,b) => (a.innerText||'').length - (b.innerText||'').length)[0];
+    if (!control) return {success:false, error:'threshold_control_missing', orders:[]};
+    if (!zeroText((control.innerText || '').replace(/Size threshold/gi, '').trim())) {
+        for (const type of ['pointerdown','mousedown','pointerup','mouseup','click']) {
+            control.dispatchEvent(new MouseEvent(type, {bubbles:true, cancelable:true}));
+        }
+        await new Promise(r => setTimeout(r, 300));
+        const option = Array.from(document.querySelectorAll('[role="option"], li, div, span'))
+            .find(el => el.children.length === 0 && zeroText(el.innerText));
+        if (!option) return {success:false, error:'zero_threshold_option_missing', orders:[]};
+        option.click();
+        const deadline = Date.now() + 8000;
+        while (Date.now() < deadline) {
+            const text = (control.innerText || '').replace(/Size threshold/gi, '').trim();
+            if (zeroText(text) && !/Loading/i.test(document.querySelector('.lo-bt-body')?.innerText || '')) break;
+            await new Promise(r => setTimeout(r, 150));
+        }
+        if (!zeroText((control.innerText || '').replace(/Size threshold/gi, '').trim())) {
+            return {success:false, error:'zero_threshold_unverified', orders:[]};
+        }
+        await new Promise(r => setTimeout(r, 800));
+    }
+    function readFiber() {
+        const container = document.querySelector('.lo-bt-body');
+        if (!container) return [];
+        const key = Object.keys(container).find(k => k.startsWith('__reactFiber$'));
+        for (let fiber = key ? container[key] : null; fiber; fiber = fiber.return) {
+            for (let st = fiber.memoizedState; st; st = st.next) {
+                const val = st.memoizedState;
+                const rows = val && typeof val === 'object' ? val['0'] : null;
+                if (Array.isArray(rows) && rows.length && rows.every(o => o &&
+                    Number.isFinite(Number(o.price)) && Number(o.price) > 0 &&
+                    Number.isFinite(Number(o.usd)) && Number(o.usd) >= 0 &&
+                    ['ask','bid'].includes(o.side) && typeof o.ex === 'string')) return rows;
+            }
+        }
+        return [];
+    }
+    let rawOrders = [];
+    const deadline = Date.now() + 12000;
+    while (Date.now() < deadline) {
+        rawOrders = readFiber();
+        if (rawOrders.length || document.querySelectorAll('.lo-bt-body table tbody tr:not(.bdiv)').length) break;
+        await new Promise(r => setTimeout(r, 200));
+    }
+    const parseUsd = s => {
+        const m = String(s || '').replace(/[$,\s]/g,'').match(/^(-?\d+(?:\.\d+)?)([KMB])?$/i);
+        return m ? Number(m[1]) * ({K:1e3,M:1e6,B:1e9}[m[2]?.toUpperCase()] || 1) : null;
+    };
+    const usd = v => {
+        const n = Number(v);
+        if (!Number.isFinite(n) || n < 0) return null;
+        if (n === 0) return '$0';
+        const [div,suffix] = n >= 1e9 ? [1e9,'B'] : n >= 1e6 ? [1e6,'M'] : n >= 1e3 ? [1e3,'K'] : [1,''];
+        return '$' + (n/div).toFixed(div === 1 ? 0 : 2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1') + suffix;
+    };
+    const price = n => Number(n).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits: n >= 1 ? 2 : 8, useGrouping:true});
+    let mark = null;
+    for (const el of [document.querySelector('.lo-bt-body tr.bdiv'), document.querySelector('.lo-last-price'), document.querySelector('[class*="lastPrice"]')]) {
+        const m = el?.innerText.match(/([\d,]+\.?\d*)/);
+        if (m && Number(m[1].replace(/,/g,'')) > 0) { mark = Number(m[1].replace(/,/g,'')); break; }
+    }
+    const now = Date.now();
+    const duration = start => {
+        if (!Number.isFinite(Number(start)) || Number(start) <= 0) return '';
+        const s = Math.max(0, Math.floor((now-Number(start))/1000));
+        return s < 60 ? s+'s' : s < 3600 ? Math.floor(s/60)+'m '+s%60+'s' : s < 86400 ? Math.floor(s/3600)+'h '+Math.floor(s%3600/60)+'m' : Math.floor(s/86400)+'d '+Math.floor(s%86400/3600)+'h';
+    };
+    let orders = [], method = 'react_fiber', complete = true;
+    if (rawOrders.length) {
+        for (const o of [...rawOrders].sort((a,b) => b.price-a.price)) {
+            const initial = Number(o.initUsd ?? o.usd), remaining = Number(o.usd), filled = Number(o.filledUsd || 0);
+            if (![initial,remaining,filled].every(n => Number.isFinite(n) && n >= 0)) {
+                return {success:false, error:'invalid_order_values', orders:[]};
+            }
+            orders.push({venue_side:o.ex.replace(/-/g,' ').toUpperCase()+' '+(o.side === 'ask' ? 'Ask' : 'Bid'),
+                price:price(o.price), from_price:mark ? ((o.price-mark)/mark*100).toFixed(2)+'%' : '',
+                initial_usd:usd(initial), remaining_usd:usd(remaining), filled_usd:usd(filled),
+                duration:duration(o.startT), status:filled > 0 || o.fills > 0 ? 'Partially Filled' : 'Open',
+                raw_price:Number(o.price), raw_initial_usd:initial, raw_remaining_usd:remaining, raw_filled_usd:filled,
+                start_time_ms:Number(o.startT || 0), order_id:String(o.id || ''), exchange:o.ex, side:o.side});
+        }
+    } else {
+        method = 'dom_fallback';
+        const table = document.querySelector('.lo-bt-body table');
+        let scroller = table?.parentElement;
+        while (scroller && scroller.scrollHeight <= scroller.clientHeight + 1) scroller = scroller.parentElement;
+        const seen = new Map();
+        let stable = 0;
+        for (let step = 0; step < 100; step++) {
+            for (const tr of document.querySelectorAll('.lo-bt-body table tbody tr:not(.bdiv)')) {
+                const cells = Array.from(tr.querySelectorAll('td')).map(td => td.innerText.trim());
+                if (cells.length < 8 || !cells[0]) continue;
+                const values = [cells[3],cells[4],cells[5]].map(parseUsd);
+                const p = Number(cells[1].replace(/[$,]/g,''));
+                if (!Number.isFinite(p) || p <= 0 || values.some(v => v === null || v < 0)) continue;
+                const venue = cells[0].replace(/[★☆]/g,'').trim();
+                const distance = cells[2].includes('%') ? cells[2] : mark ? ((p-mark)/mark*100).toFixed(2)+'%' : '';
+                const row = {venue_side:venue, price:cells[1], from_price:distance,
+                    initial_usd:cells[3], remaining_usd:cells[4], filled_usd:cells[5],
+                    duration:cells.length > 8 ? cells[7] : cells[6], status:cells.length > 8 ? cells[8] : cells[7],
+                    raw_price:p, raw_initial_usd:values[0], raw_remaining_usd:values[1], raw_filled_usd:values[2],
+                    start_time_ms:0, order_id:'', exchange:'', side:venue.toLowerCase().includes('ask') ? 'ask' : 'bid'};
+                seen.set(JSON.stringify(cells), row);
+            }
+            if (!scroller) { complete = false; break; }
+            const before = scroller.scrollTop;
+            scroller.scrollTop = Math.min(scroller.scrollHeight, before + Math.max(1, scroller.clientHeight * 0.8));
+            await new Promise(r => setTimeout(r, 120));
+            stable = scroller.scrollTop === before ? stable + 1 : 0;
+            if (stable >= 2) break;
+            if (step === 99) complete = false;
+        }
+        orders = Array.from(seen.values()).sort((a,b) => b.raw_price-a.raw_price);
+    }
+    return {success:orders.length > 0, error:orders.length ? '' : 'empty_unverified', method, complete,
+        threshold_usd:0, mark_price:mark, total:orders.length, orders};
+})"""
+
 
 CDP_BASE_URL = "http://127.0.0.1:9222"
 
@@ -124,33 +265,20 @@ AUTHORIZED_MT5_WHITELIST = {
 REGISTRY_FILE = ROOT_DIR / "Database" / "mutual_asset_capability_registry.json"
 
 def load_whale_registry_symbols() -> List[str]:
-    """Dynamically loads verified active symbols from API/active_assets.json with fallback."""
-    try:
-        from active_assets_manager import load_active_assets
-        active = load_active_assets()
-        if active:
-            return active
-    except Exception:
-        pass
-    if not REGISTRY_FILE.exists():
-        return ["BTC", "ETH", "SOL", "XRP", "BNB", "ADA", "LINK", "LTC", "XAU", "XAG"]
-    try:
-        with open(REGISTRY_FILE, "r", encoding="utf-8") as f:
-            reg = json.load(f)
-        syms = []
-        for cat in reg.values():
-            for s, meta in cat.items():
-                if meta.get("whales", True):
-                    syms.append(s.upper())
-        return sorted(list(set(syms))) if syms else ["BTC", "ETH", "SOL", "XRP", "BNB", "ADA", "LINK", "LTC"]
-    except Exception as e:
-        logger.error(f"Error loading registry: {e}")
-        return ["BTC", "ETH", "SOL", "XRP", "BNB", "ADA", "LINK", "LTC"]
+    from active_assets_manager import load_active_assets
+    return load_active_assets()
+
+
+def is_authorized_whale_symbol(symbol: str) -> bool:
+    return symbol.upper() in load_whale_registry_symbols()
+
 
 def is_whale_asset_complete(sym: str) -> bool:
-    """Verifies that whale open orders parquet file exists and is populated."""
-    target_file = DUMP_DIR / f"{sym}_whale_open_orders.parquet"
-    return target_file.exists() and target_file.stat().st_size > 0
+    try:
+        verify_parquet(DUMP_DIR / f"{sym}_whale_open_orders.parquet", EXCEL_SPEC_COLUMNS)
+        return True
+    except Exception:
+        return False
 
 CORE_WHALE_SYMBOLS = load_whale_registry_symbols()
 
@@ -291,34 +419,15 @@ class CDPWhaleAdapter:
         self.base_url = base_url
 
     async def _cleanup_whales_orphan_tabs(self, keep_tab_id: Optional[str] = None):
-        """
-        Kills only abandoned whale tabs not currently held by active workers.
-        Never touches footprint, TV, or user tabs.
-        """
-        def _reap():
-            try:
-                req = urllib.request.Request(f"{self.base_url}/json", headers={"User-Agent": "Mozilla/5.0"})
-                with urllib.request.urlopen(req, timeout=3) as resp:
-                    tabs = json.loads(resp.read().decode())
-                    for t in tabs:
-                        tid = t.get("id")
-                        url = t.get("url", "").lower()
-                        # Strictly reap whale tabs that are NOT in active execution and != keep_tab_id
-                        if tid != keep_tab_id and tid not in _ACTIVE_WHALE_TABS and "bot=whales_api" in url:
-                            try:
-                                urllib.request.urlopen(f"{self.base_url}/json/close/{tid}", timeout=2)
-                                logger.info(f"Reaped abandoned whale tab ({tid})")
-                            except Exception:
-                                pass
-            except Exception as e:
-                logger.debug(f"Whale tab reaper suppressed: {e}")
-
-        await asyncio.to_thread(_reap)
+        """No global reaping: only explicit owned-ID finally blocks may close tabs."""
+        return
 
     async def open_whale_tab(self, symbol: str) -> Tuple[Optional[str], Optional[str]]:
         """Opens a dedicated isolated tab for the given symbol, registering it as active."""
         await self._cleanup_whales_orphan_tabs()
-        url = f"https://www.coinglass.com/large-orderbook-statistics/{symbol.upper()}?bot=whales_api"
+        if not re.fullmatch(r"[A-Z0-9][A-Z0-9_.-]{0,31}", symbol.upper()):
+            raise ValueError(f"Unsafe symbol: {symbol}")
+        url = bot_tab_url(f"https://www.coinglass.com/large-orderbook-statistics/{symbol.upper()}", "whales_api")
 
         def _open():
             req = urllib.request.Request(f"{self.base_url}/json/new?{url}", method="PUT")
@@ -351,7 +460,6 @@ class CDPWhaleAdapter:
                 logger.warning(f"Could not close Whale tab {tab_id}: {e}")
 
         await asyncio.to_thread(_close)
-        await self._cleanup_whales_orphan_tabs()
 
     async def _execute_cdp_eval(self, ws, expression: str, timeout: float = 12.0) -> Any:
         """
@@ -383,373 +491,41 @@ class CDPWhaleAdapter:
 
         raise TimeoutError(f"CDP evaluation timed out after {timeout:.1f}s")
 
+    async def extract_on_ws(self, ws, symbol: str) -> WhaleDataset:
+        expression = f"({WHALE_EXTRACTION_JS})({json.dumps(symbol.upper())})"
+        val = await cdp_eval(ws, expression, timeout=30.0)
+        if not val or not val.get("success") or not val.get("complete"):
+            raise RuntimeError(f"Whale extraction rejected: {val}")
+        now_utc = datetime.now(timezone.utc)
+        orders = []
+        for item in val["orders"]:
+            orders.append(WhaleOrder(
+                venue_side=item["venue_side"], price=item["price"], from_price=item["from_price"],
+                initial_usd=item["initial_usd"], remaining_usd=item["remaining_usd"], filled_usd=item["filled_usd"],
+                duration=item["duration"], status=item["status"], raw_price=float(item["raw_price"]),
+                raw_initial_usd=float(item["raw_initial_usd"]), raw_remaining_usd=float(item["raw_remaining_usd"]),
+                raw_filled_usd=float(item["raw_filled_usd"]), start_time_ms=int(item.get("start_time_ms") or 0),
+                order_id=str(item.get("order_id") or ""), exchange=item.get("exchange", ""), side=item["side"],
+                time_ms=int(now_utc.timestamp()*1000), snapshot_time_utc=now_utc.isoformat(),
+                snapshot_time_ist=(now_utc+timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d %H:%M:%S IST")))
+        asks = [o for o in orders if o.side == "ask"]
+        bids = [o for o in orders if o.side == "bid"]
+        return WhaleDataset(symbol.upper(), float(val.get("mark_price") or 0), now_utc.isoformat(),
+                            orders[0].snapshot_time_ist, orders, len(orders), len(asks), len(bids),
+                            sum(o.raw_remaining_usd for o in asks), sum(o.raw_remaining_usd for o in bids))
+
     async def harvest_symbol_orders(self, symbol: str, max_retries: int = 3) -> WhaleDataset:
-        """
-        Harvests all open whale orders for the symbol with zero DOM scroll lag via React Fiber,
-        with automated fallback to DOM extraction.
-        """
-        # Symbol normalization & MT5 translation
-        clean_sym = symbol.upper()
-        if clean_sym in AUTHORIZED_MT5_WHITELIST:
-            clean_sym = AUTHORIZED_MT5_WHITELIST[clean_sym]
-
-        tab_id, ws_url = None, None
-
+        clean_sym = AUTHORIZED_MT5_WHITELIST.get(symbol.upper(), symbol.upper())
         for attempt in range(1, max_retries + 1):
+            tab_id = None
             try:
                 tab_id, ws_url = await self.open_whale_tab(clean_sym)
                 if not ws_url:
                     raise RuntimeError("Failed to obtain webSocketDebuggerUrl")
-
-                # Allow initial hydration and React state mount
-                await asyncio.sleep(3.6)
-
-                async with websockets.connect(ws_url, max_size=32 * 1024 * 1024, ping_interval=None) as ws:
-                    js_payload = """(async () => {
-                        // 0. Active Hydration Wait & $0 Size Threshold Enforcement
-                        const t0 = Date.now();
-                        let rawOrders = [];
-                        while (Date.now() - t0 < 9000) {
-                            const container = document.querySelector('.lo-bt-body');
-                            if (container) {
-                                const key = Object.keys(container).find(k => k.startsWith('__reactFiber$'));
-                                let fiber = container[key];
-                                while (fiber) {
-                                    let st = fiber.memoizedState;
-                                    while (st) {
-                                        const val = st.memoizedState;
-                                        if (val && typeof val === 'object' && Array.isArray(val['0']) && val['0'].length > 0) {
-                                            if (val['0'][0] && (val['0'][0].usd !== undefined || val['0'][0].initUsd !== undefined)) {
-                                                rawOrders = val['0'];
-                                                break;
-                                            }
-                                        }
-                                        st = st.next;
-                                    }
-                                    if (rawOrders.length > 0) break;
-                                    fiber = fiber.return;
-                                }
-                            }
-                            if (rawOrders.length > 5 || document.querySelectorAll('.lo-bt-body table tbody tr').length > 5) break;
-                            await new Promise(r => setTimeout(r, 250));
-                        }
-
-                        // Ensure Size threshold is strictly $0 (no limit - captures all orders)
-                        const rail = document.querySelector('.lo-rail') || document.body;
-                        const selects = Array.from(rail.querySelectorAll('[class*="ui_select"], [class*="select"]'));
-                        const thrSelect = selects.find(el => el.innerText && (el.innerText.includes('Size threshold') || el.innerText.includes('≥$')));
-                        if (thrSelect && !thrSelect.innerText.includes('$0')) {
-                            ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(evt =>
-                                thrSelect.dispatchEvent(new MouseEvent(evt, {bubbles: true, cancelable: true}))
-                            );
-                            await new Promise(r => setTimeout(r, 400));
-                            const pop = Array.from(document.body.children).find(c => c.tagName === 'DIV' && c.id !== '__next' && (c.innerText.includes('$0') || c.innerText.includes('≥$')));
-                            if (pop) {
-                                const zeroItem = Array.from(pop.querySelectorAll('*')).find(e => e.children.length === 0 && e.innerText && e.innerText.trim() === '$0');
-                                if (zeroItem) {
-                                    zeroItem.click();
-                                    await new Promise(r => setTimeout(r, 1000));
-                                }
-                            }
-                        }
-
-                        const exMap = {
-                            'cb-spot': 'Coinbase Spot',
-                            'bn-spot': 'Binance Spot',
-                            'bn-perp': 'Binance Perp',
-                            'hl-perp': 'Hyperliquid Perp',
-                            'bybit-spot': 'Bybit Spot',
-                            'bybit-perp': 'Bybit Perp',
-                            'okx-perp': 'OKX Perp',
-                            'okx-spot': 'OKX Spot',
-                            'ok-perp': 'OKX Perp',
-                            'ok-spot': 'OKX Spot',
-                            'aster-perp': 'Aster Perp',
-                            'bfx-perp': 'Bitfinex Perp',
-                            'bfx-spot': 'Bitfinex Spot',
-                            'bitget-perp': 'Bitget Perp',
-                            'bg-perp': 'Bitget Perp',
-                            'gate-perp': 'Gate Perp',
-                            'gt-perp': 'Gate Perp',
-                            'gate-spot': 'Gate Spot',
-                            'kr-spot': 'Kraken Spot',
-                            'bs-spot': 'Bitstamp Spot',
-                            'deribit-perp': 'Deribit Perp',
-                            'dydx-perp': 'dYdX Perp',
-                        };
-
-                        function formatUsd(v) {
-                            if (!v || v === 0) return '$0';
-                            if (v >= 1e9) {
-                                const s = (v / 1e9).toFixed(2).replace(/\\.?0+$/, '');
-                                return '$' + s + 'B';
-                            }
-                            if (v >= 1e6) {
-                                const s = (v / 1e6).toFixed(2).replace(/\\.?0+$/, '');
-                                return '$' + s + 'M';
-                            }
-                            if (v >= 1e3) {
-                                const s = (v / 1e3).toFixed(2).replace(/\\.?0+$/, '');
-                                return '$' + s + 'K';
-                            }
-                            return '$' + Math.round(v).toLocaleString('en-US');
-                        }
-
-                        function parseUsdStr(s) {
-                            if (!s) return 0.0;
-                            const clean = s.replace(/[$, ]/g, '');
-                            let mult = 1.0;
-                            if (/B$/i.test(clean)) mult = 1e9;
-                            else if (/M$/i.test(clean)) mult = 1e6;
-                            else if (/K$/i.test(clean)) mult = 1e3;
-                            const num = parseFloat(clean.replace(/[BMKbmk]/g, ''));
-                            return isNaN(num) ? 0.0 : num * mult;
-                        }
-
-                        function formatDuration(startT, now) {
-                            const diff = Math.max(0, Math.floor((now - startT) / 1000));
-                            if (diff < 60) return diff + 's';
-                            if (diff < 3600) {
-                                const m = Math.floor(diff / 60);
-                                const s = diff % 60;
-                                return m + 'm ' + (s < 10 ? '0' : '') + s + 's';
-                            }
-                            if (diff < 86400) {
-                                const h = Math.floor(diff / 3600);
-                                const m = Math.floor((diff % 3600) / 60);
-                                return h + 'h ' + (m < 10 ? '0' : '') + m + 'm';
-                            }
-                            const d = Math.floor(diff / 86400);
-                            const h = Math.floor((diff % 86400) / 3600);
-                            return d + 'd ' + (h < 10 ? '0' : '') + h + 'h';
-                        }
-
-                        // High performance price formatter preserving cent precision
-                        function fastFormatPrice(p) {
-                            if (p >= 1000) {
-                                const parts = p.toFixed(1).split('.');
-                                parts[0] = parts[0].replace(/\\B(?=(\\d{3})+(?!\\d))/g, ',');
-                                return parts.join('.');
-                            } else if (p >= 1) {
-                                return p.toFixed(2);
-                            } else {
-                                return p.toFixed(4);
-                            }
-                        }
-
-                        // 1. Multi-source Mark Price Extraction
-                        let markPrice = null;
-                        const bdiv = document.querySelector('.lo-bt-body tr.bdiv');
-                        if (bdiv) {
-                            const m = bdiv.innerText.match(/([\\d,]+\\.?\\d*)/);
-                            if (m) markPrice = parseFloat(m[1].replace(/,/g, ''));
-                        }
-                        if (!markPrice) {
-                            const lastEl = document.querySelector('.lo-last-price') || document.querySelector('[class*="lastPrice"]');
-                            if (lastEl) {
-                                const m = lastEl.innerText.match(/([\\d,]+\\.?\\d*)/);
-                                if (m) markPrice = parseFloat(m[1].replace(/,/g, ''));
-                            }
-                        }
-
-                        // 2. Fast-Path: Extract orders from React Fiber (if not cached in Step 0)
-                        if (rawOrders.length === 0) {
-                            const container = document.querySelector('.lo-bt-body');
-                            if (container) {
-                            const key = Object.keys(container).find(k => k.startsWith('__reactFiber$'));
-                            let fiber = container[key];
-                            while (fiber) {
-                                let st = fiber.memoizedState;
-                                while (st) {
-                                    const val = st.memoizedState;
-                                    // Structural verification: check if array contains whale order properties
-                                    if (val && typeof val === 'object' && Array.isArray(val['0']) && val['0'].length > 0) {
-                                        const first = val['0'][0];
-                                        if (first && (first.usd !== undefined || first.initUsd !== undefined)) {
-                                            rawOrders = val['0'];
-                                            break;
-                                        }
-                                    }
-                                    st = st.next;
-                                }
-                                if (rawOrders.length > 0) break;
-                                fiber = fiber.return;
-                            }
-                        }
-                        }
-
-                        // Synthesized mark price fallback if tr.bdiv is off-screen due to virtualization
-                        if (!markPrice && rawOrders && rawOrders.length > 0) {
-                            const asks = rawOrders.filter(o => o.side === 'ask').map(o => o.price);
-                            const bids = rawOrders.filter(o => o.side === 'bid').map(o => o.price);
-                            if (asks.length > 0 && bids.length > 0) {
-                                markPrice = (Math.min(...asks) + Math.max(...bids)) / 2.0;
-                            } else if (asks.length > 0) {
-                                markPrice = Math.min(...asks);
-                            } else if (bids.length > 0) {
-                                markPrice = Math.max(...bids);
-                            }
-                        }
-
-                        const now = Date.now();
-                        let resultOrders = [];
-
-                        if (rawOrders && rawOrders.length > 0) {
-                            // Sort in standard order book order (Price descending)
-                            rawOrders.sort((a, b) => b.price - a.price);
-
-                            for (const o of rawOrders) {
-                                const venue = (exMap[o.ex] || o.ex.replace(/-/g, ' ').toUpperCase()) + ' ' + (o.side === 'ask' ? 'Ask' : 'Bid');
-                                const fromPct = markPrice ? ((o.price - markPrice) / markPrice * 100) : 0;
-                                const fromStr = (fromPct >= 0 ? '+' : '') + fromPct.toFixed(2) + '%';
-                                const initStr = formatUsd(o.initUsd);
-                                const remStr = formatUsd(o.usd);
-                                const fillStr = formatUsd(o.filledUsd);
-                                const durStr = formatDuration(o.startT, now);
-                                const statusStr = (o.filledUsd > 0 || o.fills > 0) ? 'Partially Filled' : 'Open';
-
-                                resultOrders.push({
-                                    venue_side: venue,
-                                    price: fastFormatPrice(o.price),
-                                    from_price: fromStr,
-                                    initial_usd: initStr,
-                                    remaining_usd: remStr,
-                                    filled_usd: fillStr,
-                                    duration: durStr,
-                                    status: statusStr,
-                                    raw_price: o.price,
-                                    raw_initial_usd: o.initUsd,
-                                    raw_remaining_usd: o.usd,
-                                    raw_filled_usd: o.filledUsd,
-                                    start_time_ms: o.startT,
-                                    order_id: o.id || '',
-                                    exchange: o.ex || '',
-                                    side: o.side || ''
-                                });
-                            }
-                            return {
-                                success: true,
-                                method: 'react_fiber',
-                                mark_price: markPrice,
-                                total: resultOrders.length,
-                                orders: resultOrders
-                            };
-                        }
-
-                        // 3. Fallback: Extract currently visible DOM rows if React Fiber missing
-                        const domRows = [];
-                        const trs = document.querySelectorAll('.lo-bt-body table tbody tr');
-                        for (const tr of trs) {
-                            if (tr.classList.contains('bdiv')) continue;
-                            const tds = Array.from(tr.querySelectorAll('td')).map(td => td.innerText.trim().replace(/\\n/g, ' '));
-                            if (tds.length >= 8 && tds[0]) {
-                                const venue = tds[0].replace(/[★☆]/g, '').trim();
-                                const pVal = parseFloat(tds[1].replace(/,/g, '')) || 0.0;
-                                const fromPct = markPrice ? ((pVal - markPrice) / markPrice * 100) : 0.0;
-                                const fromStr = (fromPct >= 0 ? '+' : '') + fromPct.toFixed(2) + '%';
-
-                                domRows.push({
-                                    venue_side: venue,
-                                    price: tds[1],
-                                    from_price: fromStr,
-                                    initial_usd: tds[3],
-                                    remaining_usd: tds[4],
-                                    filled_usd: tds[5],
-                                    duration: tds.length > 8 ? tds[7] : tds[6],
-                                    status: tds.length > 8 ? tds[8] : tds[7],
-                                    raw_price: pVal,
-                                    raw_initial_usd: parseUsdStr(tds[3]),
-                                    raw_remaining_usd: parseUsdStr(tds[4]),
-                                    raw_filled_usd: parseUsdStr(tds[5]),
-                                    start_time_ms: 0,
-                                    order_id: '',
-                                    exchange: '',
-                                    side: venue.toLowerCase().includes('ask') ? 'ask' : 'bid'
-                                });
-                            }
-                        }
-
-                        // Sort DOM rows descending by price
-                        domRows.sort((a, b) => b.raw_price - a.raw_price);
-
-                        return {
-                            success: true,
-                            method: 'dom_fallback',
-                            mark_price: markPrice,
-                            total: domRows.length,
-                            orders: domRows
-                        };
-                    })()"""
-
-                    val = await self._execute_cdp_eval(ws, js_payload, timeout=14.0)
-
-                    if not val or not val.get("success"):
-                        raise RuntimeError(f"CDP in-page extraction returned invalid response: {val}")
-
-                    raw_orders_list = val.get("orders", [])
-                    mark_p = float(val.get("mark_price") or 0.0)
-                    method_used = val.get("method")
-
-                    logger.info(f"[{clean_sym}] Extracted {len(raw_orders_list)} whale orders using '{method_used}' (Mark Price: ${mark_p:,.2f})")
-
-                    # Hydrate domain entities
-                    now_utc = datetime.now(timezone.utc)
-                    now_ms = int(now_utc.timestamp() * 1000)
-                    ist_offset = timedelta(hours=5, minutes=30)
-                    now_ist_str = (now_utc + ist_offset).strftime("%Y-%m-%d %H:%M:%S IST")
-
-                    domain_orders: List[WhaleOrder] = []
-                    ask_cnt, bid_cnt = 0, 0
-                    ask_usd, bid_usd = 0.0, 0.0
-
-                    for item in raw_orders_list:
-                        order = WhaleOrder(
-                            venue_side=item.get("venue_side", ""),
-                            price=item.get("price", ""),
-                            from_price=item.get("from_price", ""),
-                            initial_usd=item.get("initial_usd", ""),
-                            remaining_usd=item.get("remaining_usd", ""),
-                            filled_usd=item.get("filled_usd", ""),
-                            duration=item.get("duration", ""),
-                            status=item.get("status", "Open"),
-                            raw_price=float(item.get("raw_price") or 0.0),
-                            raw_initial_usd=float(item.get("raw_initial_usd") or 0.0),
-                            raw_remaining_usd=float(item.get("raw_remaining_usd") or 0.0),
-                            raw_filled_usd=float(item.get("raw_filled_usd") or 0.0),
-                            start_time_ms=int(item.get("start_time_ms") or 0),
-                            order_id=str(item.get("order_id") or ""),
-                            exchange=str(item.get("exchange") or ""),
-                            side=str(item.get("side") or ""),
-                            time_ms=now_ms,
-                            snapshot_time_utc=now_utc.isoformat(),
-                            snapshot_time_ist=now_ist_str
-                        )
-                        domain_orders.append(order)
-
-                        if "ask" in order.venue_side.lower():
-                            ask_cnt += 1
-                            ask_usd += order.raw_remaining_usd
-                        else:
-                            bid_cnt += 1
-                            bid_usd += order.raw_remaining_usd
-
-                    return WhaleDataset(
-                        symbol=clean_sym,
-                        mark_price=mark_p,
-                        timestamp_utc=now_utc.isoformat(),
-                        timestamp_ist=now_ist_str,
-                        orders=domain_orders,
-                        total_orders=len(domain_orders),
-                        ask_orders_count=ask_cnt,
-                        bid_orders_count=bid_cnt,
-                        total_ask_remaining_usd=ask_usd,
-                        total_bid_remaining_usd=bid_usd
-                    )
-
-            except Exception as e:
-                logger.warning(f"[{clean_sym}] Attempt {attempt}/{max_retries} failed: {e}")
+                async with websockets.connect(ws_url, max_size=50*1024*1024, open_timeout=10, close_timeout=5, ping_interval=None) as ws:
+                    return await self.extract_on_ws(ws, clean_sym)
+            except Exception:
                 if attempt == max_retries:
-                    logger.error(f"[{clean_sym}] Exhausted all {max_retries} retries harvesting whale blotter.")
                     raise
                 await asyncio.sleep(2.0)
             finally:
@@ -772,31 +548,18 @@ class ParquetWhaleRepository:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def persist_dataset(self, dataset: WhaleDataset, display_only: bool = True) -> Path:
-        """
-        Persists whale dataset matching the exact 8-column user specification.
-        When display_only=False, appends auxiliary quantitative columns for algo engines.
-        """
         symbol = dataset.symbol.upper()
         out_file = self.output_dir / f"{symbol}_whale_open_orders.parquet"
         df = dataset.to_dataframe(display_only=display_only)
-
-        # Anti-Erasure Guard: NEVER overwrite populated parquet with 0 rows
-        if len(df) == 0 and out_file.exists():
-            try:
-                prev_df = pd.read_parquet(out_file)
-                if len(prev_df) > 0:
-                    logger.warning(f"[{symbol}] Extracted 0 orders; strictly preserving existing {len(prev_df)} orders on disk.")
-                    return out_file
-            except Exception:
-                pass
-
-        if not (atomic_parquet and writer_lock):
-            raise RuntimeError("Fatal: coinglass_common.writer_lock or atomic_parquet missing!")
-
+        columns = EXCEL_SPEC_COLUMNS if display_only else EXCEL_SPEC_COLUMNS + AUXILIARY_QUANT_COLUMNS
+        if df.empty:
+            raise ValueError(f"[{symbol}] Empty whale snapshot rejected; disk preserved")
         with writer_lock(out_file):
+            if out_file.exists():
+                verify_parquet(out_file, columns)
             atomic_parquet(df, out_file)
-
-        logger.info(f"[{symbol}] Successfully dumped {len(df)} orders to {out_file.name} (Display Only: {display_only})")
+            verify_parquet(out_file, columns)
+        logger.info("[%s] Persisted and read back %s orders", symbol, len(df))
         return out_file
 
     def read_dataset(self, symbol: str) -> Optional[pd.DataFrame]:
@@ -840,7 +603,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -875,7 +638,7 @@ def get_supported_symbols():
 async def get_open_orders(symbol: str):
     """Fetches real-time open whale orders directly via CDP memory bridge."""
     clean_sym = symbol.upper()
-    if clean_sym not in AUTHORIZED_MT5_WHITELIST and clean_sym not in CORE_WHALE_SYMBOLS:
+    if not is_authorized_whale_symbol(clean_sym):
         raise HTTPException(status_code=403, detail=f"Symbol '{symbol}' is not in authorized whitelist.")
 
     try:
@@ -901,7 +664,7 @@ async def get_open_orders(symbol: str):
 async def dump_symbol_data(symbol: str, display_only: bool = Query(True, description="Strict 8-column Excel specification")):
     """Harvests open orders and dumps directly to local Parquet file."""
     clean_sym = symbol.upper()
-    if clean_sym not in AUTHORIZED_MT5_WHITELIST and clean_sym not in CORE_WHALE_SYMBOLS:
+    if not is_authorized_whale_symbol(clean_sym):
         raise HTTPException(status_code=403, detail=f"Symbol '{symbol}' is not in authorized whitelist.")
 
     try:
@@ -926,326 +689,36 @@ async def dump_symbol_data(symbol: str, display_only: bool = Query(True, descrip
 # ========================================================================================
 
 async def harvest_batch_segmented(target_symbols: List[str], chunk_size: int = 25, display_only: bool = True):
-    """
-    Segmented Sliding Window Batch Harvester:
-    Processes assets in chunks of ~25 per warm tab via in-page soft navigation,
-    recycling the tab between chunks to guarantee zero V8 heap memory leaks and zero 429 throttling.
-    """
-    total = len(target_symbols)
-    logger.info(f"Initiating Segmented Batch Whale Harvest for {total} assets (Chunk size: {chunk_size})...")
-    t0_overall = time.time()
-    success_count = 0
-
-    DUMP_DIR.mkdir(parents=True, exist_ok=True)
-    pipeline_open_dir = ROOT_DIR / "Database" / "Whale_Orders" / "Open_Orders"
-    pipeline_open_dir.mkdir(parents=True, exist_ok=True)
-
-    for chunk_idx in range(0, total, chunk_size):
-        chunk = target_symbols[chunk_idx : chunk_idx + chunk_size]
-        chunk_num = (chunk_idx // chunk_size) + 1
-        total_chunks = (total + chunk_size - 1) // chunk_size
-        logger.info(f"================ CHUNK [{chunk_num}/{total_chunks}] ({len(chunk)} assets: {chunk[0]}..{chunk[-1]}) ================")
-
-        first_sym = chunk[0]
-        tab_id, ws_url = None, None
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be positive")
+    pipeline = ParquetWhaleRepository(ROOT_DIR / "Database" / "Whale_Orders" / "Open_Orders")
+    success = 0
+    for start in range(0, len(target_symbols), chunk_size):
+        chunk = target_symbols[start:start+chunk_size]
+        tab_id = None
         try:
-            tab_id, ws_url = await adapter.open_whale_tab(first_sym)
+            tab_id, ws_url = await adapter.open_whale_tab(chunk[0])
             if not ws_url:
-                logger.error(f"Failed to open tab for chunk {chunk_num}")
                 continue
-
-            await asyncio.sleep(3.6)
-
-            async with websockets.connect(ws_url, max_size=32 * 1024 * 1024, ping_interval=None) as ws:
+            async with websockets.connect(ws_url, max_size=50*1024*1024, open_timeout=10, close_timeout=5, ping_interval=None) as ws:
                 for idx, sym in enumerate(chunk):
-                    curr_overall = chunk_idx + idx + 1
-                    t_sym_start = time.time()
-
-                    if idx > 0:
-                        nav_js = f"window.location.href = 'https://www.coinglass.com/large-orderbook-statistics/{sym}?bot=whales_api';"
-                        await ws.send(json.dumps({'id': 100 + idx, 'method': 'Runtime.evaluate', 'params': {'expression': nav_js}}))
-                        await ws.recv()
-                        await asyncio.sleep(2.8)
-
-                    req_id = 1000 + curr_overall
-                    await ws.send(json.dumps({
-                        'id': req_id,
-                        'method': 'Runtime.evaluate',
-                        'params': {'expression': """(async () => {
-                            // 0. Rate limit detection
-                            const isRateLimited = document.body.innerText.includes('Large-order data failed to load');
-
-                            // 1. Ensure Size threshold is strictly $0 (no limit)
-                            const rail = document.querySelector('.lo-rail') || document.body;
-                            const selects = Array.from(rail.querySelectorAll('[class*="ui_select"], [class*="select"]'));
-                            const thrSelect = selects.find(el => el.innerText && el.innerText.includes('Size threshold'));
-
-                            if (thrSelect && !thrSelect.innerText.includes('$0')) {
-                                thrSelect.dispatchEvent(new MouseEvent('pointerdown', {bubbles: true, cancelable: true}));
-                                thrSelect.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true}));
-                                thrSelect.dispatchEvent(new MouseEvent('pointerup', {bubbles: true, cancelable: true}));
-                                thrSelect.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true}));
-                                thrSelect.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
-                                await new Promise(r => setTimeout(r, 400));
-
-                                const pop = Array.from(document.body.children).find(c => c.tagName === 'DIV' && c.id !== '__next' && (c.innerText.includes('$0') || c.innerText.includes('≥$')));
-                                if (pop) {
-                                    const zeroItem = Array.from(pop.querySelectorAll('*')).find(e => e.children.length === 0 && e.innerText && e.innerText.trim() === '$0');
-                                    if (zeroItem) {
-                                        zeroItem.click();
-                                        await new Promise(r => setTimeout(r, 1200));
-                                    }
-                                }
-                            }
-
-                            const exMap = {
-                                'cb-spot': 'Coinbase Spot', 'bn-spot': 'Binance Spot', 'bn-perp': 'Binance Perp',
-                                'hl-perp': 'Hyperliquid Perp', 'bybit-spot': 'Bybit Spot', 'bybit-perp': 'Bybit Perp',
-                                'okx-perp': 'OKX Perp', 'okx-spot': 'OKX Spot', 'ok-perp': 'OKX Perp', 'ok-spot': 'OKX Spot',
-                                'aster-perp': 'Aster Perp', 'bfx-perp': 'Bitfinex Perp', 'bfx-spot': 'Bitfinex Spot',
-                                'bitget-perp': 'Bitget Perp', 'bg-perp': 'Bitget Perp', 'gate-perp': 'Gate Perp',
-                                'gt-perp': 'Gate Perp', 'gate-spot': 'Gate Spot', 'kr-spot': 'Kraken Spot',
-                                'bs-spot': 'Bitstamp Spot', 'deribit-perp': 'Deribit Perp', 'dydx-perp': 'dYdX Perp',
-                            };
-
-                            function formatUsd(v) {
-                                if (!v || v === 0) return '$0';
-                                if (v >= 1e9) return '$' + (v / 1e9).toFixed(2).replace(/\\.?0+$/, '') + 'B';
-                                if (v >= 1e6) return '$' + (v / 1e6).toFixed(2).replace(/\\.?0+$/, '') + 'M';
-                                if (v >= 1e3) return '$' + (v / 1e3).toFixed(2).replace(/\\.?0+$/, '') + 'K';
-                                return '$' + Math.round(v).toLocaleString('en-US');
-                            }
-
-                            function formatDuration(startT, now) {
-                                const diff = Math.max(0, Math.floor((now - startT) / 1000));
-                                if (diff < 60) return diff + 's';
-                                if (diff < 3600) {
-                                    const m = Math.floor(diff / 60);
-                                    const s = diff % 60;
-                                    return m + 'm ' + (s < 10 ? '0' : '') + s + 's';
-                                }
-                                if (diff < 86400) {
-                                    const h = Math.floor(diff / 3600);
-                                    const m = Math.floor((diff % 3600) / 60);
-                                    return h + 'h ' + (m < 10 ? '0' : '') + m + 'm';
-                                }
-                                const d = Math.floor(diff / 86400);
-                                const h = Math.floor((diff % 86400) / 3600);
-                                return d + 'd ' + (h < 10 ? '0' : '') + h + 'h';
-                            }
-
-                            function fastFormatPrice(p) {
-                                if (p >= 1000) {
-                                    const parts = p.toFixed(2).split('.');
-                                    parts[0] = parts[0].replace(/\\B(?=(\\d{3})+(?!\\d))/g, ',');
-                                    return parts.join('.');
-                                } else if (p >= 1) {
-                                    return p.toFixed(2);
-                                } else {
-                                    return p.toFixed(4);
-                                }
-                            }
-
-                            let markPrice = null;
-                            const bdiv = document.querySelector('.lo-bt-body tr.bdiv');
-                            if (bdiv) {
-                                const m = bdiv.innerText.match(/([\\d,]+\\.?\\d*)/);
-                                if (m) markPrice = parseFloat(m[1].replace(/,/g, ''));
-                            }
-                            if (!markPrice) {
-                                const lastEl = document.querySelector('.lo-last-price') || document.querySelector('[class*="lastPrice"]');
-                                if (lastEl) {
-                                    const m = lastEl.innerText.match(/([\\d,]+\\.?\\d*)/);
-                                    if (m) markPrice = parseFloat(m[1].replace(/,/g, ''));
-                                }
-                            }
-
-                            const container = document.querySelector('.lo-bt-body');
-                            let rawOrders = [];
-                            if (container) {
-                                const key = Object.keys(container).find(k => k.startsWith('__reactFiber$'));
-                                let fiber = container[key];
-                                while (fiber) {
-                                    let st = fiber.memoizedState;
-                                    while (st) {
-                                        const val = st.memoizedState;
-                                        if (val && typeof val === 'object' && Array.isArray(val['0']) && val['0'].length > 0) {
-                                            const first = val['0'][0];
-                                            if (first && (first.usd !== undefined || first.initUsd !== undefined)) {
-                                                rawOrders = val['0'];
-                                                break;
-                                            }
-                                        }
-                                        st = st.next;
-                                    }
-                                    if (rawOrders.length > 0) break;
-                                    fiber = fiber.return;
-                                }
-                            }
-
-                            if (!markPrice && rawOrders && rawOrders.length > 0) {
-                                const asks = rawOrders.filter(o => o.side === 'ask').map(o => o.price);
-                                const bids = rawOrders.filter(o => o.side === 'bid').map(o => o.price);
-                                if (asks.length > 0 && bids.length > 0) markPrice = (Math.min(...asks) + Math.max(...bids)) / 2.0;
-                                else if (asks.length > 0) markPrice = Math.min(...asks);
-                                else if (bids.length > 0) markPrice = Math.max(...bids);
-                            }
-
-                            const now = Date.now();
-                            let resultOrders = [];
-                            if (rawOrders && rawOrders.length > 0) {
-                                rawOrders.sort((a, b) => b.price - a.price);
-                                for (const o of rawOrders) {
-                                    const venue = (exMap[o.ex] || o.ex.replace(/-/g, ' ').toUpperCase()) + ' ' + (o.side === 'ask' ? 'Ask' : 'Bid');
-                                    const fromPct = markPrice ? ((o.price - markPrice) / markPrice * 100) : 0;
-                                    const fromStr = (fromPct >= 0 ? '+' : '') + fromPct.toFixed(2) + '%';
-                                    resultOrders.push({
-                                        'Venue/Side': venue,
-                                        'Price': fastFormatPrice(o.price),
-                                        'From Price': fromStr,
-                                        'Initial_USD': formatUsd(o.initUsd),
-                                        'Remaining_USD': formatUsd(o.usd),
-                                        'Filled_USD': formatUsd(o.filledUsd),
-                                        'Duration': formatDuration(o.startT, now),
-                                        'Status': (o.filledUsd > 0 || o.fills > 0) ? 'Partially Filled' : 'Open'
-                                    });
-                                }
-                            }
-
-                            if (resultOrders.length === 0) {
-                                const trs = document.querySelectorAll('.lo-bt-body table tbody tr');
-                                for (const tr of trs) {
-                                    if (tr.classList.contains('bdiv')) continue;
-                                    const tds = Array.from(tr.querySelectorAll('td')).map(td => td.innerText.trim().replace(/\\n/g, ' '));
-                                    if (tds.length >= 8 && tds[0]) {
-                                        const venue = tds[0].replace(/[★☆]/g, '').trim();
-                                        const pVal = parseFloat(tds[1].replace(/,/g, '')) || 0.0;
-                                        const fromPct = markPrice ? ((pVal - markPrice) / markPrice * 100) : 0.0;
-                                        const fromStr = (fromPct >= 0 ? '+' : '') + fromPct.toFixed(2) + '%';
-                                        resultOrders.push({
-                                            'Venue/Side': venue,
-                                            'Price': tds[1],
-                                            'From Price': fromStr,
-                                            'Initial_USD': tds[3],
-                                            'Remaining_USD': tds[4],
-                                            'Filled_USD': tds[5],
-                                            'Duration': tds.length > 8 ? tds[7] : tds[6],
-                                            'Status': tds.length > 8 ? tds[8] : tds[7]
-                                        });
-                                    }
-                                }
-                            }
-
-                            return {
-                                markPrice: markPrice || 0.0,
-                                total: resultOrders.length,
-                                orders: resultOrders,
-                                isRateLimited: isRateLimited
-                            };
-                        })()""",
-                        'returnByValue': True,
-                        'awaitPromise': True
-                    }}))
-
-                    res = None
-                    t_eval_start = time.monotonic()
-                    while time.monotonic() - t_eval_start < 12.0:
-                        raw_msg = await asyncio.wait_for(ws.recv(), timeout=5.0)
-                        msg = json.loads(raw_msg)
-                        if msg.get('id') == req_id:
-                            res = msg.get('result', {}).get('result', {}).get('value', {})
-                            break
-
-                    is_rate_limited = res.get('isRateLimited', False) if res else False
-                    if is_rate_limited or (res is not None and len(res.get('orders', [])) == 0 and res.get('markPrice', 0.0) == 0.0):
-                        logger.warning(f"[{sym}] Rate limit / 'Large-order data failed to load' detected. Rotating Cloudflare WARP IP...")
-                        try:
-                            rotate_warp_ip(context="WhaleDumps", reason="FAILED_TO_LOAD", force=True)
-                        except Exception as e_rot:
-                            logger.error(f"IP rotation error: {e_rot}")
-                        await asyncio.sleep(3.0)
-                        await ws.send(json.dumps({'id': 9990, 'method': 'Page.reload'}))
-                        await asyncio.sleep(4.5)
-                        # Re-evaluate after IP rotation
-                        req_retry_id = 9000 + curr_overall
-                        await ws.send(json.dumps({'id': req_retry_id, 'method': 'Runtime.evaluate', 'params': {'expression': """(() => {
-                            const bdiv = document.querySelector('.lo-bt-body tr.bdiv');
-                            let markPrice = null;
-                            if (bdiv) {
-                                const m = bdiv.innerText.match(/([\\d,]+\\.?\\d*)/);
-                                if (m) markPrice = parseFloat(m[1].replace(/,/g, ''));
-                            }
-                            const trs = document.querySelectorAll('.lo-bt-body table tbody tr');
-                            let resultOrders = [];
-                            for (const tr of trs) {
-                                if (tr.classList.contains('bdiv')) continue;
-                                const tds = Array.from(tr.querySelectorAll('td')).map(td => td.innerText.trim().replace(/\n/g, ' '));
-                                if (tds.length >= 8 && tds[0]) {
-                                    resultOrders.push({
-                                        'Venue/Side': tds[0].replace(/[★☆]/g, '').trim(),
-                                        'Price': tds[1],
-                                        'From Price': tds[2],
-                                        'Initial_USD': tds[3],
-                                        'Remaining_USD': tds[4],
-                                        'Filled_USD': tds[5],
-                                        'Duration': tds.length > 8 ? tds[7] : tds[6],
-                                        'Status': tds.length > 8 ? tds[8] : tds[7]
-                                    });
-                                }
-                            }
-                            return { markPrice: markPrice || 0.0, total: resultOrders.length, orders: resultOrders };
-                        })()""", 'returnByValue': True}}))
-                        t_retry_start = time.monotonic()
-                        while time.monotonic() - t_retry_start < 6.0:
-                            raw_retry = await asyncio.wait_for(ws.recv(), timeout=4.0)
-                            msg_r = json.loads(raw_retry)
-                            if msg_r.get('id') == req_retry_id:
-                                res = msg_r.get('result', {}).get('result', {}).get('value', {})
-                                break
-
-                    orders = res.get('orders', []) if res else []
-                    mark = res.get('markPrice', 0.0) if res else 0.0
-
-                    out_path = DUMP_DIR / f"{sym}_whale_open_orders.parquet"
-                    pipeline_path = pipeline_open_dir / f"{sym}_whale_open_orders.parquet"
-
-                    # Safeguard: Do not overwrite populated existing parquet with 0 rows on transient data failures
-                    if len(orders) == 0 and out_path.exists():
-                        try:
-                            prev_df = pd.read_parquet(out_path)
-                            if len(prev_df) > 0:
-                                logger.warning(f"[{sym}] Extracted 0 orders; preserving existing {len(prev_df)} orders on disk.")
-                                continue
-                        except Exception:
-                            pass
-
-                    df = pd.DataFrame(orders, columns=EXCEL_SPEC_COLUMNS)
-                    with writer_lock(out_path):
-                        atomic_parquet(df, out_path)
-
-                    with writer_lock(pipeline_path):
-                        atomic_parquet(df, pipeline_path)
-
-                    success_count += 1
-                    dt = time.time() - t_sym_start
-                    print(f"[{curr_overall}/{total}] [{sym}] Success: {len(df)} orders dumped to {out_path.name} (Mark: ${mark:,.2f}) in {dt:.2f}s")
-
-        except Exception as chunk_err:
-            logger.error(f"Chunk {chunk_num} error: {chunk_err}")
+                    try:
+                        if idx:
+                            url = bot_tab_url(f"https://www.coinglass.com/large-orderbook-statistics/{sym}", "whales_api")
+                            await cdp_eval(ws, f"window.location.href={json.dumps(url)}", timeout=5)
+                        dataset = await adapter.extract_on_ws(ws, sym)
+                        await asyncio.to_thread(repo.persist_dataset, dataset, display_only)
+                        await asyncio.to_thread(pipeline.persist_dataset, dataset, display_only)
+                        success += 1
+                    except Exception as exc:
+                        logger.error("[%s] Whale harvest failed: %s", sym, exc)
+        except Exception as exc:
+            logger.error("Whale chunk failed: %s", exc)
         finally:
             if tab_id:
-                try:
-                    await adapter.close_tab(tab_id)
-                    logger.info(f"Chunk {chunk_num} complete. Recycled tab {tab_id}.")
-                except Exception:
-                    pass
-            await asyncio.sleep(1.0)
-
-    total_time = time.time() - t0_overall
-    print("=" * 80)
-    print(f"[COMPLETED] BATCH WHALE DUMP: {success_count}/{total} successful in {total_time:.1f}s ({total_time/60:.2f} min)")
-    print(f"Target Directory: {DUMP_DIR}")
-    print("=" * 80)
+                await adapter.close_tab(tab_id)
+    logger.info("Whale batch complete: %s/%s verified", success, len(target_symbols))
+    return success
 
 
 async def run_cli(args):
@@ -1263,7 +736,8 @@ async def run_cli(args):
         while True:
             cycle += 1
             active_symbols = load_whale_registry_symbols()
-            pending = [s for s in active_symbols if not is_whale_asset_complete(s)]
+            # Continuous telemetry must refresh existing snapshots, not just fill missing files.
+            pending = active_symbols
             logger.info(f"[Whales Cycle {cycle}] Total active assets: {len(active_symbols)} | Pending: {len(pending)}")
             if not pending:
                 logger.info(f"All {len(active_symbols)} active whale assets are 100% dumped and verified on disk!")
@@ -1271,9 +745,12 @@ async def run_cli(args):
                     break
                 await asyncio.sleep(getattr(args, 'interval', 300.0))
                 continue
-            await harvest_batch_segmented(pending, chunk_size=25, display_only=not args.include_quant_cols)
+            completed = await harvest_batch_segmented(pending, chunk_size=25, display_only=not args.include_quant_cols)
             if not getattr(args, 'daemon', False):
+                if completed != len(pending):
+                    raise RuntimeError(f"Whale sweep incomplete: {completed}/{len(pending)}")
                 break
+            await asyncio.sleep(getattr(args, 'interval', 300.0))
         return
     else:
         target_symbols = [args.symbol.upper()]
