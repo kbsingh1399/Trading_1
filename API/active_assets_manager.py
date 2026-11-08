@@ -12,6 +12,7 @@ Enables live adding/removing of assets without altering any scraper codebase.
 """
 
 import os
+import re
 import sys
 import json
 import logging
@@ -19,6 +20,7 @@ import argparse
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
+from coinglass_common import writer_lock, atomic_json
 
 try:
     sys.stdout.reconfigure(line_buffering=True, encoding="utf-8")
@@ -38,114 +40,83 @@ if not logger.handlers:
     logger.setLevel(logging.INFO)
 
 
+def _normalize_symbols(symbols) -> List[str]:
+    if not isinstance(symbols, list):
+        raise ValueError("active_assets must be a list")
+    result = set()
+    for symbol in symbols:
+        if not isinstance(symbol, str):
+            raise ValueError(f"Invalid asset symbol: {symbol!r}")
+        sym = symbol.upper().strip()
+        if not re.fullmatch(r"[A-Z0-9][A-Z0-9_.-]{0,31}", sym):
+            raise ValueError(f"Unsafe asset symbol: {symbol!r}")
+        result.add(sym)
+    return sorted(result)
+
+
+def _read_active_payload():
+    with open(ACTIVE_ASSETS_FILE, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    raw = data if isinstance(data, list) else data.get("active_assets") if isinstance(data, dict) else None
+    symbols = _normalize_symbols(raw)
+    if isinstance(data, dict) and data.get("total_active_assets") != len(symbols):
+        raise ValueError("active_assets count metadata is inconsistent")
+    return data, symbols
+
+
 def load_active_assets() -> List[str]:
-    """
-    Dynamically reloads and normalizes active assets from API/active_assets.json.
-    Ultra-resilient: supports raw list, object with 'active_assets' / 'assets',
-    or category dictionary. Falls back to registry if file is unreadable.
-    """
-    if ACTIVE_ASSETS_FILE.exists():
-        try:
-            with open(ACTIVE_ASSETS_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-
-            if isinstance(data, list):
-                return sorted(list({str(s).upper().strip() for s in data if s and isinstance(s, (str, int))}))
-            
-            if isinstance(data, dict):
-                # 1. Check direct active_assets list
-                if "active_assets" in data and isinstance(data["active_assets"], list):
-                    return sorted(list({str(s).upper().strip() for s in data["active_assets"] if s}))
-                
-                # 2. Check assets key
-                if "assets" in data and isinstance(data["assets"], list):
-                    return sorted(list({str(s).upper().strip() for s in data["assets"] if s}))
-                
-                # 3. Check categories breakdown
-                if "categories" in data and isinstance(data["categories"], dict):
-                    syms = set()
-                    for cat_list in data["categories"].values():
-                        if isinstance(cat_list, list):
-                            syms.update(str(s).upper().strip() for s in cat_list if s)
-                        elif isinstance(cat_list, dict):
-                            syms.update(str(s).upper().strip() for s in cat_list.keys() if s)
-                    if syms:
-                        return sorted(list(syms))
-        except Exception as e:
-            logger.warning(f"Error reading {ACTIVE_ASSETS_FILE}: {e}. Falling back to capability registry.")
-
-    # Fallback to Database/mutual_asset_capability_registry.json
-    if REGISTRY_FILE.exists():
-        try:
-            with open(REGISTRY_FILE, "r", encoding="utf-8") as f:
-                reg = json.load(f)
-            syms = set()
-            for cat in ["Metals", "Cryptos", "Equities"]:
-                cat_dict = reg.get(cat, {})
-                syms.update(cat_dict.keys())
-            return sorted(list(syms))
-        except Exception as e:
-            logger.error(f"Failed to read capability registry: {e}")
-
-    # Fallback minimum majors
-    return ["BTC", "ETH", "SOL", "XAU", "XAG", "XRP", "ADA", "DOGE"]
+    """Fail closed on malformed configuration; never expand to the capability registry."""
+    try:
+        return _read_active_payload()[1]
+    except Exception as exc:
+        logger.error("Active universe unavailable: %s", exc)
+        raise RuntimeError(f"Cannot load {ACTIVE_ASSETS_FILE}: {exc}") from exc
 
 
 def save_active_assets(symbols: List[str], description: Optional[str] = None) -> None:
-    """Atomically updates API/active_assets.json with the provided symbol list."""
-    clean_syms = sorted(list({str(s).upper().strip() for s in symbols if s}))
-    
-    # Try to retain categories if previously existing
-    categories = {"Metals": [], "Cryptos": [], "Equities": []}
-    if ACTIVE_ASSETS_FILE.exists():
-        try:
-            with open(ACTIVE_ASSETS_FILE, "r", encoding="utf-8") as f:
-                prev = json.load(f)
-                if isinstance(prev, dict) and "categories" in prev:
-                    for k in categories:
-                        categories[k] = [s for s in prev["categories"].get(k, []) if s in clean_syms]
-        except Exception:
-            pass
+    clean_syms = _normalize_symbols(list(symbols))
+    with writer_lock(ACTIVE_ASSETS_FILE):
+        previous = {}
+        if ACTIVE_ASSETS_FILE.exists():
+            try:
+                previous, _ = _read_active_payload()
+            except Exception as exc:
+                raise RuntimeError("Refusing to overwrite malformed active universe") from exc
+        categories = previous.get("categories", {}) if isinstance(previous, dict) else {}
+        categories = {k: [s for s in v if s in clean_syms]
+                      for k, v in categories.items() if isinstance(v, list)}
+        categorized = {s for values in categories.values() for s in values}
+        uncategorized = [s for s in clean_syms if s not in categorized]
+        if uncategorized:
+            categories["Uncategorized"] = uncategorized
+        payload = {
+            "description": description or (previous.get("description") if isinstance(previous, dict) else None)
+                or "Live Dynamic Active Assets Universe",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "total_active_assets": len(clean_syms),
+            "active_assets": clean_syms,
+            "categories": categories,
+        }
+        atomic_json(ACTIVE_ASSETS_FILE, payload)
+    logger.info("Saved %s active assets", len(clean_syms))
 
-    payload = {
-        "description": description or "Live Dynamic Active Assets Universe for Footprint, Whales, and Liquidation Levels Telemetry",
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-        "total_active_assets": len(clean_syms),
-        "active_assets": clean_syms,
-        "categories": categories
-    }
 
-    tmp_path = ACTIVE_ASSETS_FILE.with_suffix(".tmp")
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
-    tmp_path.replace(ACTIVE_ASSETS_FILE)
-    logger.info(f"Successfully saved {len(clean_syms)} active assets to {ACTIVE_ASSETS_FILE}")
+def _mutate_active_assets(symbol: str, add: bool) -> List[str]:
+    sym = _normalize_symbols([symbol])[0]
+    with writer_lock(ACTIVE_ASSETS_FILE):
+        current = load_active_assets()
+        updated = sorted(set(current) | {sym}) if add else [s for s in current if s != sym]
+        if updated != current:
+            save_active_assets(updated)
+        return updated
 
 
 def add_active_asset(symbol: str) -> List[str]:
-    """Adds a symbol to API/active_assets.json if not already present."""
-    sym = symbol.upper().strip()
-    current = load_active_assets()
-    if sym in current:
-        logger.info(f"Symbol '{sym}' is already active.")
-        return current
-    current.append(sym)
-    save_active_assets(current)
-    logger.info(f"Added '{sym}'. Total active assets: {len(current)}.")
-    return current
+    return _mutate_active_assets(symbol, True)
 
 
 def remove_active_asset(symbol: str) -> List[str]:
-    """Removes a symbol from API/active_assets.json if present."""
-    sym = symbol.upper().strip()
-    current = load_active_assets()
-    if sym not in current:
-        logger.warning(f"Symbol '{sym}' not found in active assets.")
-        return current
-    current.remove(sym)
-    save_active_assets(current)
-    logger.info(f"Removed '{sym}'. Total active assets: {len(current)}.")
-    return current
+    return _mutate_active_assets(symbol, False)
 
 
 if __name__ == "__main__":

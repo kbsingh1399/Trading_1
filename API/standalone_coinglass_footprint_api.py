@@ -62,10 +62,14 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 try:
-    from coinglass_common import writer_lock, atomic_parquet
+    from coinglass_common import writer_lock, atomic_parquet, verify_parquet, cdp_eval, bot_tab_url, is_process_bot_tab
 except ImportError:
     writer_lock = None
     atomic_parquet = None
+    verify_parquet = None
+    cdp_eval = None
+    bot_tab_url = None
+    is_process_bot_tab = None
 
 logging.basicConfig(
     level=logging.INFO,
@@ -92,7 +96,10 @@ EXCEL_SPEC_COLUMNS = [
     "Candle_Trades",
     "Candle_Avg_Trade",
     "Candle_BuySell_Ratio",
-    "Candle_Signal"
+    "Candle_Signal",
+    "Candle_POC",
+    "Candle_VAH",
+    "Candle_VAL"
 ]
 
 AUTHORIZED_MT5_WHITELIST = {
@@ -163,6 +170,9 @@ class FootprintCandle:
     candle_buysell_ratio: float
     candle_signal: str = ""
     formatted_time: str = ""
+    candle_poc: Optional[float] = None
+    candle_vah: Optional[float] = None
+    candle_val: Optional[float] = None
 
     def to_spec_row(self) -> Dict[str, Any]:
         """Maps domain attributes directly to the exact spec columns with full floating precision."""
@@ -182,7 +192,10 @@ class FootprintCandle:
             "Candle_Trades": int(self.candle_trades),
             "Candle_Avg_Trade": float(self.candle_avg_trade),
             "Candle_BuySell_Ratio": float(self.candle_buysell_ratio),
-            "Candle_Signal": str(self.candle_signal or "")
+            "Candle_Signal": str(self.candle_signal or ""),
+            "Candle_POC": self.candle_poc,
+            "Candle_VAH": self.candle_vah,
+            "Candle_VAL": self.candle_val
         }
 
 
@@ -242,16 +255,31 @@ GET_ALL_AGGREGATED_SYMBOLS_JS = """(() => {
 })()"""
 
 EXTRACT_MULTI_BAR_FOOTPRINT_JS = """(async (targetSymbol) => {
+    if (performance.getEntriesByType('resource').some(e => e.responseStatus === 429)) {
+        return {error:'rate_limited', rateReason:'HTTP_429'};
+    }
+    if (document.querySelector('iframe[src*="challenges.cloudflare.com"], #turnstile-wrapper')) {
+        return {error:'challenge', rateReason:'CHALLENGE'};
+    }
     const term = window.__cg_term;
     if (!term) return { error: 'CoinGlass terminal window.__cg_term is not hooked' };
 
     const sym = targetSymbol || 'BTC';
-    if (term.prefs.sym !== sym) {
-        term.pickPair(sym, 'agg-perp');
-        for (let i = 0; i < 25; i++) {
-            if (term.prefs.sym === sym && !term.D.loading && term.D.T && term.D.T.length > 0) break;
-            await new Promise(r => setTimeout(r, 100));
-        }
+    const previousSymbolD = term.D;
+    const symbolChanged = term.prefs.sym !== sym || term.prefs.itv !== '15m';
+    if (term.prefs.sym !== sym) term.pickPair(sym, 'agg-perp');
+    if (term.prefs.itv !== '15m') {
+        if (typeof term.setItv !== 'function') return {error:'15m interval control unavailable'};
+        term.setItv('15m');
+    }
+    const symDeadline = Date.now() + 8000;
+    while (Date.now() < symDeadline) {
+        if (term.prefs.sym === sym && term.prefs.itv === '15m' && !term.D.loading && term.D.T?.length && (!symbolChanged || term.D !== previousSymbolD)) break;
+        await new Promise(r => setTimeout(r, 100));
+    }
+    if (term.prefs.sym !== sym || term.prefs.itv !== '15m' || term.D.loading || !term.D.T?.length ||
+        (symbolChanged && term.D === previousSymbolD)) {
+        return {error:'symbol/15m hydration unverified'};
     }
 
     // Hard assert Row Size = Auto
@@ -316,21 +344,25 @@ EXTRACT_MULTI_BAR_FOOTPRINT_JS = """(async (targetSymbol) => {
     const barModes = ['time', 'vol', 'range'];
 
     for (const btType of barModes) {
-        if (term.prefs.bt !== btType) {
-            term.setBt(btType);
-        }
+        const previousD = term.D;
+        const modeChanged = term.prefs.bt !== btType;
+        if (modeChanged) term.setBt(btType);
         if (term.prefs.tick !== 'auto' && typeof term.setTick === 'function') {
             term.setTick('auto');
         }
 
         // Reactive micro-polling instead of static sleeps
-        for (let w = 0; w < 25; w++) {
-            if (!term.D.loading && term.D.T && term.D.T.length > 0) break;
-            await new Promise(r => setTimeout(r, 40));
+        const modeDeadline = Date.now() + 8000;
+        while (Date.now() < modeDeadline) {
+            if (term.prefs.bt === btType && term.prefs.tick === 'auto' && !term.D.loading &&
+                term.D.T?.length && (!modeChanged || term.D !== previousD)) break;
+            await new Promise(r => setTimeout(r, 100));
         }
-
         const D = term.D;
-        if (!D || !D.T || D.T.length === 0) continue;
+        if (term.prefs.bt !== btType || term.prefs.tick !== 'auto' || D.loading || !D.T?.length ||
+            (modeChanged && D === previousD)) {
+            return {error:'bar-mode hydration unverified: ' + btType};
+        }
 
         // Dynamic query of sigSets AFTER switching bar modes so volume & range signals populate
         const currentSigSets = term.sigSets ? term.sigSets() : [];
@@ -381,6 +413,7 @@ EXTRACT_MULTI_BAR_FOOTPRINT_JS = """(async (targetSymbol) => {
         for (let i = 0; i < n; i++) {
             const F = D.F ? D.F[i] : null;
             let buyVol = 0.0, sellVol = 0.0, buyCnt = 0, sellCnt = 0, sumPV = 0.0;
+            let poc = null, vah = null, val = null;
 
             if (F && F.b && F.s) {
                 const len = Math.min(F.b.length, F.s.length);
@@ -399,6 +432,19 @@ EXTRACT_MULTI_BAR_FOOTPRINT_JS = """(async (targetSymbol) => {
                 }
             }
 
+            if (F && F.b && F.s && Number.isFinite(F.lo) && Number.isFinite(F.tick) && F.tick > 0) {
+                const volumes = Array.from({length:Math.min(F.b.length,F.s.length)}, (_,j) => (F.b[j]||0)+(F.s[j]||0));
+                const total = volumes.reduce((a,b) => a+b, 0);
+                if (total > 0) {
+                    let hi = volumes.reduce((best,n,j) => n > volumes[best] ? j : best, 0), lo = hi, included = volumes[hi];
+                    while (included < total*0.70 && (lo > 0 || hi < volumes.length-1)) {
+                        const down = lo > 0 ? volumes[lo-1] : -1, up = hi < volumes.length-1 ? volumes[hi+1] : -1;
+                        if (up >= down) included += volumes[++hi]; else included += volumes[--lo];
+                    }
+                    poc = F.lo + volumes.reduce((best,n,j) => n > volumes[best] ? j : best, 0)*F.tick;
+                    val = F.lo + lo*F.tick; vah = F.lo + hi*F.tick;
+                }
+            }
             const totalVol = buyVol + sellVol;
             const delta = buyVol - sellVol;
             deltas.push(delta);
@@ -408,7 +454,7 @@ EXTRACT_MULTI_BAR_FOOTPRINT_JS = """(async (targetSymbol) => {
                 sellVol: sellVol,
                 delta: delta,
                 vwap: totalVol > 0 ? (sumPV / totalVol) : ((D.H[i] + D.L[i] + D.C[i]) / 3.0),
-                trades: buyCnt + sellCnt
+                trades: buyCnt + sellCnt, poc, vah, val
             });
         }
 
@@ -453,7 +499,8 @@ EXTRACT_MULTI_BAR_FOOTPRINT_JS = """(async (targetSymbol) => {
                 max_delta_level: ana.mx,
                 min_delta_level: ana.mn,
                 trades: m.trades,
-                signal: candleSig
+                signal: candleSig,
+                poc: m.poc, vah: m.vah, val: m.val
             });
         }
 
@@ -499,15 +546,11 @@ class CDPBrowserAdapter:
             logger.debug(f"Failed to close tab {tab_id}: {e}")
 
     def get_or_create_footprint_tab(self, symbol: str = "BTC") -> Tuple[Optional[str], Optional[str]]:
-        tabs = self.get_open_tabs()
-        for t in tabs:
-            url = t.get("url", "").lower()
-            if "bot=footprint_api" in url and t.get("webSocketDebuggerUrl"):
-                return t["id"], t["webSocketDebuggerUrl"]
-
-        # If not open, launch tab
+        # Always create an owned tab; a matching bot tag is not a lease.
         try:
-            url = f"https://www.coinglass.com/footprint/{symbol.upper()}?bot=footprint_api"
+            if not re.fullmatch(r"[A-Z0-9][A-Z0-9_.-]{0,31}", symbol.upper()):
+                raise ValueError(f"Unsafe symbol: {symbol}")
+            url = bot_tab_url(f"https://www.coinglass.com/footprint/{symbol.upper()}", "footprint_api")
             req = urllib.request.Request(f"{self.cdp_url}/json/new?{url}", method="PUT")
             with urllib.request.urlopen(req, timeout=5) as resp:
                 data = json.loads(resp.read().decode())
@@ -524,28 +567,9 @@ class CDPBrowserAdapter:
         return ["BTC", "ETH", "DOGE", "ADA", "XRP", "LTC", "LINK"]
 
     async def execute_js(self, ws_url: str, expression: str, timeout: float = 20.0) -> Any:
-        async with websockets.connect(ws_url, ping_interval=None, max_size=50 * 1024 * 1024) as ws:
-            msg_id = int(time.time() * 1000) % 10000000
-            payload = {
-                "id": msg_id,
-                "method": "Runtime.evaluate",
-                "params": {
-                    "expression": expression,
-                    "returnByValue": True,
-                    "awaitPromise": True
-                }
-            }
-            await ws.send(json.dumps(payload))
-            t0 = time.time()
-            while time.time() - t0 < timeout:
-                raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
-                res = json.loads(raw)
-                if res.get("id") == msg_id:
-                    if "error" in res or res.get("result", {}).get("exceptionDetails"):
-                        err = res.get("result", {}).get("exceptionDetails", res.get("error"))
-                        raise RuntimeError(f"CDP JS Error: {err}")
-                    return res.get("result", {}).get("result", {}).get("value")
-        raise TimeoutError("CDP JS evaluation timed out")
+        async with websockets.connect(ws_url, ping_interval=None, max_size=50*1024*1024,
+                                      open_timeout=10, close_timeout=5) as ws:
+            return await cdp_eval(ws, expression, timeout=timeout)
 
     async def hook_terminal(self, ws_url: str) -> bool:
         for _ in range(12):
@@ -558,21 +582,23 @@ class CDPBrowserAdapter:
             await asyncio.sleep(0.5)
         return False
 
-    async def fetch_footprint_data(self, symbol: str = "BTC") -> Dict[str, Any]:
-        tab_id, ws_url = self.get_or_create_footprint_tab(symbol)
-        if not ws_url:
-            raise ConnectionError(
-                f"Chrome CDP not accessible at {self.cdp_url}. "
-                "Please run Chrome with '--remote-debugging-port=9222'."
-            )
-
-        hooked = await self.hook_terminal(ws_url)
-        if not hooked:
-            raise RuntimeError("Failed to attach to window.__cg_term in CoinGlass Footprint page.")
-
-        js_call = f"({EXTRACT_MULTI_BAR_FOOTPRINT_JS})('{symbol.upper()}')"
-        data = await self.execute_js(ws_url, js_call, timeout=20.0)
-        return data
+    async def fetch_footprint_data(self, symbol: str = "BTC", ws_url: Optional[str] = None) -> Dict[str, Any]:
+        owned_tab = None
+        try:
+            if ws_url is None:
+                owned_tab, ws_url = await asyncio.to_thread(self.get_or_create_footprint_tab, symbol)
+            if not ws_url:
+                raise ConnectionError(f"Chrome CDP not accessible at {self.cdp_url}")
+            if not await self.hook_terminal(ws_url):
+                raise RuntimeError("Failed to attach window.__cg_term")
+            js_call = f"({EXTRACT_MULTI_BAR_FOOTPRINT_JS})({json.dumps(symbol.upper())})"
+            data = await self.execute_js(ws_url, js_call, timeout=35.0)
+            if not data or data.get("error") or data.get("symbol") != symbol.upper():
+                raise RuntimeError(f"Footprint extraction rejected: {data}")
+            return data
+        finally:
+            if owned_tab:
+                await asyncio.to_thread(self.close_tab, owned_tab)
 
 
 # ======================================================================================
@@ -682,7 +708,8 @@ class FootprintDomainService:
                     candle_trades=trades,
                     candle_avg_trade=avg_trade,
                     candle_buysell_ratio=buysell_ratio,
-                    candle_signal=sig_str
+                    candle_signal=sig_str,
+                    candle_poc=b.get("poc"), candle_vah=b.get("vah"), candle_val=b.get("val")
                 )
                 candles.append(candle)
 
@@ -730,19 +757,25 @@ class FootprintDumpAdapter:
                 if parquet_path.exists():
                     try:
                         df_existing = pd.read_parquet(parquet_path)
+                        missing = [c for c in EXCEL_SPEC_COLUMNS if c not in df_existing.columns]
+                        for column in missing:
+                            df_existing[column] = None
+                        df_existing = df_existing[EXCEL_SPEC_COLUMNS]
                         if not df_existing.empty:
                             combined = pd.concat([df_existing, df], ignore_index=True)
                             # Deduplicate preserving concurrent bars in same second
-                            df = combined.drop_duplicates(subset=["Time", "Open", "Close", "Candle_Volume"], keep="last").sort_values(by="Time").reset_index(drop=True)
+                            keys = [c for c in EXCEL_SPEC_COLUMNS if c not in {"Candle_CVD", "Candle_Signal"}]
+                            df = combined.drop_duplicates(subset=keys, keep="last").sort_values(by="Time", kind="stable").reset_index(drop=True)
+                            df["Candle_CVD"] = df["Candle_Delta"].cumsum()
                             logger.info(f"🔄 Deduplicated merge for {parquet_path.name}: {len(df_existing)} -> {len(df)} rows")
                     except Exception as me:
                         logger.error(f"❌ Read failure on {parquet_path.name}: {me}. Aborting write to prevent data loss!")
                         raise RuntimeError(f"Cannot overwrite historical data on merge read failure: {me}")
 
-                if atomic_parquet is not None:
-                    atomic_parquet(df, parquet_path, compression="snappy")
-                else:
-                    df.to_parquet(parquet_path, index=False, engine="pyarrow", compression="snappy")
+                if atomic_parquet is None or verify_parquet is None:
+                    raise RuntimeError("Required locked storage kernel unavailable")
+                atomic_parquet(df, parquet_path, compression="snappy")
+                verify_parquet(parquet_path, EXCEL_SPEC_COLUMNS)
 
             if writer_lock is not None:
                 with writer_lock(parquet_path, timeout=10.0):
@@ -774,12 +807,17 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 cdp_adapter = CDPBrowserAdapter()
+
+
+def is_authorized_footprint_symbol(symbol: str) -> bool:
+    from active_assets_manager import load_active_assets
+    return symbol.upper() in load_active_assets()
 
 
 @app.get("/")
@@ -815,7 +853,9 @@ async def get_footprint(
     bar_type: Optional[str] = Query(None, description="Bar type filter: time, volume, or range"),
     format: str = Query("json", pattern="^(json|records)$")
 ):
-    clean_symbol = symbol.upper().replace("USD", "").replace("USDT", "")
+    clean_symbol = symbol.upper().strip()
+    if not is_authorized_footprint_symbol(clean_symbol):
+        raise HTTPException(status_code=403, detail=f"Symbol '{symbol}' is not active")
     try:
         raw_data = await cdp_adapter.fetch_footprint_data(clean_symbol)
         datasets = FootprintDomainService.build_datasets(raw_data, clean_symbol)
@@ -862,7 +902,9 @@ async def get_footprint(
 
 @app.post("/api/v1/footprint/{symbol}/dump-all")
 async def trigger_dump_all(symbol: str = "BTC"):
-    clean_symbol = symbol.upper().replace("USD", "").replace("USDT", "")
+    clean_symbol = symbol.upper().strip()
+    if not is_authorized_footprint_symbol(clean_symbol):
+        raise HTTPException(status_code=403, detail=f"Symbol '{symbol}' is not active")
     try:
         raw_data = await cdp_adapter.fetch_footprint_data(clean_symbol)
 
@@ -976,12 +1018,8 @@ async def run_cli_dump(symbol: str = "BTC", use_mock: bool = False):
             print(f"    Rows    : {v['rows']}")
             print("-" * 80)
     finally:
-        # Enforce ephemeral tab invariant: close tab immediately upon harvest completion
-        tabs = cdp_adapter.get_open_tabs()
-        for t in tabs:
-            if "bot=footprint_api" in t.get("url", "").lower():
-                cdp_adapter.close_tab(t["id"])
-                logger.info(f"Closed footprint tab {t['id']} (ephemeral cleanup)")
+        # fetch_footprint_data owns and closes its own tab; mock mode touches no tabs.
+        pass
 
 
 def is_footprint_asset_complete(sym: str) -> bool:
@@ -1006,7 +1044,7 @@ async def run_cli_all_assets(daemon: bool = False, loop_interval: float = 300.0)
     while True:
         cycle += 1
         symbols = load_active_assets()
-        pending = [s for s in symbols if not is_footprint_asset_complete(s)]
+        pending = symbols if daemon else [s for s in symbols if not is_footprint_asset_complete(s)]
         logger.info(f"[Footprint Cycle {cycle}] Active assets: {len(symbols)} | Pending: {len(pending)}")
 
         if not pending:
@@ -1027,7 +1065,7 @@ async def run_cli_all_assets(daemon: bool = False, loop_interval: float = 300.0)
             for idx, sym in enumerate(pending, 1):
                 print(f"\n[{idx}/{len(pending)}] Harvesting Aggregated Footprint for {sym}...")
                 try:
-                    raw_data = await cdp_adapter.fetch_footprint_data(sym)
+                    raw_data = await cdp_adapter.fetch_footprint_data(sym, ws_url=ws_url)
                     if not raw_data or "error" in raw_data:
                         logger.warning(f"Skipping {sym}: {raw_data.get('error') if raw_data else 'Empty payload'}")
                         continue

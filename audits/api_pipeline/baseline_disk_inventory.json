@@ -1,0 +1,8237 @@
+{
+  "Footprint_Dumps": {
+    "files": 64,
+    "zero_rows": 0,
+    "errors": [],
+    "schema_variants": [
+      {
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "count": 64
+      }
+    ],
+    "per_symbol": {
+      "ADA": 5,
+      "AVAX": 5,
+      "BNB": 6,
+      "BTC": 6,
+      "DOGE": 0,
+      "ETH": 8,
+      "LINK": 6,
+      "LTC": 5,
+      "PAXG": 4,
+      "SOL": 5,
+      "XAG": 3,
+      "XAU": 3,
+      "XAUT": 3,
+      "XRP": 5
+    },
+    "files_detail": [
+      {
+        "file": "Database/Footprint_Dumps/ADA_0.0005_range_footprint.parquet",
+        "rows": 309,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 33533
+      },
+      {
+        "file": "Database/Footprint_Dumps/ADA_10M_volume_footprint.parquet",
+        "rows": 65,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 15514
+      },
+      {
+        "file": "Database/Footprint_Dumps/ADA_15Min_time_footprint.parquet",
+        "rows": 600,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 54361
+      },
+      {
+        "file": "Database/Footprint_Dumps/ADA_Range0_0005_range_footprint.parquet",
+        "rows": 301,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 39540
+      },
+      {
+        "file": "Database/Footprint_Dumps/ADA_Volume5_0MADA_volume_footprint.parquet",
+        "rows": 144,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 25750
+      },
+      {
+        "file": "Database/Footprint_Dumps/AVAX_0.025_range_footprint.parquet",
+        "rows": 161,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 24574
+      },
+      {
+        "file": "Database/Footprint_Dumps/AVAX_100K_volume_footprint.parquet",
+        "rows": 81,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 18454
+      },
+      {
+        "file": "Database/Footprint_Dumps/AVAX_15Min_time_footprint.parquet",
+        "rows": 600,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 62283
+      },
+      {
+        "file": "Database/Footprint_Dumps/AVAX_Range0_025_range_footprint.parquet",
+        "rows": 165,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 29675
+      },
+      {
+        "file": "Database/Footprint_Dumps/AVAX_Volume50KAVAX_volume_footprint.parquet",
+        "rows": 191,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 33003
+      },
+      {
+        "file": "Database/Footprint_Dumps/BNB_15Min_time_footprint.parquet",
+        "rows": 718,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 73375
+      },
+      {
+        "file": "Database/Footprint_Dumps/BNB_2.5K_volume_footprint.parquet",
+        "rows": 123,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 23917
+      },
+      {
+        "file": "Database/Footprint_Dumps/BNB_2_range_footprint.parquet",
+        "rows": 56,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 17474
+      },
+      {
+        "file": "Database/Footprint_Dumps/BNB_Range2_range_footprint.parquet",
+        "rows": 60,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 17695
+      },
+      {
+        "file": "Database/Footprint_Dumps/BNB_Volume2_0KBNB_volume_footprint.parquet",
+        "rows": 104,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 22742
+      },
+      {
+        "file": "Database/Footprint_Dumps/BNB_Volume2_5KBNB_volume_footprint.parquet",
+        "rows": 54,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 16655
+      },
+      {
+        "file": "Database/Footprint_Dumps/BTC_15Min_time_footprint.parquet",
+        "rows": 1045,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 111650
+      },
+      {
+        "file": "Database/Footprint_Dumps/BTC_2.0K_volume_footprint.parquet",
+        "rows": 158,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 28048
+      },
+      {
+        "file": "Database/Footprint_Dumps/BTC_200_range_footprint.parquet",
+        "rows": 96,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 21326
+      },
+      {
+        "file": "Database/Footprint_Dumps/BTC_Range200_range_footprint.parquet",
+        "rows": 234,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 35197
+      },
+      {
+        "file": "Database/Footprint_Dumps/BTC_Volume1_0KBTC_volume_footprint.parquet",
+        "rows": 169,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 30374
+      },
+      {
+        "file": "Database/Footprint_Dumps/BTC_Volume500BTC_volume_footprint.parquet",
+        "rows": 311,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 45382
+      },
+      {
+        "file": "Database/Footprint_Dumps/ETH_10_range_footprint.parquet",
+        "rows": 55,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 17085
+      },
+      {
+        "file": "Database/Footprint_Dumps/ETH_15Min_time_footprint.parquet",
+        "rows": 724,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 79244
+      },
+      {
+        "file": "Database/Footprint_Dumps/ETH_2.0K_volume_footprint.parquet",
+        "rows": 88,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 21129
+      },
+      {
+        "file": "Database/Footprint_Dumps/ETH_200_range_footprint.parquet",
+        "rows": 3,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 10384
+      },
+      {
+        "file": "Database/Footprint_Dumps/ETH_50K_volume_footprint.parquet",
+        "rows": 131,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 25210
+      },
+      {
+        "file": "Database/Footprint_Dumps/ETH_Range10_range_footprint.parquet",
+        "rows": 89,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 21055
+      },
+      {
+        "file": "Database/Footprint_Dumps/ETH_Volume10KETH_volume_footprint.parquet",
+        "rows": 579,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 76955
+      },
+      {
+        "file": "Database/Footprint_Dumps/ETH_Volume20KETH_volume_footprint.parquet",
+        "rows": 252,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 39838
+      },
+      {
+        "file": "Database/Footprint_Dumps/LINK_0.05_range_footprint.parquet",
+        "rows": 85,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 18915
+      },
+      {
+        "file": "Database/Footprint_Dumps/LINK_100K_volume_footprint.parquet",
+        "rows": 102,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 20415
+      },
+      {
+        "file": "Database/Footprint_Dumps/LINK_15Min_time_footprint.parquet",
+        "rows": 717,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 74636
+      },
+      {
+        "file": "Database/Footprint_Dumps/LINK_Range0_05_range_footprint.parquet",
+        "rows": 106,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 23106
+      },
+      {
+        "file": "Database/Footprint_Dumps/LINK_Volume100KLINK_volume_footprint.parquet",
+        "rows": 78,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 20439
+      },
+      {
+        "file": "Database/Footprint_Dumps/LINK_Volume50KLINK_volume_footprint.parquet",
+        "rows": 76,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 20851
+      },
+      {
+        "file": "Database/Footprint_Dumps/LTC_0.2_range_footprint.parquet",
+        "rows": 82,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 19883
+      },
+      {
+        "file": "Database/Footprint_Dumps/LTC_10K_volume_footprint.parquet",
+        "rows": 106,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 22466
+      },
+      {
+        "file": "Database/Footprint_Dumps/LTC_15Min_time_footprint.parquet",
+        "rows": 718,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 73238
+      },
+      {
+        "file": "Database/Footprint_Dumps/LTC_Range0_2_range_footprint.parquet",
+        "rows": 102,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 22208
+      },
+      {
+        "file": "Database/Footprint_Dumps/LTC_Volume10KLTC_volume_footprint.parquet",
+        "rows": 177,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 30834
+      },
+      {
+        "file": "Database/Footprint_Dumps/PAXG_15Min_time_footprint.parquet",
+        "rows": 300,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 43634
+      },
+      {
+        "file": "Database/Footprint_Dumps/PAXG_Range20_range_footprint.parquet",
+        "rows": 18,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 12769
+      },
+      {
+        "file": "Database/Footprint_Dumps/PAXG_Volume20_0PAXG_volume_footprint.parquet",
+        "rows": 131,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 25609
+      },
+      {
+        "file": "Database/Footprint_Dumps/PAXG_Volume25_0PAXG_volume_footprint.parquet",
+        "rows": 189,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 32443
+      },
+      {
+        "file": "Database/Footprint_Dumps/SOL_0.25_range_footprint.parquet",
+        "rows": 164,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 27178
+      },
+      {
+        "file": "Database/Footprint_Dumps/SOL_15Min_time_footprint.parquet",
+        "rows": 718,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 72361
+      },
+      {
+        "file": "Database/Footprint_Dumps/SOL_200K_volume_footprint.parquet",
+        "rows": 91,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 20180
+      },
+      {
+        "file": "Database/Footprint_Dumps/SOL_Range0_25_range_footprint.parquet",
+        "rows": 162,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 28618
+      },
+      {
+        "file": "Database/Footprint_Dumps/SOL_Volume100KSOL_volume_footprint.parquet",
+        "rows": 200,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 32540
+      },
+      {
+        "file": "Database/Footprint_Dumps/XAG_15Min_time_footprint.parquet",
+        "rows": 300,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 41763
+      },
+      {
+        "file": "Database/Footprint_Dumps/XAG_Range0_2_range_footprint.parquet",
+        "rows": 14,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 11647
+      },
+      {
+        "file": "Database/Footprint_Dumps/XAG_Volume5_0KXAG_volume_footprint.parquet",
+        "rows": 287,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 39042
+      },
+      {
+        "file": "Database/Footprint_Dumps/XAU_15Min_time_footprint.parquet",
+        "rows": 300,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 44545
+      },
+      {
+        "file": "Database/Footprint_Dumps/XAU_Range20_range_footprint.parquet",
+        "rows": 19,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 12875
+      },
+      {
+        "file": "Database/Footprint_Dumps/XAU_Volume500XAU_volume_footprint.parquet",
+        "rows": 200,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 33603
+      },
+      {
+        "file": "Database/Footprint_Dumps/XAUT_15Min_time_footprint.parquet",
+        "rows": 300,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 44701
+      },
+      {
+        "file": "Database/Footprint_Dumps/XAUT_Range20_range_footprint.parquet",
+        "rows": 3,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 10376
+      },
+      {
+        "file": "Database/Footprint_Dumps/XAUT_Volume50_0XAUT_volume_footprint.parquet",
+        "rows": 72,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 19889
+      },
+      {
+        "file": "Database/Footprint_Dumps/XRP_0.005_range_footprint.parquet",
+        "rows": 93,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 18509
+      },
+      {
+        "file": "Database/Footprint_Dumps/XRP_10M_volume_footprint.parquet",
+        "rows": 89,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 18606
+      },
+      {
+        "file": "Database/Footprint_Dumps/XRP_15Min_time_footprint.parquet",
+        "rows": 600,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 63130
+      },
+      {
+        "file": "Database/Footprint_Dumps/XRP_Range0_005_range_footprint.parquet",
+        "rows": 80,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 20998
+      },
+      {
+        "file": "Database/Footprint_Dumps/XRP_Volume20MXRP_volume_footprint.parquet",
+        "rows": 41,
+        "columns": [
+          "Time",
+          "Open",
+          "High",
+          "Low",
+          "Close",
+          "Candle_Vwap_Price",
+          "Candle_Volume",
+          "Candle_Delta",
+          "Candle_Delta_Percent",
+          "Candle_CVD",
+          "Candle_Max_Delta",
+          "Candle_Min_Delta",
+          "Candle_Trades",
+          "Candle_Avg_Trade",
+          "Candle_BuySell_Ratio",
+          "Candle_Signal"
+        ],
+        "types": [
+          "large_string",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "double",
+          "int64",
+          "double",
+          "double",
+          "large_string"
+        ],
+        "bytes": 15980
+      }
+    ]
+  },
+  "Whale_Dumps": {
+    "files": 13,
+    "zero_rows": 0,
+    "errors": [],
+    "schema_variants": [
+      {
+        "columns": [
+          "Venue/Side",
+          "Price",
+          "From Price",
+          "Initial_USD",
+          "Remaining_USD",
+          "Filled_USD",
+          "Duration",
+          "Status"
+        ],
+        "count": 13
+      }
+    ],
+    "per_symbol": {
+      "ADA": 1,
+      "AVAX": 1,
+      "BNB": 1,
+      "BTC": 1,
+      "DOGE": 0,
+      "ETH": 1,
+      "LINK": 1,
+      "LTC": 1,
+      "PAXG": 1,
+      "SOL": 1,
+      "XAG": 1,
+      "XAU": 1,
+      "XAUT": 1,
+      "XRP": 1
+    },
+    "files_detail": [
+      {
+        "file": "Database/Whale_Dumps/ADA_whale_open_orders.parquet",
+        "rows": 363,
+        "columns": [
+          "Venue/Side",
+          "Price",
+          "From Price",
+          "Initial_USD",
+          "Remaining_USD",
+          "Filled_USD",
+          "Duration",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 15172
+      },
+      {
+        "file": "Database/Whale_Dumps/AVAX_whale_open_orders.parquet",
+        "rows": 258,
+        "columns": [
+          "Venue/Side",
+          "Price",
+          "From Price",
+          "Initial_USD",
+          "Remaining_USD",
+          "Filled_USD",
+          "Duration",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 12448
+      },
+      {
+        "file": "Database/Whale_Dumps/BNB_whale_open_orders.parquet",
+        "rows": 437,
+        "columns": [
+          "Venue/Side",
+          "Price",
+          "From Price",
+          "Initial_USD",
+          "Remaining_USD",
+          "Filled_USD",
+          "Duration",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 17525
+      },
+      {
+        "file": "Database/Whale_Dumps/BTC_whale_open_orders.parquet",
+        "rows": 846,
+        "columns": [
+          "Venue/Side",
+          "Price",
+          "From Price",
+          "Initial_USD",
+          "Remaining_USD",
+          "Filled_USD",
+          "Duration",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 22113
+      },
+      {
+        "file": "Database/Whale_Dumps/ETH_whale_open_orders.parquet",
+        "rows": 759,
+        "columns": [
+          "Venue/Side",
+          "Price",
+          "From Price",
+          "Initial_USD",
+          "Remaining_USD",
+          "Filled_USD",
+          "Duration",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 24606
+      },
+      {
+        "file": "Database/Whale_Dumps/LINK_whale_open_orders.parquet",
+        "rows": 251,
+        "columns": [
+          "Venue/Side",
+          "Price",
+          "From Price",
+          "Initial_USD",
+          "Remaining_USD",
+          "Filled_USD",
+          "Duration",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 12506
+      },
+      {
+        "file": "Database/Whale_Dumps/LTC_whale_open_orders.parquet",
+        "rows": 229,
+        "columns": [
+          "Venue/Side",
+          "Price",
+          "From Price",
+          "Initial_USD",
+          "Remaining_USD",
+          "Filled_USD",
+          "Duration",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 11755
+      },
+      {
+        "file": "Database/Whale_Dumps/PAXG_whale_open_orders.parquet",
+        "rows": 116,
+        "columns": [
+          "Venue/Side",
+          "Price",
+          "From Price",
+          "Initial_USD",
+          "Remaining_USD",
+          "Filled_USD",
+          "Duration",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 8743
+      },
+      {
+        "file": "Database/Whale_Dumps/SOL_whale_open_orders.parquet",
+        "rows": 134,
+        "columns": [
+          "Venue/Side",
+          "Price",
+          "From Price",
+          "Initial_USD",
+          "Remaining_USD",
+          "Filled_USD",
+          "Duration",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 9302
+      },
+      {
+        "file": "Database/Whale_Dumps/XAG_whale_open_orders.parquet",
+        "rows": 378,
+        "columns": [
+          "Venue/Side",
+          "Price",
+          "From Price",
+          "Initial_USD",
+          "Remaining_USD",
+          "Filled_USD",
+          "Duration",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 16012
+      },
+      {
+        "file": "Database/Whale_Dumps/XAU_whale_open_orders.parquet",
+        "rows": 128,
+        "columns": [
+          "Venue/Side",
+          "Price",
+          "From Price",
+          "Initial_USD",
+          "Remaining_USD",
+          "Filled_USD",
+          "Duration",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 8492
+      },
+      {
+        "file": "Database/Whale_Dumps/XAUT_whale_open_orders.parquet",
+        "rows": 79,
+        "columns": [
+          "Venue/Side",
+          "Price",
+          "From Price",
+          "Initial_USD",
+          "Remaining_USD",
+          "Filled_USD",
+          "Duration",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 7578
+      },
+      {
+        "file": "Database/Whale_Dumps/XRP_whale_open_orders.parquet",
+        "rows": 261,
+        "columns": [
+          "Venue/Side",
+          "Price",
+          "From Price",
+          "Initial_USD",
+          "Remaining_USD",
+          "Filled_USD",
+          "Duration",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 11813
+      }
+    ]
+  },
+  "Liquidation_Level_Dumps": {
+    "files": 195,
+    "zero_rows": 0,
+    "errors": [],
+    "schema_variants": [
+      {
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "count": 39
+      },
+      {
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "count": 39
+      },
+      {
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "count": 39
+      },
+      {
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "count": 39
+      },
+      {
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "count": 39
+      }
+    ],
+    "per_symbol": {
+      "ADA": 15,
+      "AVAX": 15,
+      "BNB": 15,
+      "BTC": 15,
+      "DOGE": 0,
+      "ETH": 15,
+      "LINK": 15,
+      "LTC": 15,
+      "PAXG": 15,
+      "SOL": 15,
+      "XAG": 15,
+      "XAU": 15,
+      "XAUT": 15,
+      "XRP": 15
+    },
+    "files_detail": [
+      {
+        "file": "Database/Liquidation_Level_Dumps/ADA/30D_ADA_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4474
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/ADA/30D_ADA_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "double",
+          "double",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6834
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/ADA/30D_ADA_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5964
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/ADA/30D_ADA_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5153
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/ADA/30D_ADA_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5183
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/ADA/3D_ADA_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4469
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/ADA/3D_ADA_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "double",
+          "double",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6785
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/ADA/3D_ADA_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5959
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/ADA/3D_ADA_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5160
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/ADA/3D_ADA_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5185
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/ADA/7D_ADA_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4458
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/ADA/7D_ADA_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "double",
+          "double",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6799
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/ADA/7D_ADA_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5959
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/ADA/7D_ADA_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5160
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/ADA/7D_ADA_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5179
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/AVAX/30D_AVAX_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4472
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/AVAX/30D_AVAX_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6489
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/AVAX/30D_AVAX_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5432
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/AVAX/30D_AVAX_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5169
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/AVAX/30D_AVAX_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5196
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/AVAX/3D_AVAX_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4480
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/AVAX/3D_AVAX_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6484
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/AVAX/3D_AVAX_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5427
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/AVAX/3D_AVAX_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5167
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/AVAX/3D_AVAX_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5194
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/AVAX/7D_AVAX_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4489
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/AVAX/7D_AVAX_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6484
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/AVAX/7D_AVAX_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5427
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/AVAX/7D_AVAX_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5165
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/AVAX/7D_AVAX_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5194
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/BNB/30D_BNB_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4435
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/BNB/30D_BNB_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6483
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/BNB/30D_BNB_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5426
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/BNB/30D_BNB_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5164
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/BNB/30D_BNB_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5192
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/BNB/3D_BNB_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4455
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/BNB/3D_BNB_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6478
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/BNB/3D_BNB_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5421
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/BNB/3D_BNB_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5159
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/BNB/3D_BNB_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5183
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/BNB/7D_BNB_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4455
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/BNB/7D_BNB_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6478
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/BNB/7D_BNB_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5421
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/BNB/7D_BNB_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5159
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/BNB/7D_BNB_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5187
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/BTC/30D_BTC_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4463
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/BTC/30D_BTC_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6483
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/BTC/30D_BTC_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5426
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/BTC/30D_BTC_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5162
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/BTC/30D_BTC_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5169
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/BTC/3D_BTC_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4458
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/BTC/3D_BTC_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6478
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/BTC/3D_BTC_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5421
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/BTC/3D_BTC_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5161
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/BTC/3D_BTC_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5184
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/BTC/7D_BTC_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4462
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/BTC/7D_BTC_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6478
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/BTC/7D_BTC_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5421
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/BTC/7D_BTC_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5160
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/BTC/7D_BTC_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5186
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/ETH/30D_ETH_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4456
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/ETH/30D_ETH_MagnetZones.parquet",
+        "rows": 8,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6631
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/ETH/30D_ETH_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5446
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/ETH/30D_ETH_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5165
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/ETH/30D_ETH_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5188
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/ETH/3D_ETH_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4442
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/ETH/3D_ETH_MagnetZones.parquet",
+        "rows": 8,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6627
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/ETH/3D_ETH_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5446
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/ETH/3D_ETH_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5159
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/ETH/3D_ETH_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5189
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/ETH/7D_ETH_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4446
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/ETH/7D_ETH_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6548
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/ETH/7D_ETH_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5441
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/ETH/7D_ETH_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5161
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/ETH/7D_ETH_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5187
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/LINK/30D_LINK_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4481
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/LINK/30D_LINK_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "double",
+          "double",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6787
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/LINK/30D_LINK_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5970
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/LINK/30D_LINK_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5170
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/LINK/30D_LINK_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5198
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/LINK/3D_LINK_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4466
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/LINK/3D_LINK_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "double",
+          "double",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6786
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/LINK/3D_LINK_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5965
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/LINK/3D_LINK_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5167
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/LINK/3D_LINK_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5191
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/LINK/7D_LINK_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4467
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/LINK/7D_LINK_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "double",
+          "double",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6788
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/LINK/7D_LINK_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5965
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/LINK/7D_LINK_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5167
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/LINK/7D_LINK_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5187
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/LTC/30D_LTC_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4472
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/LTC/30D_LTC_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "double",
+          "double",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6772
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/LTC/30D_LTC_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5964
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/LTC/30D_LTC_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5163
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/LTC/30D_LTC_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5191
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/LTC/3D_LTC_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4464
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/LTC/3D_LTC_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "double",
+          "double",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6843
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/LTC/3D_LTC_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5959
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/LTC/3D_LTC_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5159
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/LTC/3D_LTC_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5186
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/LTC/7D_LTC_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4477
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/LTC/7D_LTC_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "double",
+          "double",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6777
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/LTC/7D_LTC_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5959
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/LTC/7D_LTC_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5160
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/LTC/7D_LTC_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5187
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/PAXG/30D_PAXG_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4470
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/PAXG/30D_PAXG_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6489
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/PAXG/30D_PAXG_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5432
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/PAXG/30D_PAXG_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5172
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/PAXG/30D_PAXG_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5199
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/PAXG/3D_PAXG_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4465
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/PAXG/3D_PAXG_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6484
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/PAXG/3D_PAXG_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5427
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/PAXG/3D_PAXG_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5167
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/PAXG/3D_PAXG_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5194
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/PAXG/7D_PAXG_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4447
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/PAXG/7D_PAXG_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6484
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/PAXG/7D_PAXG_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5427
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/PAXG/7D_PAXG_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5167
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/PAXG/7D_PAXG_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5189
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/SOL/30D_SOL_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4462
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/SOL/30D_SOL_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6483
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/SOL/30D_SOL_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5426
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/SOL/30D_SOL_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5160
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/SOL/30D_SOL_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5187
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/SOL/3D_SOL_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4466
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/SOL/3D_SOL_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6478
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/SOL/3D_SOL_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5421
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/SOL/3D_SOL_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5155
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/SOL/3D_SOL_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5187
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/SOL/7D_SOL_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4445
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/SOL/7D_SOL_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6478
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/SOL/7D_SOL_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5421
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/SOL/7D_SOL_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5161
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/SOL/7D_SOL_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5187
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAG/30D_XAG_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4470
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAG/30D_XAG_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "double",
+          "double",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6790
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAG/30D_XAG_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5969
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAG/30D_XAG_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5163
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAG/30D_XAG_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5194
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAG/3D_XAG_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4483
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAG/3D_XAG_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "double",
+          "double",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6795
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAG/3D_XAG_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5959
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAG/3D_XAG_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5159
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAG/3D_XAG_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5190
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAG/7D_XAG_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4467
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAG/7D_XAG_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "double",
+          "double",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6792
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAG/7D_XAG_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5959
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAG/7D_XAG_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5161
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAG/7D_XAG_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5181
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAU/30D_XAU_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4467
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAU/30D_XAU_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "double",
+          "double",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6858
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAU/30D_XAU_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5964
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAU/30D_XAU_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5165
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAU/30D_XAU_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5185
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAU/3D_XAU_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4455
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAU/3D_XAU_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "double",
+          "double",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6855
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAU/3D_XAU_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5959
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAU/3D_XAU_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5161
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAU/3D_XAU_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5191
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAU/7D_XAU_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4451
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAU/7D_XAU_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "double",
+          "double",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6819
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAU/7D_XAU_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5446
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAU/7D_XAU_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5159
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAU/7D_XAU_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5185
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAUT/30D_XAUT_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4469
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAUT/30D_XAUT_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "double",
+          "double",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6817
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAUT/30D_XAUT_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5970
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAUT/30D_XAUT_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5171
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAUT/30D_XAUT_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5197
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAUT/3D_XAUT_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4456
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAUT/3D_XAUT_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "double",
+          "double",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6815
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAUT/3D_XAUT_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5452
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAUT/3D_XAUT_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5167
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAUT/3D_XAUT_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5195
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAUT/7D_XAUT_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4462
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAUT/7D_XAUT_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "double",
+          "double",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6812
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAUT/7D_XAUT_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5447
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAUT/7D_XAUT_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5161
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XAUT/7D_XAUT_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5182
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XRP/30D_XRP_KeyLiquidationLevel.parquet",
+        "rows": 9,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4446
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XRP/30D_XRP_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "double",
+          "double",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6746
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XRP/30D_XRP_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5969
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XRP/30D_XRP_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5154
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XRP/30D_XRP_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5174
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XRP/3D_XRP_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4464
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XRP/3D_XRP_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "double",
+          "double",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6826
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XRP/3D_XRP_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5964
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XRP/3D_XRP_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5159
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XRP/3D_XRP_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5183
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XRP/7D_XRP_KeyLiquidationLevel.parquet",
+        "rows": 10,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Price",
+          "Distance",
+          "Leverage",
+          "Strength"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "double",
+          "large_string",
+          "large_string",
+          "double"
+        ],
+        "bytes": 4482
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XRP/7D_XRP_MagnetZones.parquet",
+        "rows": 6,
+        "columns": [
+          "Asset",
+          "Time",
+          "Side",
+          "Rank",
+          "Price_Range",
+          "Price_Low",
+          "Price_High",
+          "Distance",
+          "Strength",
+          "Band_Width",
+          "Status"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "double",
+          "double",
+          "large_string",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 6774
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XRP/7D_XRP_NearFieldBalance.parquet",
+        "rows": 1,
+        "columns": [
+          "Asset",
+          "Time",
+          "Long_Pct",
+          "Long_Strength",
+          "Short_Pct",
+          "Short_Strength",
+          "Total_Strength",
+          "Bias",
+          "Interpretation"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "large_string",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5964
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XRP/7D_XRP_OpenLevelLeverageStrength.parquet",
+        "rows": 3,
+        "columns": [
+          "Asset",
+          "Time",
+          "Tier",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5154
+      },
+      {
+        "file": "Database/Liquidation_Level_Dumps/XRP/7D_XRP_StrengthByDistance.parquet",
+        "rows": 5,
+        "columns": [
+          "Asset",
+          "Time",
+          "Band",
+          "Short_Strength",
+          "Long_Strength",
+          "Total_Strength",
+          "Short_Share_Pct",
+          "Long_Share_Pct"
+        ],
+        "types": [
+          "large_string",
+          "large_string",
+          "large_string",
+          "int64",
+          "int64",
+          "int64",
+          "large_string",
+          "large_string"
+        ],
+        "bytes": 5184
+      }
+    ]
+  }
+}

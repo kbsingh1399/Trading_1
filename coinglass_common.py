@@ -27,6 +27,9 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 import threading
+import itertools
+import uuid
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 _THREAD_WRITER_LOCKS = threading.local()
 
@@ -41,11 +44,8 @@ class FileMutex:
 
     def __enter__(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        # Reap stale lock if older than 120.0s and holding PID is dead
-        try:
-            _reap_stale_lock(self.path, ttl=120.0)
-        except Exception:
-            pass
+        # Never unlink a lock inode: OS locks are released on process death.
+        # Unlinking after a probe unlock lets two writers lock different inodes.
         self.handle = self.path.open('a+b')
         try:
             if self.path.stat().st_size == 0:
@@ -161,21 +161,25 @@ def _publish(path, write):
         try:
             with temporary.open('r+b') as stream:
                 os.fsync(stream.fileno())
-        except Exception:
-            pass
+        except OSError:
+            temporary.unlink(missing_ok=True)
+            raise
         deadline = time.monotonic() + 10.0
         delay = 0.02
         while True:
             try:
                 os.replace(temporary, path)
                 break
-            except (PermissionError, OSError):
+            except PermissionError:
                 if time.monotonic() >= deadline:
                     raise
                 time.sleep(delay)
                 delay = min(delay * 1.5, 0.35)
     finally:
-        temporary.unlink(missing_ok=True)
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            logging.getLogger(__name__).warning("Temporary file cleanup failed: %s", temporary)
 
 
 def atomic_json(path, data):
@@ -198,21 +202,44 @@ def atomic_append_jsonl(path, records):
                 payload = json.dumps(rec, ensure_ascii=True, allow_nan=False)
                 f.write(payload + "\n")
             f.flush()
-            try:
-                os.fsync(f.fileno())
-            except OSError:
-                pass
+            os.fsync(f.fileno())
+
+
+def verify_parquet(path, expected_columns=None, min_rows=1):
+    """Read back through PyArrow before treating a published file as valid."""
+    import pyarrow.parquet as pq
+    table = pq.read_table(path)
+    if table.num_rows < min_rows:
+        raise ValueError(f"Parquet has {table.num_rows} rows (minimum {min_rows}): {path}")
+    if expected_columns is not None and table.column_names != list(expected_columns):
+        raise ValueError(f"Parquet schema mismatch: {path}: {table.column_names}")
+    return table.num_rows
 
 
 def atomic_parquet(frame, path, compression='snappy'):
+    import pyarrow.parquet as pq
     with writer_lock(path):
         if hasattr(frame, 'to_parquet'):
-            _publish(path, lambda p: frame.to_parquet(p, index=False, engine='pyarrow', compression=compression))
+            write = lambda p: frame.to_parquet(p, index=False, engine='pyarrow', compression=compression)
+            rows, columns = len(frame), list(frame.columns)
         elif hasattr(frame, 'write_parquet'):
-            _publish(path, lambda p: frame.write_parquet(p, compression=compression))
+            write = lambda p: frame.write_parquet(p, compression=compression)
+            rows, columns = len(frame), list(frame.columns)
         else:
-            import pyarrow.parquet as pq
-            _publish(path, lambda p: pq.write_table(frame, p, compression=compression))
+            write = lambda p: pq.write_table(frame, p, compression=compression)
+            rows, columns = frame.num_rows, frame.column_names
+        schema = None
+        def write_verified(temporary):
+            nonlocal schema
+            write(temporary)
+            table = pq.read_table(temporary)
+            if table.num_rows != rows or table.column_names != columns:
+                raise ValueError(f"Parquet serialization verification failed: {path}")
+            schema = table.schema
+        _publish(path, write_verified)
+        published = pq.read_table(path)
+        if published.num_rows != rows or not published.schema.equals(schema, check_metadata=False):
+            raise ValueError(f"Published Parquet read-back schema/row mismatch: {path}")
 
 
 def upsert_parquet(frame, path, keys, sort_by=None, limit=None, compression='snappy'):
@@ -239,6 +266,33 @@ async def cdp_result(ws, payload, timeout=15.0):
                 if 'error' in message or message.get('result', {}).get('exceptionDetails'):
                     raise RuntimeError(f'CDP request failed: {message}')
                 return message.get('result', {}).get('result', {}).get('value')
+
+
+_CDP_IDS = itertools.count(1)
+CDP_OWNER_ID = uuid.uuid4().hex
+
+
+def bot_tab_url(url: str, bot: str) -> str:
+    """Tag a newly created tab with both its pillar and this process's lease."""
+    parts = urlsplit(url)
+    query = [(k, v) for k, v in parse_qsl(parts.query) if k not in ("bot", "owner")]
+    query.extend([("bot", bot), ("owner", CDP_OWNER_ID)])
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
+def is_process_bot_tab(tab: dict, bot: str) -> bool:
+    """Exact query matching; a substring in a user's URL is not ownership."""
+    parts = urlsplit(tab.get("url", ""))
+    query = dict(parse_qsl(parts.query))
+    return (parts.hostname in {"www.coinglass.com", "coinglass.com"}
+            and query.get("bot") == bot and query.get("owner") == CDP_OWNER_ID)
+
+
+async def cdp_eval(ws, expression: str, timeout: float = 20.0):
+    return await cdp_result(ws, {
+        "id": next(_CDP_IDS), "method": "Runtime.evaluate",
+        "params": {"expression": expression, "returnByValue": True, "awaitPromise": True},
+    }, timeout=timeout)
 
 
 _PROCESS_LOCKS = {}
@@ -331,6 +385,7 @@ import logging
 import urllib.request
 
 import subprocess
+import re
 
 from pathlib import Path
 
@@ -482,44 +537,43 @@ def verify_network_stabilization(expected_change_from: str = "", max_timeout: fl
 
 
 
+DELTA_EXCLUSION_HOSTS = (
+    "cdn.india.delta.exchange", "api.india.delta.exchange",
+    "india.delta.exchange", "delta.exchange",
+)
+
+
+def _warp_command(*args, timeout=8):
+    result = subprocess.run([str(WARP_CLI), *args], capture_output=True,
+                            text=True, timeout=timeout, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(f"warp-cli {' '.join(args)} failed: {result.stderr or result.stdout}")
+    return result.stdout
+
+
 def ensure_delta_split_tunnel_exclusions():
+    """Configure exclusions while disconnected, then verify the effective list.
 
+    ``tunnel host add`` is relative to the current split-tunnel mode. Never add
+    Delta to an Include list (that would tunnel it). Organization-managed
+    profiles must be corrected by their administrator.
     """
-
-    Ensures Delta Exchange India endpoints bypass WARP and route via direct ISP IP.
-
-    Prevents 'ip_not_whitelisted_for_api_key' errors when WARP rotates.
-
-    """
-
     if not WARP_CLI.exists():
-
-        return
-
-    delta_hosts = [
-
-        "cdn.india.delta.exchange",
-
-        "api.india.delta.exchange",
-
-        "india.delta.exchange",
-
-        "delta.exchange"
-
-    ]
-
-    for h in delta_hosts:
-
-        try:
-
-            subprocess.run([str(WARP_CLI), "tunnel", "host", "add", h], capture_output=True, timeout=5)
-
-        except Exception:
-
-            pass
-
-
-
+        raise RuntimeError(f"WARP CLI unavailable: {WARP_CLI}")
+    dump = _warp_command("tunnel", "dump")
+    mode = re.search(r"Split tunnel mode:\s*(include|exclude)", dump, re.I)
+    if not mode or mode.group(1).lower() != "exclude":
+        raise RuntimeError("Delta exclusions require Split Tunnel Exclude mode")
+    listed = _warp_command("tunnel", "host", "list")
+    present = {line.strip().lower() for line in listed.splitlines()}
+    for host in DELTA_EXCLUSION_HOSTS:
+        if host not in present:
+            _warp_command("tunnel", "host", "add", host)
+    verified = {line.strip().lower() for line in
+                _warp_command("tunnel", "host", "list").splitlines()}
+    missing = set(DELTA_EXCLUSION_HOSTS) - verified
+    if missing:
+        raise RuntimeError(f"Delta split-tunnel exclusions missing: {sorted(missing)}")
 
 
 def is_warp_rotating() -> bool:
@@ -551,115 +605,58 @@ def is_warp_connected() -> bool:
         return False
 
 
-def rotate_warp_ip(context: str = "Collector", reason: str = "SCHEDULED", force: bool = False) -> str:
+def rotate_warp_ip(context: str = "Collector", reason: str = "NORMAL", force: bool = False) -> str:
+    """Reactive-only egress rotation. force cannot bypass policy or order safety.
 
+    Raises on failed rotation; callers must not publish data or log success.
+    Run through asyncio.to_thread from async collectors.
     """
-
-    Event-driven Cloudflare WARP True IP Rotation on Windows.
-
-    Alternates between ISP egress and re-provisioned Cloudflare WARP client edge.
-
-    Guarantees zero dropped orders via live order in-flight execution lock with 20s TTL auto-expiry.
-
-    """
-
-    now = time.time()
-
-    last_rot = _get_last_rotation_time()
-
-
-
-    # Hold persistent order-dispatch mutex to guarantee zero order-rotation interleaving
-
+    valid_reasons = {"HTTP_429", "CHALLENGE", "RATE_LIMIT_BANNER"}
+    if reason not in valid_reasons:
+        logger.info("[%s] WARP rotation skipped: non-reactive reason %s", context, reason)
+        return get_current_ip()
     with FileMutex(str(LOCK_DIR / "order_execution_inflight.lock"), timeout=0.0) as order_guard:
-
         if not order_guard.acquired:
-
-            logger.warning(f"[{context}] [Cloudflare WARP] Delta Exchange order execution is currently IN-FLIGHT. Rotation blocked to protect trade.")
-
-            return get_current_ip()
-
-
-
-        valid_reasons = ["CHALLENGE", "HTTP_403", "HTTP_429", "FAILED_TO_LOAD", "CONSECUTIVE_EMPTY_SCRAPES", "MANUAL_OVERRIDE"]
-
-        if not force and reason not in valid_reasons:
-
-            logger.info(f"[{context}] [Cloudflare WARP] Normal operation ({reason}). Rotation skipped to preserve session cookies.")
-
-            return get_current_ip()
-
-
-
-        if not force and (now - last_rot < MIN_ROTATION_INTERVAL_SECS):
-
-            logger.info(f"[{context}] [Cloudflare WARP] Cross-process cooldown active ({int(now - last_rot)}s / {int(MIN_ROTATION_INTERVAL_SECS)}s). Skipped.")
-
-            return get_current_ip()
-
-
-
-        if not WARP_CLI.exists():
-
-            logger.warning(f"[{context}] WARP CLI binary not found at: {WARP_CLI}")
-
-            return get_current_ip()
-
-
-
+            raise RuntimeError("WARP rotation blocked: Delta order execution in flight")
         with FileMutex(str(LOCK_DIR / "warp_execution.lock"), timeout=1.0) as mutex:
-
             if not mutex.acquired:
-
-                logger.info(f"[{context}] [Cloudflare WARP] Another process is rotating WARP. Skipped.")
-
-                return get_current_ip()
-
-
-
+                raise RuntimeError("WARP rotation already in progress")
+            # Re-read cooldown under the cross-process execution mutex.
+            now = time.time()
+            elapsed = now - _get_last_rotation_time()
+            if elapsed < MIN_ROTATION_INTERVAL_SECS:
+                raise RuntimeError(f"WARP rotation cooldown active: {elapsed:.0f}s")
+            if not WARP_CLI.exists():
+                raise RuntimeError(f"WARP CLI unavailable: {WARP_CLI}")
             old_ip = get_current_ip()
-
-            logger.info(f"[{context}] [Cloudflare WARP] True IP Rotation triggered ({reason}). Old IP: {old_ip}")
-
-            new_ip = old_ip
-
             try:
-
-                # Stage 1: Fast toggle (Disconnect to revert to Direct ISP IP if currently connected)
-                if is_warp_connected() or old_ip.startswith("104.") or old_ip.startswith("2a09:"):
-                    logger.info(f"[{context}] [Cloudflare WARP] Disconnecting WARP to switch to Direct ISP IP...")
-                    subprocess.run([str(WARP_CLI), "disconnect"], capture_output=True, text=True, timeout=8)
-                    stable, new_ip = verify_network_stabilization(expected_change_from=old_ip, max_timeout=8.0)
-                    if stable and new_ip != old_ip:
-                        _set_last_rotation_time(time.time(), new_ip, reason)
-                        logger.info(f"[{context}] [Cloudflare WARP] Toggled to Direct ISP IP: {new_ip}")
-                        return new_ip
-
-                # Stage 2: True Edge IP Re-provisioning via Registration Reset
-                logger.info(f"[{context}] [Cloudflare WARP] Performing True Edge IP Re-provisioning (Registration Reset)...")
-                subprocess.run([str(WARP_CLI), "disconnect"], capture_output=True, text=True, timeout=8)
-                time.sleep(1.0)
-                subprocess.run([str(WARP_CLI), "registration", "delete"], capture_output=True, text=True, timeout=8)
-                time.sleep(0.5)
-                subprocess.run([str(WARP_CLI), "registration", "new"], capture_output=True, text=True, timeout=8)
-                time.sleep(0.5)
-                subprocess.run([str(WARP_CLI), "connect"], capture_output=True, text=True, timeout=8)
-
+                _warp_command("disconnect")
                 ensure_delta_split_tunnel_exclusions()
-
-                stable, new_ip = verify_network_stabilization(expected_change_from=old_ip, max_timeout=12.0)
-
+                _warp_command("registration", "delete")
+                _warp_command("registration", "new")
+                ensure_delta_split_tunnel_exclusions()
+                _warp_command("connect")
+                stable, new_ip = verify_network_stabilization(old_ip, max_timeout=12.0)
+                if not stable or new_ip == old_ip or new_ip == "unknown":
+                    raise RuntimeError(f"WARP egress did not change from {old_ip}")
+                if not is_warp_connected():
+                    raise RuntimeError("WARP registration reset finished disconnected")
                 _set_last_rotation_time(time.time(), new_ip, reason)
-
-                logger.info(f"[{context}] [Cloudflare WARP] Re-provisioning complete. New IP: {new_ip} (Changed: {new_ip != old_ip})")
-
+                logger.info("[%s] Reactive WARP rotation complete: %s", context, reason)
                 return new_ip
-
-            except Exception as e:
-
-                logger.error(f"[{context}] [Cloudflare WARP] Error during rotation: {e}")
-
-                return get_current_ip()
+            except Exception:
+                # Best-effort restore connectivity; never report a failed reset as success.
+                try:
+                    _warp_command("connect")
+                    # Do not mutate routes while connected: some clients disconnect per host add.
+                    dump = _warp_command("tunnel", "dump")
+                    listed = _warp_command("tunnel", "host", "list")
+                    hosts = {line.strip().lower() for line in listed.splitlines()}
+                    if not re.search(r"Split tunnel mode:\s*exclude", dump, re.I) or set(DELTA_EXCLUSION_HOSTS) - hosts:
+                        raise RuntimeError("Connectivity restored but Delta exclusions require administrator repair")
+                except Exception as restore_error:
+                    logger.critical("[%s] WARP connectivity restore failed: %s", context, restore_error)
+                raise
 
 
 
@@ -788,54 +785,13 @@ class ChromeWatchdog:
 
 
 def _reap_stale_lock(lock_path: Path, ttl: float = 120.0) -> None:
-    """Remove stale lock if older than ttl and not held by any living process."""
-    if not lock_path.exists():
-        return
-    try:
-        mtime = lock_path.stat().st_mtime
-        if time.time() - mtime < ttl:
-            return
-        if os.name == "nt":
-            import msvcrt
-            try:
-                with open(lock_path, "r+b") as f:
-                    msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
-                    msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
-                # Success proves no live process holds this lock
-                lock_path.unlink(missing_ok=True)
-                logger.debug("Reaped abandoned lock: %s (age > %ss)", lock_path.name, ttl)
-            except (OSError, PermissionError):
-                pass
-        else:
-            import fcntl
-            try:
-                with open(lock_path, "r+b") as f:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-                lock_path.unlink(missing_ok=True)
-            except (OSError, PermissionError):
-                pass
-    except Exception:
-        pass
+    """Compatibility no-op: unlinking a lock inode breaks mutual exclusion."""
+    return None
 
 
 def clean_all_abandoned_locks(ttl: float = 120.0) -> int:
-    """Sweeps Database/.locks/ and unlinks any abandoned locks older than ttl."""
-    locks_dir = Path(__file__).resolve().parent / "Database" / ".locks"
-    if not locks_dir.exists():
-        return 0
-    reaped = 0
-    for p in locks_dir.glob("*.lock"):
-        if not p.is_file():
-            continue
-        try:
-            if time.time() - p.stat().st_mtime >= ttl:
-                _reap_stale_lock(p, ttl=ttl)
-                if not p.exists():
-                    reaped += 1
-        except Exception:
-            pass
-    return reaped
+    """OS advisory locks need no TTL reaping; retain lock inodes."""
+    return 0
 
 
 # Canonical 30-minute half-life constant (Qwen F-05, DeepSeek AUD-05)

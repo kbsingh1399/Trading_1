@@ -52,6 +52,7 @@ def test_inflight_trade_lock_prevents_ip_rotation():
     with FileMutex(str(inflight_lock_path), timeout=2.0) as guard:
         assert guard.acquired, "Could not acquire inflight trade lock"
         
-        # While the lock is held, attempting rotation should immediately return current IP
-        ip_result = rotate_warp_ip(context="UnitTest", reason="CHALLENGE", force=True)
-        assert isinstance(ip_result, str)
+        # Fail closed: callers must not interpret a blocked rotation as a successful IP change.
+        import pytest
+        with pytest.raises(RuntimeError, match="order execution in flight"):
+            rotate_warp_ip(context="UnitTest", reason="CHALLENGE", force=True)
