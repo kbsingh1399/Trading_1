@@ -39,6 +39,14 @@ def test_reactive_full_registration_sequence(tmp_path, monkeypatch):
     assert cc._get_last_rotation_time() > 0
 
 
+def test_cycle_age_ceiling_is_authorized_rotation_reason(tmp_path, monkeypatch):
+    calls = warp_fixture(tmp_path, monkeypatch)
+    assert cc.rotate_warp_ip(reason="CYCLE_AGE_CEILING", force=True) == "new"
+    core = [c for c in calls if c[0] in {"disconnect", "registration", "connect"}]
+    assert core == [("disconnect",), ("registration", "delete"), ("registration", "new"), ("connect",)]
+    assert cc._get_last_rotation_time() > 0
+
+
 def test_order_inflight_blocks_rotation(tmp_path, monkeypatch):
     calls = warp_fixture(tmp_path, monkeypatch)
     with cc.FileMutex(tmp_path / "order_execution_inflight.lock") as guard:

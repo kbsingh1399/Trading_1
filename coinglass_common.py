@@ -632,7 +632,7 @@ def rotate_warp_ip(context: str = "Collector", reason: str = "NORMAL", force: bo
     Raises on failed rotation; callers must not publish data or log success.
     Run through asyncio.to_thread from async collectors.
     """
-    valid_reasons = {"HTTP_429", "CHALLENGE", "RATE_LIMIT_BANNER"}
+    valid_reasons = {"HTTP_429", "CHALLENGE", "RATE_LIMIT_BANNER", "CYCLE_AGE_CEILING"}
     if reason not in valid_reasons:
         logger.info("[%s] WARP rotation skipped: non-reactive reason %s", context, reason)
         return get_current_ip()
