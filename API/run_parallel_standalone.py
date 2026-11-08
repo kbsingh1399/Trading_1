@@ -178,6 +178,7 @@ async def harvest_whale_chunk(symbols: List[str], chunk_idx: int, rate_signals: 
                     if idx:
                         url = bot_tab_url(f"https://www.coinglass.com/large-orderbook-statistics/{sym}", "whales_api")
                         await cdp_eval(ws, f"window.location.href={json.dumps(url)}", timeout=5)
+                        await asyncio.sleep(1.0)
                     dataset = await adapter.extract_on_ws(ws, sym)
                     display_only = sym.upper() not in equity
                     await asyncio.to_thread(display_repo.persist_dataset, dataset, display_only)
@@ -226,11 +227,34 @@ async def harvest_liquidation_chunk(symbols: List[str], chunk_idx: int, rate_sig
     return count
 
 
+async def harvest_legend_chunk(symbols: List[str], chunk_idx: int, rate_signals: Optional[set] = None) -> int:
+    """Pillar 4: CoinGlass Legend 5m Realized Aggregated Liquidation Harvester."""
+    from standalone_coinglass_legend_liquidations_api import LegendLiquidationHarvester
+    harvester = LegendLiquidationHarvester()
+    count = 0
+    try:
+        connected = await harvester.connect()
+        if not connected:
+            logger.warning("[LEGEND] Could not attach to Legend tab. Skipping chunk.")
+            return 0
+        for sym in symbols:
+            try:
+                raw_data = await harvester.harvest_symbol(sym)
+                if raw_data:
+                    total, non_zero, path = harvester.persist_asset_parquets(sym, raw_data)
+                    count += 1
+            except Exception as exc:
+                logger.error("[LEGEND][%s] Harvest failed: %s", sym, exc)
+    finally:
+        await harvester.close()
+    return count
+
+
 # ======================================================================================
 # MASTER SCHEDULER & CONCURRENCY ORCHESTRATOR
 # ======================================================================================
 
-async def run_parallel_cycle(chunk_size: int = 15, continuous: bool = False, delay_between_cycles: float = 300.0, sample_limit: Optional[int] = None, symbols_override: Optional[List[str]] = None, rotate_chunks: bool = False):
+async def run_parallel_cycle(chunk_size: int = 15, continuous: bool = False, delay_between_cycles: float = 300.0, sample_limit: Optional[int] = None, symbols_override: Optional[List[str]] = None, rotate_chunks: bool = False, with_legend: bool = False):
     """
     Executes complete cycles across active assets with:
     - Triple-Pillar Concurrency: Footprint, Whales, and Liquidation Levels run simultaneously in 3 parallel tabs.
@@ -270,6 +294,7 @@ async def run_parallel_cycle(chunk_size: int = 15, continuous: bool = False, del
         total_fp_dumped = 0
         total_whale_dumped = 0
         total_liq_dumped = 0
+        total_legend_dumped = 0
 
         total_chunks = (total_symbols + chunk_size - 1) // chunk_size
 
@@ -282,29 +307,38 @@ async def run_parallel_cycle(chunk_size: int = 15, continuous: bool = False, del
             logger.info(f"Active Egress IP: {get_current_ip()}")
             logger.info("-" * 80)
 
-            # RUN FOOTPRINT, WHALES, AND LIQUIDATION LEVELS IN PARALLEL TABS SIMULTANEOUSLY
+            # RUN ALL PILLARS IN PARALLEL TABS SIMULTANEOUSLY
             t_chunk_start = time.time()
             rate_signals = set()
-            fp_task = asyncio.create_task(harvest_footprint_chunk(chunk, c_num, rate_signals))
-            whale_task = asyncio.create_task(harvest_whale_chunk(chunk, c_num, rate_signals))
-            liq_task = asyncio.create_task(harvest_liquidation_chunk(chunk, c_num, rate_signals))
+            tasks = [
+                asyncio.create_task(harvest_footprint_chunk(chunk, c_num, rate_signals)),
+                asyncio.create_task(harvest_whale_chunk(chunk, c_num, rate_signals)),
+                asyncio.create_task(harvest_liquidation_chunk(chunk, c_num, rate_signals)),
+            ]
+            names = ["Footprint", "Whale", "Liquidation"]
+            if with_legend:
+                tasks.append(asyncio.create_task(harvest_legend_chunk(chunk, c_num, rate_signals)))
+                names.append("LiveLiquidation")
 
             # Isolated gather protecting sibling pillars from cancellation
-            results = await asyncio.gather(fp_task, whale_task, liq_task, return_exceptions=True)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
             fp_res = results[0] if isinstance(results[0], int) else 0
             whale_res = results[1] if isinstance(results[1], int) else 0
             liq_res = results[2] if isinstance(results[2], int) else 0
+            legend_res = results[3] if with_legend and len(results) > 3 and isinstance(results[3], int) else 0
 
-            for name, r in zip(["Footprint", "Whale", "Liquidation"], results):
+            for name, r in zip(names, results):
                 if isinstance(r, Exception):
                     logger.error(f"[CHUNK {c_num}] Sub-pillar {name} failed: {r}")
 
             total_fp_dumped += fp_res
             total_whale_dumped += whale_res
             total_liq_dumped += liq_res
+            total_legend_dumped += legend_res
             
             chunk_duration = time.time() - t_chunk_start
-            logger.info(f"Chunk [{c_num}/{total_chunks}] Complete in {chunk_duration:.1f}s. (FP: {fp_res} files, Whales: {whale_res} assets, Liq: {liq_res} files)")
+            extra_msg = f", Legend: {legend_res} assets" if with_legend else ""
+            logger.info(f"Chunk [{c_num}/{total_chunks}] Complete in {chunk_duration:.1f}s. (FP: {fp_res} files, Whales: {whale_res} assets, Liq: {liq_res} files{extra_msg})")
 
             # All three finally blocks have completed before any host-wide network change.
             if rate_signals:
@@ -318,11 +352,14 @@ async def run_parallel_cycle(chunk_size: int = 15, continuous: bool = False, del
         cycle_duration = time.time() - t_cycle_start
         logger.info("=" * 85)
         logger.info(f"HARVEST CYCLE #{cycle_num} COMPLETED in {cycle_duration:.1f}s ({cycle_duration/60:.2f} min)")
-        logger.info(f"Summary: Footprint Parquets = {total_fp_dumped} | Whale Asset Blotters = {total_whale_dumped} | Liquidation Parquets = {total_liq_dumped}")
+        extra_summary = f" | Live Liquidation Parquets = {total_legend_dumped}" if with_legend else ""
+        logger.info(f"Summary: Footprint Parquets = {total_fp_dumped} | Whale Asset Blotters = {total_whale_dumped} | Liquidation Parquets = {total_liq_dumped}{extra_summary}")
         logger.info("=" * 85)
 
         if not continuous:
-            if total_fp_dumped != total_symbols*3 or total_whale_dumped != total_symbols or total_liq_dumped != total_symbols*15:
+            expected_legend = total_symbols if with_legend else 0
+            legend_mismatch = (total_legend_dumped != expected_legend) if with_legend else False
+            if total_fp_dumped != total_symbols*3 or total_whale_dumped != total_symbols or total_liq_dumped != total_symbols*15 or legend_mismatch:
                 raise RuntimeError("Cycle incomplete: inspect per-asset errors; historical files were preserved")
             logger.info("Single-cycle execution complete. Exiting master runner.")
             break
@@ -345,6 +382,7 @@ def main():
     parser.add_argument("--sample", type=int, default=None, help="Limit execution to first N assets for verification")
     parser.add_argument("--symbols", nargs="+", default=None, help="Specific symbols to harvest (e.g. --symbols BTC ETH SOL)")
     parser.add_argument("--rotate-chunks", action="store_true", help="Retired compatibility flag; never enables scheduled rotation")
+    parser.add_argument("--with-legend", action="store_true", help="Harvest 5m Live Liquidations from CoinGlass Legend in parallel")
     args = parser.parse_args()
 
     asyncio.run(run_parallel_cycle(
@@ -353,7 +391,8 @@ def main():
         delay_between_cycles=args.interval,
         sample_limit=args.sample,
         symbols_override=args.symbols,
-        rotate_chunks=args.rotate_chunks
+        rotate_chunks=args.rotate_chunks,
+        with_legend=args.with_legend
     ))
 
 

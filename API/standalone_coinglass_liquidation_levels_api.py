@@ -99,6 +99,7 @@ REQUIRED_STRUCTURES = [
 ]
 
 EXTRACTION_JS = r"""(async () => {
+    while (!document.body) await new Promise(r => setTimeout(r, 100));
     const horizons = [
         { label: '3D · 1m', key: '3D' },
         { label: '7D · 3m', key: '7D' },
@@ -116,10 +117,15 @@ EXTRACTION_JS = r"""(async () => {
     };
     const distance = value => numeric(String(value).replace(/[−–—]/g,'-').replace('%',''));
     const isSelected = el => {
-        const node = el.closest('[aria-selected], [class]');
-        if (!node) return false;
-        if (node.hasAttribute('aria-selected')) return node.getAttribute('aria-selected') === 'true';
-        return String(node.className).split(/\s+/).some(c => /^(active|selected|is-active|is-selected)$/i.test(c));
+        const node = el.closest('[aria-selected], li, button, [class*="tab"]') || el;
+        if (node && node.hasAttribute('aria-selected')) return node.getAttribute('aria-selected') === 'true';
+        const classes = String(node.className || '');
+        if (/\b(active|selected|is-active|is-selected|c-eUsVIq)\b/i.test(classes)) return true;
+        try {
+            const c = window.getComputedStyle(el).color;
+            if (c && c !== 'rgb(183, 191, 204)' && c !== 'rgba(183, 191, 204, 1)') return true;
+        } catch(e) {}
+        return false;
     };
 
     for (const h of horizons) {
@@ -423,13 +429,23 @@ def persist_asset_liquidation(sym: str, all_data: Dict[str, Any]) -> int:
 
 async def harvest_symbol_liquidation(ws, symbol: str) -> Tuple[Dict[str, Any], bool]:
     target_url = bot_tab_url(f"https://www.coinglass.com/liquidation-levels/{symbol.upper()}", "liq_levels_api")
-    await cdp_eval(ws, f"window.location.href={json.dumps(target_url)}", timeout=5)
+    try:
+        curr_path = await cdp_eval(ws, "window.location.pathname", timeout=5)
+    except Exception:
+        curr_path = ""
+    if not curr_path or not str(curr_path).upper().endswith(f"/{symbol.upper()}"):
+        await cdp_eval(ws, f"window.location.href={json.dumps(target_url)}", timeout=5)
     expression = f"""(async () => {{
-        if (!window.location.pathname.toUpperCase().endsWith('/{symbol.upper()}')) return {{allData:{{}}, isRateLimited:false}};
-        const deadline = Date.now()+8000;
+        const expected = '/{symbol.upper()}';
+        const navDeadline = Date.now() + 15000;
+        while (!window.location.pathname.toUpperCase().endsWith(expected)) {{
+            if (Date.now() > navDeadline) return {{allData:{{}}, isRateLimited:false, error:'nav_timeout'}};
+            await new Promise(r => setTimeout(r, 200));
+        }}
+        const deadline = Date.now() + 15000;
         while (Date.now() < deadline) {{
-            if (!/Loading(?:…|\\.\\.\\.)/.test(document.body.innerText) && document.querySelectorAll('tbody tr').length) break;
-            await new Promise(r => setTimeout(r, 150));
+            if (document.body && !/Loading(?:…|\\.\\.\\.)/.test(document.body.innerText || '') && document.querySelectorAll('tbody tr').length >= 5) break;
+            await new Promise(r => setTimeout(r, 200));
         }}
         return await ({EXTRACTION_JS});
     }})()"""

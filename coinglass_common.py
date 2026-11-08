@@ -296,10 +296,18 @@ def is_process_bot_tab(tab: dict, bot: str) -> bool:
 
 
 async def cdp_eval(ws, expression: str, timeout: float = 20.0):
-    return await cdp_result(ws, {
-        "id": next(_CDP_IDS), "method": "Runtime.evaluate",
-        "params": {"expression": expression, "returnByValue": True, "awaitPromise": True},
-    }, timeout=timeout)
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            return await cdp_result(ws, {
+                "id": next(_CDP_IDS), "method": "Runtime.evaluate",
+                "params": {"expression": expression, "returnByValue": True, "awaitPromise": True},
+            }, timeout=min(15.0, max(1.0, deadline - time.monotonic())))
+        except RuntimeError as e:
+            if "Execution context was destroyed" in str(e) and time.monotonic() < deadline:
+                await asyncio.sleep(0.4)
+                continue
+            raise
 
 
 _PROCESS_LOCKS = {}
@@ -567,18 +575,24 @@ def ensure_delta_split_tunnel_exclusions():
     """
     if not WARP_CLI.exists():
         raise RuntimeError(f"WARP CLI unavailable: {WARP_CLI}")
-    dump = _warp_command("tunnel", "dump")
+    try:
+        dump = _warp_command("tunnel", "dump")
+    except RuntimeError as e:
+        if "WARP is not connected" in str(e):
+            return
+        raise
     mode = re.search(r"Split tunnel mode:\s*(include|exclude)", dump, re.I)
-    if not mode or mode.group(1).lower() != "exclude":
+    is_exclude = (mode and mode.group(1).lower() == "exclude") or ("Excluded:" in dump)
+    if not is_exclude:
         raise RuntimeError("Delta exclusions require Split Tunnel Exclude mode")
     listed = _warp_command("tunnel", "host", "list")
-    present = {line.strip().lower() for line in listed.splitlines()}
+    present = {line.replace("(CLI exclude)", "").strip().lower() for line in listed.splitlines()}
     for host in DELTA_EXCLUSION_HOSTS:
-        if host not in present:
+        if not any(host in p for p in present):
             _warp_command("tunnel", "host", "add", host)
-    verified = {line.strip().lower() for line in
+    verified = {line.replace("(CLI exclude)", "").strip().lower() for line in
                 _warp_command("tunnel", "host", "list").splitlines()}
-    missing = set(DELTA_EXCLUSION_HOSTS) - verified
+    missing = [h for h in DELTA_EXCLUSION_HOSTS if not any(h in v for v in verified)]
     if missing:
         raise RuntimeError(f"Delta split-tunnel exclusions missing: {sorted(missing)}")
 

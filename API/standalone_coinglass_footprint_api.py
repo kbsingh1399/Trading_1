@@ -272,7 +272,7 @@ EXTRACT_MULTI_BAR_FOOTPRINT_JS = """(async (targetSymbol) => {
         if (typeof term.setItv !== 'function') return {error:'15m interval control unavailable'};
         term.setItv('15m');
     }
-    const symDeadline = Date.now() + 8000;
+    const symDeadline = Date.now() + 15000;
     while (Date.now() < symDeadline) {
         if (term.prefs.sym === sym && term.prefs.itv === '15m' && !term.D.loading && term.D.T?.length && (!symbolChanged || term.D !== previousSymbolD)) break;
         await new Promise(r => setTimeout(r, 100));
@@ -352,15 +352,14 @@ EXTRACT_MULTI_BAR_FOOTPRINT_JS = """(async (targetSymbol) => {
         }
 
         // Reactive micro-polling instead of static sleeps
-        const modeDeadline = Date.now() + 8000;
+        const modeDeadline = Date.now() + 15000;
         while (Date.now() < modeDeadline) {
             if (term.prefs.bt === btType && term.prefs.tick === 'auto' && !term.D.loading &&
-                term.D.T?.length && (!modeChanged || term.D !== previousD)) break;
+                term.D.T?.length) break;
             await new Promise(r => setTimeout(r, 100));
         }
         const D = term.D;
-        if (term.prefs.bt !== btType || term.prefs.tick !== 'auto' || D.loading || !D.T?.length ||
-            (modeChanged && D === previousD)) {
+        if (term.prefs.bt !== btType || term.prefs.tick !== 'auto' || D.loading || !D.T?.length) {
             return {error:'bar-mode hydration unverified: ' + btType};
         }
 
@@ -592,7 +591,7 @@ class CDPBrowserAdapter:
             if not await self.hook_terminal(ws_url):
                 raise RuntimeError("Failed to attach window.__cg_term")
             js_call = f"({EXTRACT_MULTI_BAR_FOOTPRINT_JS})({json.dumps(symbol.upper())})"
-            data = await self.execute_js(ws_url, js_call, timeout=35.0)
+            data = await self.execute_js(ws_url, js_call, timeout=70.0)
             if not data or data.get("error") or data.get("symbol") != symbol.upper():
                 raise RuntimeError(f"Footprint extraction rejected: {data}")
             return data

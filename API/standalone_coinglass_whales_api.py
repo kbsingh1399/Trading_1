@@ -80,13 +80,18 @@ logger = logging.getLogger("StandaloneWhaleAPI")
 
 WHALE_EXTRACTION_JS = r"""(async (targetSymbol) => {
     const expected = '/' + targetSymbol.toUpperCase();
-    if (!window.location.pathname.toUpperCase().endsWith(expected)) {
-        return {success:false, error:'wrong_symbol_route', orders:[]};
+    const navDeadline = Date.now() + 15000;
+    while (!window.location.pathname.toUpperCase().endsWith(expected)) {
+        if (Date.now() > navDeadline) {
+            return {success:false, error:'wrong_symbol_route', orders:[]};
+        }
+        await new Promise(r => setTimeout(r, 200));
     }
     if (performance.getEntriesByType('resource').some(e => e.responseStatus === 429)) {
         return {success:false, error:'rate_limited', rateReason:'HTTP_429', orders:[]};
     }
-    const bodyText = document.body.innerText;
+    while (!document.body) await new Promise(r => setTimeout(r, 100));
+    const bodyText = document.body ? document.body.innerText : '';
     if (/Too Many Requests|HTTP 429|rate limit|Large-order data failed to load/i.test(bodyText)) {
         return {success:false, error:'rate_limited', rateReason:'RATE_LIMIT_BANNER', orders:[]};
     }
@@ -106,7 +111,7 @@ WHALE_EXTRACTION_JS = r"""(async (targetSymbol) => {
         }
         await new Promise(r => setTimeout(r, 300));
         const option = Array.from(document.querySelectorAll('[role="option"], li, div, span'))
-            .find(el => el.children.length === 0 && zeroText(el.innerText));
+            .find(el => el.children.length === 0 && zeroText(el.innerText) && !el.closest('table') && !el.classList.contains('bid'));
         if (!option) return {success:false, error:'zero_threshold_option_missing', orders:[]};
         option.click();
         const deadline = Date.now() + 8000;
@@ -140,7 +145,7 @@ WHALE_EXTRACTION_JS = r"""(async (targetSymbol) => {
     const deadline = Date.now() + 12000;
     while (Date.now() < deadline) {
         rawOrders = readFiber();
-        if (rawOrders.length || document.querySelectorAll('.lo-bt-body table tbody tr:not(.bdiv)').length) break;
+        if (rawOrders.length >= 5 || document.querySelectorAll('.lo-bt-body table tbody tr:not(.bdiv)').length >= 5) break;
         await new Promise(r => setTimeout(r, 200));
     }
     const parseUsd = s => {

@@ -406,6 +406,13 @@ class LegendLiquidationHarvester:
         total = len(final_df)
         return total, non_zero, str(target_file)
 
+    async def harvest_symbol(self, asset: str) -> Optional[List[Dict[str, Any]]]:
+        """Harvests live liquidation data for a single symbol."""
+        switched = await self.switch_asset(asset)
+        if not switched:
+            return None
+        return await self.wait_for_data(asset, timeout=5.0)
+
     async def harvest_universe(self, symbols: List[str]) -> Dict[str, Any]:
         """Harvests liquidation bars across all target symbols."""
         results = {}
