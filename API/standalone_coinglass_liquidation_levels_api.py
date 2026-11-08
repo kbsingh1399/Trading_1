@@ -130,7 +130,9 @@ EXTRACTION_JS = r"""(async () => {
 
     for (const h of horizons) {
         // 1. Switch horizon tab
-        const tfBtn = Array.from(document.querySelectorAll('*')).find(el => el.children.length === 0 && el.innerText && el.innerText.trim() === h.label);
+        const horizonRegex = new RegExp('^' + h.key + '([\\s\u00b7\\.-].*)?$', 'i');
+
+        const tfBtn = Array.from(document.querySelectorAll('button, [role="tab"], li, div, span, *')).find(el => (el.children.length === 0 || el.classList.contains('tab-inner-label') || el.hasAttribute('role')) && (horizonRegex.test((el.innerText || '').trim()) || (el.innerText || '').trim() === h.label));
         if (!tfBtn) return {allData:{}, isRateLimited:false, error:'horizon control missing: '+h.key};
         tfBtn.click();
         const horizonDeadline = Date.now() + 8000;

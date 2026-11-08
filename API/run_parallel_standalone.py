@@ -212,6 +212,7 @@ async def harvest_whale_chunk(symbols: List[str], chunk_idx: int, rate_signals: 
         tab_id, ws_url = await adapter.open_whale_tab(symbols[0])
         if not ws_url:
             raise ConnectionError("Owned whale tab has no CDP WebSocket")
+        await asyncio.sleep(3.0)
         async with websockets.connect(ws_url, max_size=50*1024*1024, open_timeout=10,
                                       close_timeout=5, ping_interval=None) as ws:
             for idx, sym in enumerate(symbols):

@@ -109,9 +109,14 @@ WHALE_EXTRACTION_JS = r"""(async (targetSymbol) => {
         for (const type of ['pointerdown','mousedown','pointerup','mouseup','click']) {
             control.dispatchEvent(new MouseEvent(type, {bubbles:true, cancelable:true}));
         }
-        await new Promise(r => setTimeout(r, 300));
-        const option = Array.from(document.querySelectorAll('[role="option"], li, div, span'))
-            .find(el => el.children.length === 0 && zeroText(el.innerText) && !el.closest('table') && !el.classList.contains('bid'));
+        let option = null;
+        const optDeadline = Date.now() + 3000;
+        while (Date.now() < optDeadline) {
+            option = Array.from(document.querySelectorAll('[role="option"], li, div, span'))
+                .find(el => el.children.length === 0 && zeroText(el.innerText) && !el.closest('table') && !el.closest('.lo-bt-sum') && !el.classList.contains('bid'));
+            if (option) break;
+            await new Promise(r => setTimeout(r, 150));
+        }
         if (!option) return {success:false, error:'zero_threshold_option_missing', orders:[]};
         option.click();
         const deadline = Date.now() + 8000;
