@@ -118,6 +118,8 @@ def audit_lock_files(lock_dir: Path, stale_threshold_secs: float = 180.0) -> Lis
 
     now = time.time()
     for lock_path in p.glob("**/*.lock"):
+        if lock_path.name.endswith(".instance.lock"):
+            continue
         try:
             stat = lock_path.stat()
             age = max(0.0, now - stat.st_mtime)
@@ -197,6 +199,8 @@ def audit_universe_parquets(db_dir: Path, symbols: List[str], max_age_secs: floa
         liq_path = liq_dir / f"{sym}_3d_liquidation_levels.parquet"
         if not liq_path.exists():
             liq_path = liq_dir / f"{sym}_3D_{sym}_KeyLiquidationLevel.parquet"
+        if not liq_path.exists():
+            liq_path = liq_dir / sym / f"3D_{sym}_KeyLiquidationLevel.parquet"
         if not liq_path.exists():
             liq_path = db_dir / "Liquidation_Data" / "Key_Levels" / f"{sym}_key_levels.parquet"
         asset_report["liquidation_levels"] = audit_parquet_freshness(liq_path, max_age_secs)
