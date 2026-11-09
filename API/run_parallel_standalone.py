@@ -357,250 +357,221 @@ async def harvest_legend_chunk(symbols: List[str], chunk_idx: int, rate_signals:
         await harvester.close(close_tab=True)
     return count
 
-
 # ======================================================================================
-# MASTER SCHEDULER & CONCURRENCY ORCHESTRATOR
+# MASTER SEQUENTIAL SCHEDULER & HIGH-FREQUENCY FOOTPRINT CADENCE ORCHESTRATOR
 # ======================================================================================
 
-async def run_parallel_cycle(
-    chunk_size: int = 50,
+async def run_sequential_pipeline(
+    footprint_interval: float = 120.0,
+    whale_interval: float = 600.0,
+    liq_interval: float = 900.0,
+    legend_interval: float = 300.0,
     continuous: bool = False,
-    delay_between_cycles: float = 300.0,
     sample_limit: Optional[int] = None,
     symbols_override: Optional[List[str]] = None,
-    rotate_chunks: bool = False,
     with_legend: bool = False,
-    max_cycles_per_ip: int = 3,
-    max_ip_age_min: float = 15.0
+    max_ip_age_min: float = 15.0,
+    **kwargs
 ):
     """
-    Executes complete cycles across active assets with:
-    - Triple/Quad-Pillar Concurrency: Footprint, Whales, Liquidation Levels, and Legend run simultaneously.
-    - Dynamic Universe: Reloads active assets from API/active_assets.json inside the while True: loop.
-    - Proactive + Reactive Egress Rotation: Rotates reactively on 429/Challenge, or at rest window after cycle/age ceiling.
-    - Rotation is coordinated after all owned tabs close, never inside a pillar.
-    - 4 Deterministic Checkpoints validating streaming feed through local disk parity.
-    - Protected asyncio.gather(return_exceptions=True) isolating sub-pillar exceptions.
-    - Atomic pipeline health heartbeat published after each cycle to Database/pipeline_health.json.
+    Executes all CoinGlass telemetry pillars STRICTLY SEQUENTIALLY:
+    - Zero Tab Contention: Exactly 1 Chrome tab is open at any given moment.
+    - More Frequent Footprint: High-frequency microstructure (15m delta, CVD, absorption)
+      sweeps on a tighter cadence (e.g. every 2 min), while Whales and Liquidation run
+      at macro cadences (e.g. 10 min and 15 min).
+    - Dynamic Universe: Reloads API/active_assets.json dynamically before every sweep.
+    - Reactive WARP IP Rotation: Rotates immediately on 429 / Turnstile / Rate Limit banners.
+    - Deterministic Heartbeat: Emits Database/pipeline_health.json after every sweep.
     """
     logger.info("=" * 85)
-    logger.info(f"STARTING MULTI-PILLAR PARALLEL STANDALONE RUNNER")
-    logger.info(f"Target Pillars: 1. Footprint | 2. Whales | 3. Liquidation Levels" + (" | 4. Live Legend" if with_legend else ""))
-    if chunk_size <= 0 or delay_between_cycles < 0:
-        raise ValueError("chunk_size must be positive and interval nonnegative")
-    if rotate_chunks:
-        logger.warning("--rotate-chunks is retired; scheduled rotations are disabled")
-    logger.info("Initial egress IP: %s", await asyncio.to_thread(get_current_ip))
+    logger.info("STARTING STRICT SEQUENTIAL MULTI-PILLAR RUNNER (HIGH-FREQUENCY FOOTPRINT)")
+    logger.info("Cadence Configuration:")
+    logger.info(f"  • Footprint (High Frequency): every {footprint_interval:.0f}s ({footprint_interval/60:.1f} min)")
+    logger.info(f"  • Whales (Macro Book Depth):  every {whale_interval:.0f}s ({whale_interval/60:.1f} min)")
+    logger.info(f"  • Liquidation Levels (Macro): every {liq_interval:.0f}s ({liq_interval/60:.1f} min)")
+    if with_legend:
+        logger.info(f"  • Live Legend:                every {legend_interval:.0f}s ({legend_interval/60:.1f} min)")
+    logger.info(f"Initial Egress IP: {await asyncio.to_thread(get_current_ip)}")
     logger.info("=" * 85)
 
-    cycle_num = 1
-    cycles_on_current_ip = 0
+    def get_symbols() -> List[str]:
+        if symbols_override:
+            return [s.upper().strip() for s in symbols_override if s.strip()]
+        s = load_active_assets()
+        if sample_limit and sample_limit > 0:
+            return s[:sample_limit]
+        return s
+
     ip_start_time = time.time()
     max_ip_age_sec = max_ip_age_min * 60.0
+    cycle_num = 1
+    sweep_count = 0
 
-    while True:
-        t_cycle_start = time.time()
-        logger.info(f">>>>>>>>>>>> BEGINNING HARVEST CYCLE #{cycle_num} <<<<<<<<<<<<")
-        
-        # Dynamically reload active assets per cycle
-        if symbols_override:
-            symbols = [s.upper().strip() for s in symbols_override if s.strip()]
-        else:
-            symbols = load_active_assets()
-            if sample_limit and sample_limit > 0:
-                symbols = symbols[:sample_limit]
-        total_symbols = len(symbols)
+    from standalone_coinglass_footprint_api import is_footprint_asset_complete
+    from standalone_coinglass_whales_api import is_whale_asset_complete
+    from standalone_coinglass_liquidation_levels_api import is_asset_dump_complete
 
-        logger.info(f"Universe for Cycle #{cycle_num}: {total_symbols} Active Assets | Window Chunk Size: {chunk_size}")
+    last_fp = 0.0
+    last_whale = 0.0
+    last_liq = 0.0
+    last_legend = 0.0
 
-        cleanup_scraper_tabs()
-        total_fp_dumped = 0
-        total_whale_dumped = 0
-        total_liq_dumped = 0
-        total_legend_dumped = 0
+    pillar_stats = {
+        "footprint": {"dumped_files": 0, "status": "INITIALIZING"},
+        "whales": {"dumped_assets": 0, "status": "INITIALIZING"},
+        "liquidation_levels": {"dumped_files": 0, "status": "INITIALIZING"},
+    }
 
-        total_chunks = (total_symbols + chunk_size - 1) // chunk_size
-        cycle_rate_signals = set()
-        cycle_failed_fp = set()
-        cycle_failed_whales = set()
-        cycle_failed_liq = set()
-        cycle_failed_legend = set()
-
-        for c_idx in range(0, total_symbols, chunk_size):
-            chunk = symbols[c_idx : c_idx + chunk_size]
-            c_num = (c_idx // chunk_size) + 1
-            
-            logger.info("-" * 80)
-            logger.info(f"CHUNK [{c_num}/{total_chunks}] ({len(chunk)} assets: {chunk[0]}..{chunk[-1]}) - PARALLEL TABS ACTIVE")
-            logger.info(f"Active Egress IP: {get_current_ip()}")
-            logger.info("-" * 80)
-
-            # RUN ALL PILLARS IN PARALLEL TABS SIMULTANEOUSLY
-            t_chunk_start = time.time()
-            rate_signals = set()
-            tasks = [
-                asyncio.create_task(harvest_footprint_chunk(chunk, c_num, rate_signals, cycle_failed_fp)),
-                asyncio.create_task(harvest_whale_chunk(chunk, c_num, rate_signals, cycle_failed_whales)),
-                asyncio.create_task(harvest_liquidation_chunk(chunk, c_num, rate_signals, cycle_failed_liq)),
-            ]
-            names = ["Footprint", "Whale", "Liquidation"]
-            if with_legend:
-                tasks.append(asyncio.create_task(harvest_legend_chunk(chunk, c_num, rate_signals, cycle_failed_legend)))
-                names.append("LiveLiquidation")
-
-            # Isolated gather protecting sibling pillars from cancellation
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            fp_res = results[0] if isinstance(results[0], int) else 0
-            whale_res = results[1] if isinstance(results[1], int) else 0
-            liq_res = results[2] if isinstance(results[2], int) else 0
-            legend_res = results[3] if with_legend and len(results) > 3 and isinstance(results[3], int) else 0
-
-            for name, r in zip(names, results):
-                if isinstance(r, Exception):
-                    logger.error(f"[CHUNK {c_num}] Sub-pillar {name} failed: {r}")
-
-            total_fp_dumped += fp_res
-            total_whale_dumped += whale_res
-            total_liq_dumped += liq_res
-            total_legend_dumped += legend_res
-            
-            chunk_duration = time.time() - t_chunk_start
-            extra_msg = f", Legend: {legend_res} assets" if with_legend else ""
-            logger.info(f"Chunk [{c_num}/{total_chunks}] Complete in {chunk_duration:.1f}s. (FP: {fp_res} files, Whales: {whale_res} assets, Liq: {liq_res} files{extra_msg})")
-
-            # All scraper finally blocks have completed before any host-wide network change.
-            if rate_signals:
-                cycle_rate_signals.update(rate_signals)
-                reason = "CHALLENGE" if "CHALLENGE" in rate_signals else "RATE_LIMIT_BANNER"
-                try:
-                    new_ip = await asyncio.to_thread(rotate_warp_ip, f"Cycle{cycle_num}_Chunk{c_num}", reason)
-                    logger.info("Reactive rotation after observed %s: %s", reason, new_ip)
-                    cycles_on_current_ip = 0
-                    ip_start_time = time.time()
-                except Exception as exc:
-                    logger.error("Reactive rotation deferred: %s", exc)
-
-        # Focused Remediation Pass: Recover any missed assets across pillars before concluding cycle
-        from standalone_coinglass_liquidation_levels_api import is_asset_dump_complete
-        disk_missing_liq = set(s for s in symbols if not is_asset_dump_complete(s))
-        pending_liq = list(disk_missing_liq.union(cycle_failed_liq))
-        pending_fp = list(cycle_failed_fp)
-        pending_whales = list(cycle_failed_whales)
-        pending_legend = list(cycle_failed_legend)
-
-        if pending_liq or pending_fp or pending_whales or pending_legend:
-            logger.info("=" * 80)
-            logger.info("[REMEDIATION PASS] Recovering missed assets across pillars (Liq: %s, FP: %s, Whales: %s, Legend: %s)",
-                        pending_liq, pending_fp, pending_whales, pending_legend)
-            try:
-                new_ip = await asyncio.to_thread(rotate_warp_ip, f"Cycle{cycle_num}_Recovery", "HTTP_429", force=True)
-                logger.info("[REMEDIATION PASS] Rotated to fresh preflight-verified IP: %s", new_ip)
-            except Exception as e:
-                logger.warning("[REMEDIATION PASS] Rotation deferred: %s", e)
-            if pending_liq:
-                recovered_liq = await harvest_liquidation_chunk(pending_liq, 99)
-                total_liq_dumped += recovered_liq
-                logger.info("[REMEDIATION PASS] Liquidation recovery complete: added %d files", recovered_liq)
-            if pending_fp:
-                recovered_fp = await harvest_footprint_chunk(pending_fp, 99)
-                total_fp_dumped += recovered_fp
-                logger.info("[REMEDIATION PASS] Footprint recovery complete: added %d files", recovered_fp)
-            if pending_whales:
-                recovered_whales = await harvest_whale_chunk(pending_whales, 99)
-                total_whale_dumped += recovered_whales
-                logger.info("[REMEDIATION PASS] Whales recovery complete: added %d assets", recovered_whales)
-            if pending_legend and with_legend:
-                recovered_legend = await harvest_legend_chunk(pending_legend, 99)
-                total_legend_dumped += recovered_legend
-                logger.info("[REMEDIATION PASS] Legend recovery complete: added %d assets", recovered_legend)
-
-        cycle_duration = time.time() - t_cycle_start
-        logger.info("=" * 85)
-        logger.info(f"HARVEST CYCLE #{cycle_num} COMPLETED in {cycle_duration:.1f}s ({cycle_duration/60:.2f} min)")
-        extra_summary = f" | Live Liquidation Parquets = {total_legend_dumped}" if with_legend else ""
-        logger.info(f"Summary: Footprint Parquets = {total_fp_dumped} | Whale Asset Blotters = {total_whale_dumped} | Liquidation Parquets = {total_liq_dumped}{extra_summary}")
-        logger.info("=" * 85)
-
-        expected_fp = total_symbols * 3
-        expected_whales = total_symbols
-        expected_liq = total_symbols * 15
-        expected_legend = total_symbols if with_legend else 0
-
-        from standalone_coinglass_footprint_api import is_footprint_asset_complete
-        from standalone_coinglass_whales_api import is_whale_asset_complete
-        from standalone_coinglass_liquidation_levels_api import is_asset_dump_complete
-
-        disk_fp_ok = all(is_footprint_asset_complete(s) for s in symbols)
-        disk_whale_ok = all(is_whale_asset_complete(s) for s in symbols)
-        disk_liq_ok = all(is_asset_dump_complete(s) for s in symbols)
-
-        fp_ok = (total_fp_dumped == expected_fp) or disk_fp_ok
-        whale_ok = (total_whale_dumped == expected_whales) or disk_whale_ok
-        liq_ok = (total_liq_dumped == expected_liq) or disk_liq_ok
-        legend_ok = (total_legend_dumped >= (expected_legend - 4)) if with_legend else True
-        is_degraded = not (disk_fp_ok and disk_whale_ok and disk_liq_ok)
-
-        pillar_stats = {
-            "footprint": {
-                "dumped_files": total_fp_dumped,
-                "expected_files": expected_fp,
-                "status": "HEALTHY" if fp_ok else "DEGRADED"
-            },
-            "whales": {
-                "dumped_assets": total_whale_dumped,
-                "expected_assets": expected_whales,
-                "status": "HEALTHY" if whale_ok else "DEGRADED"
-            },
-            "liquidation_levels": {
-                "dumped_files": total_liq_dumped,
-                "expected_files": expected_liq,
-                "status": "HEALTHY" if liq_ok else "DEGRADED"
-            }
+    async def execute_footprint_sweep():
+        nonlocal sweep_count, cycle_num
+        symbols = get_symbols()
+        logger.info("=" * 80)
+        logger.info(f"[SWEEP #{sweep_count+1}] [PILLAR: FOOTPRINT] Starting sweep across {len(symbols)} assets on 1 warm tab...")
+        logger.info("=" * 80)
+        t0 = time.time()
+        rate_signals = set()
+        failed = set()
+        dumped = await harvest_footprint_chunk(symbols, 1, rate_signals, failed)
+        dur = time.time() - t0
+        sweep_count += 1
+        cycle_num += 1
+        all_ok = all(is_footprint_asset_complete(s) for s in symbols)
+        pillar_stats["footprint"] = {
+            "dumped_files": dumped,
+            "expected_files": len(symbols) * 3,
+            "status": "HEALTHY" if all_ok else "DEGRADED",
+            "last_sweep_duration_s": round(dur, 1),
+            "last_sweep_epoch": time.time()
         }
-        if with_legend:
-            pillar_stats["live_legend"] = {
-                "dumped_assets": total_legend_dumped,
-                "expected_assets": expected_legend,
-                "status": "HEALTHY" if legend_ok else "DEGRADED"
-            }
+        logger.info(f"[PILLAR: FOOTPRINT] Sweep completed in {dur:.1f}s ({dumped} files dumped). Disk completeness: {'PASS' if all_ok else 'WARN'}")
+        emit_pipeline_health(cycle_num, get_current_ip(), 1, time.time() - ip_start_time, pillar_stats, symbols, not all_ok)
+        return dumped
 
-        current_ip = get_current_ip()
-        ip_age_sec = time.time() - ip_start_time
+    async def execute_whales_sweep():
+        nonlocal sweep_count, cycle_num
+        symbols = get_symbols()
+        logger.info("=" * 80)
+        logger.info(f"[SWEEP #{sweep_count+1}] [PILLAR: WHALES] Starting sweep across {len(symbols)} assets on 1 warm tab...")
+        logger.info("=" * 80)
+        t0 = time.time()
+        rate_signals = set()
+        failed = set()
+        dumped = await harvest_whale_chunk(symbols, 1, rate_signals, failed)
+        dur = time.time() - t0
+        sweep_count += 1
+        cycle_num += 1
+        all_ok = all(is_whale_asset_complete(s) for s in symbols)
+        pillar_stats["whales"] = {
+            "dumped_assets": dumped,
+            "expected_assets": len(symbols),
+            "status": "HEALTHY" if all_ok else "DEGRADED",
+            "last_sweep_duration_s": round(dur, 1),
+            "last_sweep_epoch": time.time()
+        }
+        logger.info(f"[PILLAR: WHALES] Sweep completed in {dur:.1f}s ({dumped} assets dumped). Disk completeness: {'PASS' if all_ok else 'WARN'}")
+        emit_pipeline_health(cycle_num, get_current_ip(), 1, time.time() - ip_start_time, pillar_stats, symbols, not all_ok)
+        return dumped
 
-        emit_pipeline_health(
-            cycle_num=cycle_num,
-            current_ip=current_ip,
-            cycles_on_ip=cycles_on_current_ip + 1,
-            ip_age_sec=ip_age_sec,
-            pillar_stats=pillar_stats,
-            symbols=symbols,
-            is_degraded=is_degraded
-        )
+    async def execute_liq_sweep():
+        nonlocal sweep_count, cycle_num
+        symbols = get_symbols()
+        logger.info("=" * 80)
+        logger.info(f"[SWEEP #{sweep_count+1}] [PILLAR: LIQUIDATION] Starting sweep across {len(symbols)} assets on 1 warm tab...")
+        logger.info("=" * 80)
+        t0 = time.time()
+        rate_signals = set()
+        failed = set()
+        dumped = await harvest_liquidation_chunk(symbols, 1, rate_signals, failed)
+        dur = time.time() - t0
+        sweep_count += 1
+        cycle_num += 1
+        all_ok = all(is_asset_dump_complete(s) for s in symbols)
+        pillar_stats["liquidation_levels"] = {
+            "dumped_files": dumped,
+            "expected_files": len(symbols) * 15,
+            "status": "HEALTHY" if all_ok else "DEGRADED",
+            "last_sweep_duration_s": round(dur, 1),
+            "last_sweep_epoch": time.time()
+        }
+        logger.info(f"[PILLAR: LIQUIDATION] Sweep completed in {dur:.1f}s ({dumped} files dumped). Disk completeness: {'PASS' if all_ok else 'WARN'}")
+        emit_pipeline_health(cycle_num, get_current_ip(), 1, time.time() - ip_start_time, pillar_stats, symbols, not all_ok)
+        return dumped
 
-        if not continuous:
-            if is_degraded:
-                raise RuntimeError("Cycle incomplete: inspect per-asset errors; historical files were preserved")
-            logger.info("Single-cycle execution complete. Exiting master runner.")
-            break
+    # 1. INITIAL BASELINE PASS: STRICTLY SEQUENTIAL
+    logger.info(">>> EXECUTING INITIAL BASELINE SEQUENTIAL PASS <<<")
+    await execute_footprint_sweep()
+    last_fp = time.time()
 
-        cycles_on_current_ip += 1
+    await execute_whales_sweep()
+    last_whale = time.time()
+
+    await execute_liq_sweep()
+    last_liq = time.time()
+
+    if with_legend:
+        symbols = get_symbols()
+        logger.info(f"[PILLAR: LEGEND] Starting initial sweep across {len(symbols)} assets...")
+        await harvest_legend_chunk(symbols, 1)
+        last_legend = time.time()
+
+    logger.info(">>> INITIAL BASELINE PASS COMPLETE. ALL 3 PILLARS HARVESTED SEQUENTIALLY. <<<")
+
+    if not continuous:
+        logger.info("Single-pass sequential execution complete. Exiting master runner.")
+        return
+
+    # 2. CONTINUOUS CADENCE SCHEDULER LOOP (FOOTPRINT AT HIGH FREQUENCY)
+    logger.info(f">>> ENTERING CONTINUOUS CADENCE SCHEDULER (Footprint: {footprint_interval}s, Whales: {whale_interval}s, Liq: {liq_interval}s) <<<")
+    while True:
         now = time.time()
-        if cycles_on_current_ip >= max_cycles_per_ip or (now - ip_start_time) >= max_ip_age_sec:
-            logger.info(
-                "IP age ceiling reached (%d cycles, %.1fs elapsed); rotating egress IP in inter-cycle window...",
-                cycles_on_current_ip, now - ip_start_time
-            )
+
+        # Check IP age ceiling
+        if (now - ip_start_time) >= max_ip_age_sec:
+            logger.info("IP age ceiling reached (%.1fs elapsed). Rotating egress WARP IP...", now - ip_start_time)
             try:
                 new_ip = await asyncio.to_thread(rotate_warp_ip, f"Cycle{cycle_num}_Ceiling", "CYCLE_AGE_CEILING")
                 logger.info("Inter-cycle rotation successful: new egress IP is %s", new_ip)
-                cycles_on_current_ip = 0
                 ip_start_time = time.time()
-            except Exception as exc:
-                logger.error("Inter-cycle rotation deferred: %s", exc)
+            except Exception as e:
+                logger.error("Inter-cycle rotation deferred: %s", e)
 
-        logger.info(f"Sleeping {delay_between_cycles:.1f}s until next scheduled cycle...")
-        await asyncio.sleep(delay_between_cycles)
-        cycle_num += 1
+        # Priority 1: High Frequency Footprint
+        if (now - last_fp) >= footprint_interval:
+            await execute_footprint_sweep()
+            last_fp = time.time()
+            continue
+
+        # Priority 2: Whales
+        if (now - last_whale) >= whale_interval:
+            await execute_whales_sweep()
+            last_whale = time.time()
+            continue
+
+        # Priority 3: Liquidation Levels
+        if (now - last_liq) >= liq_interval:
+            await execute_liq_sweep()
+            last_liq = time.time()
+            continue
+
+        # Priority 4: Live Legend (if enabled)
+        if with_legend and (now - last_legend) >= legend_interval:
+            symbols = get_symbols()
+            await harvest_legend_chunk(symbols, 1)
+            last_legend = time.time()
+            continue
+
+        # Sleep briefly until next scheduled action (capped at 5s)
+        due_in = min(
+            footprint_interval - (now - last_fp),
+            whale_interval - (now - last_whale),
+            liq_interval - (now - last_liq)
+        )
+        sleep_dur = max(1.0, min(5.0, due_in))
+        await asyncio.sleep(sleep_dur)
+
+
+# Backwards compatibility alias
+run_parallel_cycle = run_sequential_pipeline
 
 
 def main():
@@ -609,27 +580,31 @@ def main():
     except Exception as e:
         raise SystemExit(f"Singleton acquisition failed: {e}") from e
         
-    parser = argparse.ArgumentParser(description="Master Triple-Pillar Parallel Standalone Runner with Cloudflare WARP Anti-Block Rotation")
-    parser.add_argument("--chunk-size", type=int, default=50, help="Assets per owned-tab window (default: 50)")
-    parser.add_argument("--continuous", action="store_true", help="Run indefinitely across scheduled cycles")
-    parser.add_argument("--interval", type=float, default=300.0, help="Seconds between cycles if continuous (default: 300)")
+    parser = argparse.ArgumentParser(description="Master Sequential Standalone Runner with High-Frequency Footprint & WARP IP Rotation")
+    parser.add_argument("--continuous", action="store_true", help="Run indefinitely across scheduled cadence cycles")
+    parser.add_argument("--footprint-interval", type=float, default=120.0, help="Seconds between Footprint sweeps (default: 120)")
+    parser.add_argument("--whale-interval", type=float, default=600.0, help="Seconds between Whales sweeps (default: 600)")
+    parser.add_argument("--liq-interval", type=float, default=900.0, help="Seconds between Liquidation sweeps (default: 900)")
+    parser.add_argument("--interval", type=float, default=None, help="Convenience alias to set footprint interval")
     parser.add_argument("--sample", type=int, default=None, help="Limit execution to first N assets for verification")
     parser.add_argument("--symbols", nargs="+", default=None, help="Specific symbols to harvest (e.g. --symbols BTC ETH SOL)")
-    parser.add_argument("--rotate-chunks", action="store_true", help="Retired compatibility flag; never enables scheduled rotation")
-    parser.add_argument("--with-legend", action="store_true", help="Harvest 5m Live Liquidations from CoinGlass Legend in parallel")
-    parser.add_argument("--max-cycles-per-ip", type=int, default=3, help="Max harvest cycles on single egress IP before inter-cycle rotation (default: 3)")
-    parser.add_argument("--max-ip-age-min", type=float, default=15.0, help="Max IP age in minutes before inter-cycle rotation (default: 15.0)")
+    parser.add_argument("--with-legend", action="store_true", help="Harvest 5m Live Liquidations from CoinGlass Legend")
+    parser.add_argument("--max-ip-age-min", type=float, default=15.0, help="Max IP age in minutes before rotation (default: 15.0)")
+    # Deprecated compatibility flags
+    parser.add_argument("--chunk-size", type=int, default=50, help="Compatibility flag (full asset list is processed in 1 tab)")
+    parser.add_argument("--rotate-chunks", action="store_true", help="Retired compatibility flag")
     args = parser.parse_args()
 
-    asyncio.run(run_parallel_cycle(
-        chunk_size=args.chunk_size,
+    fp_itv = args.interval if args.interval is not None else args.footprint_interval
+
+    asyncio.run(run_sequential_pipeline(
+        footprint_interval=fp_itv,
+        whale_interval=args.whale_interval,
+        liq_interval=args.liq_interval,
         continuous=args.continuous,
-        delay_between_cycles=args.interval,
         sample_limit=args.sample,
         symbols_override=args.symbols,
-        rotate_chunks=args.rotate_chunks,
         with_legend=args.with_legend,
-        max_cycles_per_ip=args.max_cycles_per_ip,
         max_ip_age_min=args.max_ip_age_min
     ))
 
