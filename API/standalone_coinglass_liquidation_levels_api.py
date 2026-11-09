@@ -183,10 +183,11 @@ EXTRACTION_JS = r"""(async () => {
             return {allData:{}, isRateLimited:true, rateReason:'RATE_LIMIT_BANNER'};
         }
         if (/failed to load/i.test(document.body.innerText)) {
-            const retryBtn = Array.from(document.querySelectorAll('button')).find(b => /Retry/i.test(b.innerText || ''));
+            const retryBtn = Array.from(document.querySelectorAll('.ll-overlay button, .ll-stage.error button, button, [role="button"], div, span, a'))
+                .find(b => /^\s*Retry\s*$/i.test((b.innerText || '').trim()) || ((b.innerText || '').trim() === 'Retry'));
             if (retryBtn) {
                 retryBtn.click();
-                await new Promise(r => setTimeout(r, 2500));
+                await new Promise(r => setTimeout(r, 3000));
             }
             if (/failed to load/i.test(document.body.innerText)) {
                 return {allData:{}, isRateLimited:true, rateReason:'HTTP_429'};
@@ -564,7 +565,15 @@ async def sweep_active_assets_loop(chunk_size: int = 15, daemon: bool = False, l
                             all_data, _ = await harvest_symbol_liquidation(ws, sym)
                             saved_count = await asyncio.to_thread(persist_asset_liquidation, sym, all_data)
                         except Exception as exc:
-                            logger.error("[%s] Liquidation asset failed: %s", sym, exc)
+                            err_msg = str(exc)
+                            if "LIQUIDATION_RATE_SIGNAL" in err_msg:
+                                logger.warning("[%s] Liquidation rate signal detected (%s). Rotating IP...", sym, err_msg)
+                                try:
+                                    await asyncio.to_thread(rotate_warp_ip, "LiquidationLevels", err_msg)
+                                except Exception as rot_err:
+                                    logger.error("Failed to rotate WARP IP: %s", rot_err)
+                            else:
+                                logger.error("[%s] Liquidation asset failed: %s", sym, exc)
                             continue
                         dt = time.time() - t_sym
                         logger.info(f" -> [{sym}] Dumped {saved_count}/15 files in {dt:.2f}s -> Database/Liquidation_Level_Dumps/{sym}/")
