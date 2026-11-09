@@ -200,6 +200,8 @@ async def harvest_footprint_chunk(symbols: List[str], chunk_idx: int, rate_signa
                     except Exception as rot_err:
                         logger.error("[FP][%s] Immediate WARP rotation failed: %s", sym, rot_err)
                     try:
+                        await cdp_adapter.execute_js(ws_url, "window.location.reload()", timeout=5)
+                        await asyncio.sleep(4.0)
                         await cdp_adapter.hook_terminal(ws_url)
                         raw = await cdp_adapter.fetch_footprint_data(sym, ws_url=ws_url)
                         datasets = await asyncio.to_thread(FootprintDomainService.build_datasets, raw, sym)
@@ -361,7 +363,7 @@ async def harvest_legend_chunk(symbols: List[str], chunk_idx: int, rate_signals:
 # ======================================================================================
 
 async def run_parallel_cycle(
-    chunk_size: int = 15,
+    chunk_size: int = 50,
     continuous: bool = False,
     delay_between_cycles: float = 300.0,
     sample_limit: Optional[int] = None,
@@ -608,7 +610,7 @@ def main():
         raise SystemExit(f"Singleton acquisition failed: {e}") from e
         
     parser = argparse.ArgumentParser(description="Master Triple-Pillar Parallel Standalone Runner with Cloudflare WARP Anti-Block Rotation")
-    parser.add_argument("--chunk-size", type=int, default=4, help="Assets per owned-tab window (default: 4)")
+    parser.add_argument("--chunk-size", type=int, default=50, help="Assets per owned-tab window (default: 50)")
     parser.add_argument("--continuous", action="store_true", help="Run indefinitely across scheduled cycles")
     parser.add_argument("--interval", type=float, default=300.0, help="Seconds between cycles if continuous (default: 300)")
     parser.add_argument("--sample", type=int, default=None, help="Limit execution to first N assets for verification")
