@@ -162,7 +162,7 @@ class RateLimitSignal(Exception):
         super().__init__(reason)
 
 
-async def harvest_footprint_chunk(symbols: List[str], chunk_idx: int, rate_signals: Optional[set] = None) -> int:
+async def harvest_footprint_chunk(symbols: List[str], chunk_idx: int, rate_signals: Optional[set] = None, failed_symbols: Optional[set] = None) -> int:
     from standalone_coinglass_footprint_api import (
         cdp_adapter, FootprintDomainService, FootprintDumpAdapter, EXCEL_SPEC_COLUMNS,
         bot_tab_url, verify_parquet
@@ -186,6 +186,8 @@ async def harvest_footprint_chunk(symbols: List[str], chunk_idx: int, rate_signa
                     verify_parquet(Path(meta["parquet"]), EXCEL_SPEC_COLUMNS)
                 count += len(dumps)
             except Exception as exc:
+                if failed_symbols is not None:
+                    failed_symbols.add(sym)
                 if rate_signals is not None:
                     matched = next((r for r in ("CHALLENGE", "RATE_LIMIT_BANNER", "HTTP_429") if r in str(exc)), None)
                     if matched:
@@ -198,7 +200,7 @@ async def harvest_footprint_chunk(symbols: List[str], chunk_idx: int, rate_signa
     return count
 
 
-async def harvest_whale_chunk(symbols: List[str], chunk_idx: int, rate_signals: Optional[set] = None) -> int:
+async def harvest_whale_chunk(symbols: List[str], chunk_idx: int, rate_signals: Optional[set] = None, failed_symbols: Optional[set] = None) -> int:
     from standalone_coinglass_whales_api import (
         CDPWhaleAdapter, ParquetWhaleRepository
     )
@@ -215,6 +217,8 @@ async def harvest_whale_chunk(symbols: List[str], chunk_idx: int, rate_signals: 
             await asyncio.to_thread(quant_repo.persist_dataset, dataset, False)
             count += 1
         except Exception as exc:
+            if failed_symbols is not None:
+                failed_symbols.add(sym)
             text = str(exc)
             if rate_signals is not None:
                 matched = next((r for r in ("CHALLENGE", "RATE_LIMIT_BANNER", "HTTP_429") if r in text), None)
@@ -225,7 +229,7 @@ async def harvest_whale_chunk(symbols: List[str], chunk_idx: int, rate_signals: 
     return count
 
 
-async def harvest_liquidation_chunk(symbols: List[str], chunk_idx: int, rate_signals: Optional[set] = None) -> int:
+async def harvest_liquidation_chunk(symbols: List[str], chunk_idx: int, rate_signals: Optional[set] = None, failed_symbols: Optional[set] = None) -> int:
     from standalone_coinglass_liquidation_levels_api import (
         get_or_create_warm_tab, close_tab, harvest_symbol_liquidation,
         persist_asset_liquidation, is_asset_dump_complete
@@ -247,6 +251,8 @@ async def harvest_liquidation_chunk(symbols: List[str], chunk_idx: int, rate_sig
                         raise ValueError("Liquidation read-back completeness failed")
                     await asyncio.sleep(1.0)
                 except Exception as exc:
+                    if failed_symbols is not None:
+                        failed_symbols.add(sym)
                     if "LIQUIDATION_RATE_SIGNAL:" in str(exc) and rate_signals is not None:
                         sig = str(exc).split("LIQUIDATION_RATE_SIGNAL:", 1)[1].strip()
                         rate_signals.add(sig)
@@ -258,7 +264,7 @@ async def harvest_liquidation_chunk(symbols: List[str], chunk_idx: int, rate_sig
     return count
 
 
-async def harvest_legend_chunk(symbols: List[str], chunk_idx: int, rate_signals: Optional[set] = None) -> int:
+async def harvest_legend_chunk(symbols: List[str], chunk_idx: int, rate_signals: Optional[set] = None, failed_symbols: Optional[set] = None) -> int:
     """Pillar 4: CoinGlass Legend 5m Realized Aggregated Liquidation Harvester."""
     from standalone_coinglass_legend_liquidations_api import LegendLiquidationHarvester
     harvester = LegendLiquidationHarvester()
@@ -276,6 +282,8 @@ async def harvest_legend_chunk(symbols: List[str], chunk_idx: int, rate_signals:
                     count += 1
                     logger.info("[LEGEND][%s] Dumped %d bars (%d active) -> %s", sym, total, non_zero, Path(path).name)
             except Exception as exc:
+                if failed_symbols is not None:
+                    failed_symbols.add(sym)
                 logger.error("[LEGEND][%s] Harvest failed: %s", sym, exc)
     finally:
         await harvester.close(close_tab=True)
@@ -345,6 +353,10 @@ async def run_parallel_cycle(
 
         total_chunks = (total_symbols + chunk_size - 1) // chunk_size
         cycle_rate_signals = set()
+        cycle_failed_fp = set()
+        cycle_failed_whales = set()
+        cycle_failed_liq = set()
+        cycle_failed_legend = set()
 
         for c_idx in range(0, total_symbols, chunk_size):
             chunk = symbols[c_idx : c_idx + chunk_size]
@@ -359,13 +371,13 @@ async def run_parallel_cycle(
             t_chunk_start = time.time()
             rate_signals = set()
             tasks = [
-                asyncio.create_task(harvest_footprint_chunk(chunk, c_num, rate_signals)),
-                asyncio.create_task(harvest_whale_chunk(chunk, c_num, rate_signals)),
-                asyncio.create_task(harvest_liquidation_chunk(chunk, c_num, rate_signals)),
+                asyncio.create_task(harvest_footprint_chunk(chunk, c_num, rate_signals, cycle_failed_fp)),
+                asyncio.create_task(harvest_whale_chunk(chunk, c_num, rate_signals, cycle_failed_whales)),
+                asyncio.create_task(harvest_liquidation_chunk(chunk, c_num, rate_signals, cycle_failed_liq)),
             ]
             names = ["Footprint", "Whale", "Liquidation"]
             if with_legend:
-                tasks.append(asyncio.create_task(harvest_legend_chunk(chunk, c_num, rate_signals)))
+                tasks.append(asyncio.create_task(harvest_legend_chunk(chunk, c_num, rate_signals, cycle_failed_legend)))
                 names.append("LiveLiquidation")
 
             # Isolated gather protecting sibling pillars from cancellation
@@ -402,18 +414,37 @@ async def run_parallel_cycle(
 
         # Focused Remediation Pass: Recover any missed assets across pillars before concluding cycle
         from standalone_coinglass_liquidation_levels_api import is_asset_dump_complete
-        missing_liq = [s for s in symbols if not is_asset_dump_complete(s)]
-        if missing_liq:
+        disk_missing_liq = set(s for s in symbols if not is_asset_dump_complete(s))
+        pending_liq = list(disk_missing_liq.union(cycle_failed_liq))
+        pending_fp = list(cycle_failed_fp)
+        pending_whales = list(cycle_failed_whales)
+        pending_legend = list(cycle_failed_legend)
+
+        if pending_liq or pending_fp or pending_whales or pending_legend:
             logger.info("=" * 80)
-            logger.info("[REMEDIATION PASS] Recovering %d liquidation assets missing from disk: %s", len(missing_liq), missing_liq)
+            logger.info("[REMEDIATION PASS] Recovering missed assets across pillars (Liq: %s, FP: %s, Whales: %s, Legend: %s)",
+                        pending_liq, pending_fp, pending_whales, pending_legend)
             try:
                 new_ip = await asyncio.to_thread(rotate_warp_ip, f"Cycle{cycle_num}_Recovery", "HTTP_429", force=True)
-                logger.info("[REMEDIATION PASS] Rotated to fresh IP: %s", new_ip)
+                logger.info("[REMEDIATION PASS] Rotated to fresh preflight-verified IP: %s", new_ip)
             except Exception as e:
                 logger.warning("[REMEDIATION PASS] Rotation deferred: %s", e)
-            recovered_liq = await harvest_liquidation_chunk(missing_liq, 99)
-            total_liq_dumped += recovered_liq
-            logger.info("[REMEDIATION PASS] Harvest complete: added %d files", recovered_liq)
+            if pending_liq:
+                recovered_liq = await harvest_liquidation_chunk(pending_liq, 99)
+                total_liq_dumped += recovered_liq
+                logger.info("[REMEDIATION PASS] Liquidation recovery complete: added %d files", recovered_liq)
+            if pending_fp:
+                recovered_fp = await harvest_footprint_chunk(pending_fp, 99)
+                total_fp_dumped += recovered_fp
+                logger.info("[REMEDIATION PASS] Footprint recovery complete: added %d files", recovered_fp)
+            if pending_whales:
+                recovered_whales = await harvest_whale_chunk(pending_whales, 99)
+                total_whale_dumped += recovered_whales
+                logger.info("[REMEDIATION PASS] Whales recovery complete: added %d assets", recovered_whales)
+            if pending_legend and with_legend:
+                recovered_legend = await harvest_legend_chunk(pending_legend, 99)
+                total_legend_dumped += recovered_legend
+                logger.info("[REMEDIATION PASS] Legend recovery complete: added %d assets", recovered_legend)
 
         cycle_duration = time.time() - t_cycle_start
         logger.info("=" * 85)

@@ -568,6 +568,23 @@ def verify_network_stabilization(expected_change_from: str = "", max_timeout: fl
     return False, get_current_ip(via_proxy=via_proxy)
 
 
+def verify_coinglass_acceptance(via_proxy: bool = True, timeout: float = 4.0) -> bool:
+    """Probes CoinGlass auxiliary API to verify candidate egress IP is not 429'd or blocked."""
+    try:
+        cmd = [
+            "curl.exe", "-s", "-o", "NUL", "-w", "%{http_code}",
+            "--max-time", str(int(timeout)),
+            "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        ]
+        if via_proxy:
+            cmd.extend(["--socks5-hostname", WARP_PROXY_URL])
+        cmd.append("https://capi.coinglass.com/api/ip/country")
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 2.0)
+        return res.stdout.strip() == "200"
+    except Exception:
+        return False
+
+
 def launch_scraper_chrome(proxy_port: int = 40000, debug_port: int = 9222) -> bool:
     """Launches dedicated scraper Chrome on debug_port routed through WARP SOCKS5 proxy."""
     if not CHROME_EXE_PATH.exists():
@@ -702,9 +719,12 @@ def rotate_warp_ip(context: str = "Collector", reason: str = "NORMAL", force: bo
                 raise RuntimeError(f"WARP CLI unavailable: {WARP_CLI}")
             ensure_warp_proxy_mode(WARP_PROXY_PORT)
             old_ip = get_current_ip()
+            if reason in {"HTTP_429", "RATE_LIMIT_BANNER", "CHALLENGE"} and old_ip and old_ip != "unknown":
+                _RECENT_BANNED_IPS[old_ip] = time.time()
+                logger.info("[%s] Blacklisted rate-limited IP %s in memory cache", context, old_ip)
             try:
                 new_ip = None
-                for attempt in range(4):
+                for attempt in range(6):
                     _warp_command("disconnect")
                     ensure_delta_split_tunnel_exclusions()
                     _warp_command("registration", "delete")
@@ -719,6 +739,14 @@ def rotate_warp_ip(context: str = "Collector", reason: str = "NORMAL", force: bo
                     _warp_command("connect")
                     stable, cand_ip = verify_network_stabilization(old_ip, max_timeout=15.0)
                     if stable and cand_ip != old_ip and cand_ip != "unknown":
+                        banned_ts = _RECENT_BANNED_IPS.get(cand_ip, 0.0)
+                        if (time.time() - banned_ts) < 600.0:
+                            logger.warning("[%s] Candidate IP %s was banned %.0fs ago; re-rolling WARP...", context, cand_ip, time.time() - banned_ts)
+                            continue
+                        if not verify_coinglass_acceptance(via_proxy=True):
+                            logger.warning("[%s] Candidate IP %s rejected by CoinGlass preflight check; re-rolling WARP...", context, cand_ip)
+                            _RECENT_BANNED_IPS[cand_ip] = time.time()
+                            continue
                         new_ip = cand_ip
                         break
                     time.sleep(1.0)
