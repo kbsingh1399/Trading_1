@@ -402,10 +402,11 @@ import urllib.request
 
 import subprocess
 import re
+import ipaddress
 
 from pathlib import Path
 
-from typing import Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 # from Terminal.runtime_io import FileMutex, atomic_json  # Inlined into coinglass_common
 
@@ -444,146 +445,187 @@ if not logger.handlers:
 
 
 WARP_PROXY_PORT = 40000
+
+TOR_DIR = Path(r"C:\Users\SIGMA\tor")
+TOR_EXE = TOR_DIR / "tor" / "tor.exe"
+TOR_RC = TOR_DIR / "torrc"
+TOR_DATA = TOR_DIR / "data"
+
+def is_port_listening(port: int) -> bool:
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.settimeout(0.5)
+        return s.connect_ex(('127.0.0.1', port)) == 0
+    except Exception:
+        return False
+    finally:
+        s.close()
+
+def ensure_tor_daemon() -> bool:
+    """Ensures local Tor daemon is running on SOCKS5 port 40000 and ControlPort 9051."""
+    if not TOR_EXE.exists():
+        return False
+    if is_port_listening(40000) and is_port_listening(9051):
+        return True
+
+    # Free port 40000 by moving WARP to 40001
+    try:
+        if WARP_CLI.exists():
+            subprocess.run([str(WARP_CLI), "proxy", "port", "40001"], capture_output=True, text=True, timeout=5)
+    except Exception:
+        pass
+    time.sleep(0.5)
+
+    TOR_DATA.mkdir(parents=True, exist_ok=True)
+    with open(TOR_RC, "w", encoding="utf-8") as f:
+        f.write(f"""SocksPort 127.0.0.1:40000
+ControlPort 127.0.0.1:9051
+DataDirectory {TOR_DATA}
+CookieAuthentication 0
+HashedControlPassword ""
+""")
+
+    subprocess.Popen([str(TOR_EXE), "-f", str(TOR_RC)],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+
+    for _ in range(25):
+        time.sleep(0.4)
+        if is_port_listening(40000) and is_port_listening(9051):
+            logger.info("Local Tor SOCKS5 proxy active on 127.0.0.1:40000 (ControlPort 9051)")
+            return True
+    return False
+
+def rotate_tor_ip(context: str = "Collector") -> str:
+    """Rotates Tor circuit via SIGNAL NEWNYM in 1.5 seconds."""
+    ensure_tor_daemon()
+    with socket.create_connection(("127.0.0.1", 9051), timeout=5) as s:
+        s.sendall(b'AUTHENTICATE ""\r\nSIGNAL NEWNYM\r\nQUIT\r\n')
+        resp = s.recv(1024).decode()
+        if "250 OK" not in resp:
+            raise RuntimeError(f"Tor control rejection: {resp}")
+    time.sleep(1.5)
+    new_ip = get_current_ip(via_proxy=True)
+    logger.info("[%s] Tor exit IP rotated: %s", context, new_ip)
+    return new_ip
+
 WARP_PROXY_HOST = "127.0.0.1"
 WARP_PROXY_URL = f"{WARP_PROXY_HOST}:{WARP_PROXY_PORT}"
+COINGLASS_PROBE_URL = "https://www.coinglass.com/footprint"
 CHROME_EXE_PATH = Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe")
 CHROME_SCRAPER_PROFILE = Path(r"C:\Users\SIGMA\chrome_debug_profile")
 
 
+def _warp_proxy_matches(port: int) -> bool:
+    settings = _warp_command("settings", "list")
+    return bool(re.search(rf"(?im)\bMode:[ \t]*WarpProxy on port {port}[ \t]*$", settings))
+
+
+def _configure_warp_proxy_port(port: int):
+    _warp_command("mode", "proxy")
+    _warp_command("proxy", "port", str(port))
+    if not _warp_proxy_matches(port):
+        raise RuntimeError(f"WARP CLI did not confirm SOCKS5 proxy port {port}")
+
+
 def ensure_warp_proxy_mode(port: int = 40000) -> bool:
-    """Ensures Cloudflare WARP is running strictly in local SOCKS5 proxy mode on 127.0.0.1:{port}.
-    Guarantees zero interference with the host PC's primary network adapter / IP.
-    """
+    """Configure local SOCKS5 mode and verify the requested port."""
     if not WARP_CLI.exists():
         return False
     try:
-        settings = _warp_command("settings", "list")
-        if "Mode: WarpProxy" in settings or settings == "OK":
+        if _warp_proxy_matches(port):
             return True
-        if f"Mode: WarpProxy on port {port}" not in settings:
-            _warp_command("disconnect")
-            _warp_command("mode", "proxy")
-            _warp_command("proxy", "port", str(port))
-            _warp_command("connect")
-            logger.info("Configured Cloudflare WARP in WarpProxy mode on port %d", port)
+        _warp_command("disconnect")
+        _configure_warp_proxy_port(port)
+        _warp_command("connect")
+        logger.info("Configured Cloudflare WARP in WarpProxy mode on port %d", port)
         return True
     except Exception as e:
         logger.warning("Could not verify/set WARP proxy mode: %s", e)
         return False
 
 
+def _curl_probe(url: str, timeout: float, via_proxy: bool, *options: str):
+    route = ["--noproxy", "" if via_proxy else "*"]
+    if via_proxy:
+        route.extend(["--socks5-hostname", WARP_PROXY_URL])
+    return subprocess.run(
+        ["curl.exe", "-q", "-sS", "--proto", "=https", "--max-time", str(timeout), *route, *options, url],
+        capture_output=True, encoding="utf-8", errors="replace", timeout=timeout + 1,
+    )
+
+
 def get_current_ip(via_proxy: bool = True) -> str:
-    """Queries external egress IP.
-    If via_proxy is True, checks the WARP SOCKS5 proxy (127.0.0.1:40000).
-    If via_proxy is False or proxy query fails, checks direct host connection.
-    """
+    """Return the observed egress IP for the selected route, or 'unknown'."""
     if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("OFFLINE_MODE", "").lower() in ("true", "1"):
         return "127.0.0.1"
-    if via_proxy:
-        try:
-            res = subprocess.run(
-                ["curl.exe", "-s", "--max-time", "4", "--socks5-hostname", WARP_PROXY_URL, "https://api.ipify.org"],
-                capture_output=True, text=True, timeout=5, check=False
-            )
-            ip = res.stdout.strip()
-            if ip and re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", ip):
-                return ip
-        except Exception:
-            pass
-        return "unknown"
+    # Compare the same endpoint before and after rotation to keep observations comparable.
     try:
-        req = urllib.request.Request("https://api.ipify.org?format=json", headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=4) as response:
-            return json.loads(response.read().decode()).get("ip", "unknown")
-    except Exception:
-        return "unknown"
+        res = _curl_probe("https://www.cloudflare.com/cdn-cgi/trace", 3.0, via_proxy, "--fail")
+        if res.returncode == 0:
+            value = next((line[3:].strip() for line in res.stdout.splitlines() if line.startswith("ip=")), "")
+            return str(ipaddress.ip_address(value))
+        logger.debug("Cloudflare egress probe failed (curl %d): %s", res.returncode, res.stderr.strip())
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        logger.debug("Cloudflare egress probe failed: %s", exc)
+    return "unknown"
 
 
 
 
 
 WARP_ROTATION_FILE = LOCK_DIR / "warp_last_rotation.json"
+MIN_ROTATION_INTERVAL_SECS = 120.0  # Cross-process cooldown after failure or scheduled changes
 
 
-
-
-
-def _get_last_rotation_time() -> float:
-
+def _read_warp_rotation_state() -> dict:
     try:
-
-        if WARP_ROTATION_FILE.exists():
-
-            data = json.loads(WARP_ROTATION_FILE.read_text(encoding="utf-8"))
-
-            return float(data.get("last_rotation_time", 0.0))
-
-    except Exception:
-
-        pass
-
-    return 0.0
-
-
-
-
-
-def _set_last_rotation_time(ts: float, ip: str, reason: str):
-
-    try:
-
-        atomic_json(WARP_ROTATION_FILE, {"last_rotation_time": ts, "last_ip": ip, "reason": reason})
-
-    except Exception:
-
-        pass
-
-
-
-
-
-MIN_ROTATION_INTERVAL_SECS = 120.0  # 2-minute system-wide cross-process cooldown
-
-POST_ROTATION_GRACE_SECS = 45.0     # Grace window post-rotation before empty-scrape trigger
-
-
-
+        state = json.loads(WARP_ROTATION_FILE.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    if not isinstance(state, dict):
+        raise RuntimeError("WARP rotation state must be a JSON object")
+    return state
 
 
 def verify_network_stabilization(expected_change_from: str = "", max_timeout: float = 15.0, via_proxy: bool = True) -> Tuple[bool, str]:
-    """Polls external IP until network is online and verifies DNS/IP connectivity."""
-    deadline = time.time() + max_timeout
-    while time.time() < deadline:
-        try:
-            if not is_warp_connected():
-                time.sleep(0.5)
-                continue
-            ip = get_current_ip(via_proxy=via_proxy)
-            if ip and ip != "unknown":
-                changed = (ip != expected_change_from) if expected_change_from else True
-                if changed:
-                    return True, ip
-        except Exception:
-            pass
-        time.sleep(0.75)
-    return False, get_current_ip(via_proxy=via_proxy)
+    """Poll the selected route until it reports a usable egress."""
+    deadline = time.monotonic() + max_timeout
+    last_ip = "unknown"
+    while time.monotonic() < deadline:
+        if is_warp_connected():
+            last_ip = get_current_ip(via_proxy=via_proxy)
+            if last_ip != "unknown" and last_ip != expected_change_from:
+                return True, last_ip
+        time.sleep(min(0.75, max(0.0, deadline - time.monotonic())))
+    return False, last_ip
 
 
-def verify_coinglass_acceptance(via_proxy: bool = True, timeout: float = 4.0) -> bool:
-    """Probes CoinGlass auxiliary API to verify candidate egress IP is not 429'd or blocked."""
+def verify_coinglass_acceptance(
+    via_proxy: bool = True, timeout: float = 4.0, target_url: str = COINGLASS_PROBE_URL
+) -> bool:
+    """Probe the actual CoinGlass dashboard route for HTTP or challenge errors."""
     try:
-        cmd = [
-            "curl.exe", "-s", "-o", "NUL", "-w", "%{http_code}",
-            "--max-time", str(int(timeout)),
-            "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        ]
-        if via_proxy:
-            cmd.extend(["--socks5-hostname", WARP_PROXY_URL])
-        cmd.append("https://capi.coinglass.com/api/ip/country")
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 2.0)
-        return res.stdout.strip() == "200"
-    except Exception:
+        res = _curl_probe(
+            target_url, timeout, via_proxy, "--location", "--proto-redir", "=https",
+            "--include", "--compressed", "--write-out", r"\n%{http_code}",
+            "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.warning("CoinGlass probe to %s failed: %s", target_url, exc)
         return False
+    response, _, status = res.stdout.rstrip().rpartition("\n")
+    challenged = re.search(
+        r"(?im)^cf-mitigated:[ \t]*challenge\b|<title>\s*(?:Just a moment|Attention Required|Checking your browser)",
+        response,
+    )
+    if res.returncode == 0 and status == "200" and not challenged:
+        return True
+    if res.returncode != 0:
+        logger.warning("CoinGlass probe to %s failed (curl %d): %s", target_url, res.returncode, res.stderr.strip())
+    else:
+        logger.warning("CoinGlass probe to %s returned HTTP %s%s", target_url, status, " with a challenge" if challenged else "")
+    return False
 
 
 def launch_scraper_chrome(proxy_port: int = 40000, debug_port: int = 9222) -> bool:
@@ -629,52 +671,34 @@ def _warp_command(*args, timeout=8):
     return result.stdout
 
 
-def ensure_delta_split_tunnel_exclusions():
-    """Configure exclusions while disconnected, then verify the effective list.
-
-    ``tunnel host add`` is relative to the current split-tunnel mode. Never add
-    Delta to an Include list (that would tunnel it). Organization-managed
-    profiles must be corrected by their administrator.
-    """
-    if not WARP_CLI.exists():
-        raise RuntimeError(f"WARP CLI unavailable: {WARP_CLI}")
-    try:
-        dump = _warp_command("tunnel", "dump")
-    except RuntimeError as e:
-        if "WARP is not connected" in str(e):
-            return
-        raise
-    mode = re.search(r"Split tunnel mode:\s*(include|exclude)", dump, re.I)
-    is_exclude = (mode and mode.group(1).lower() == "exclude") or ("Excluded:" in dump)
-    if not is_exclude:
-        raise RuntimeError("Delta exclusions require Split Tunnel Exclude mode")
+def _missing_delta_exclusions() -> List[str]:
+    # The packet-tunnel dump reports disconnected in WARP's SOCKS5 mode.
     listed = _warp_command("tunnel", "host", "list")
-    present = {line.replace("(CLI exclude)", "").strip().lower() for line in listed.splitlines()}
-    for host in DELTA_EXCLUSION_HOSTS:
-        if not any(host in p for p in present):
-            _warp_command("tunnel", "host", "add", host)
-    verified = {line.replace("(CLI exclude)", "").strip().lower() for line in
-                _warp_command("tunnel", "host", "list").splitlines()}
-    missing = [h for h in DELTA_EXCLUSION_HOSTS if not any(h in v for v in verified)]
+    if not re.search(r"(?im)^\s*Excluded hosts:\s*$", listed):
+        raise RuntimeError("Delta exclusions require Split Tunnel Exclude mode")
+    present = {line.strip().split(" (", 1)[0].lower() for line in listed.splitlines()}
+    return [host for host in DELTA_EXCLUSION_HOSTS if host not in present]
+
+
+def ensure_delta_split_tunnel_exclusions():
+    """Configure exclusions while disconnected, then verify the effective list."""
+    missing = _missing_delta_exclusions()
+    if not missing:
+        return
+    for host in missing:
+        _warp_command("tunnel", "host", "add", host)
+    missing = _missing_delta_exclusions()
     if missing:
-        raise RuntimeError(f"Delta split-tunnel exclusions missing: {sorted(missing)}")
+        raise RuntimeError(f"Delta split-tunnel exclusions missing: {missing}")
 
 
 def is_warp_rotating() -> bool:
-
     """Returns True if a WARP rotation is currently in-flight."""
-
-    lock_file = str(LOCK_DIR / "warp_execution.lock")
-
     try:
-
-        with FileMutex(lock_file, timeout=0.0) as guard:
-
-            return not guard.acquired
-
-    except Exception:
-
-        return False
+        with FileMutex(LOCK_DIR / "warp_execution.lock", timeout=0.0):
+            return False
+    except WriterLockTimeout:
+        return True
 
 
 
@@ -683,115 +707,124 @@ def is_warp_rotating() -> bool:
 def is_warp_connected() -> bool:
     """Returns True if Cloudflare WARP client status is currently connected."""
     try:
-        p = subprocess.run([str(WARP_CLI), "status"], capture_output=True, text=True, timeout=3)
-        out = p.stdout.strip()
-        return "Connected" in out and "Disconnected" not in out and "Connecting" not in out
-    except Exception:
+        out = _warp_command("status", timeout=3)
+        return bool(re.search(r"(?im)^(?:Status update:[ \t]*)?Connected[ \t]*$", out))
+    except (OSError, RuntimeError, subprocess.TimeoutExpired):
         return False
 
 
 _RECENT_BANNED_IPS: Dict[str, float] = {}
+_WARP_RATE_LIMIT_REASONS = {"HTTP_429", "CHALLENGE", "RATE_LIMIT_BANNER"}
 
 
-def rotate_warp_ip(context: str = "Collector", reason: str = "NORMAL", force: bool = False) -> str:
-    """Reactive-only egress rotation. force cannot bypass policy or order safety.
+class WarpRotationDeferred(RuntimeError):
+    """The rotation cooldown prevented any WARP change."""
 
-    Raises on failed rotation; callers must not publish data or log success.
-    Run through asyncio.to_thread from async collectors.
-    """
-    valid_reasons = {"HTTP_429", "CHALLENGE", "RATE_LIMIT_BANNER", "CYCLE_AGE_CEILING"}
-    if reason not in valid_reasons:
-        logger.info("[%s] WARP rotation skipped: non-reactive reason %s", context, reason)
-        return get_current_ip()
+
+def _change_warp_egress(context: str, reason: str, target_url: str, state: dict) -> str:
+    if not WARP_CLI.exists():
+        raise RuntimeError(f"WARP CLI unavailable: {WARP_CLI}")
+    missing_exclusions = _missing_delta_exclusions()
+    recovery = reason == "PROXY_UNAVAILABLE"
+    configured = _warp_proxy_matches(WARP_PROXY_PORT)
+    if not configured and not recovery:
+        raise RuntimeError(f"WARP is not configured for SOCKS5 at {WARP_PROXY_URL}")
+    old_ip = get_current_ip() if configured and is_warp_connected() else "unknown"
+    if not recovery and old_ip == "unknown":
+        raise RuntimeError(f"No baseline egress at WARP SOCKS5 {WARP_PROXY_URL}; recover the proxy first")
+    if recovery and old_ip != "unknown" and not missing_exclusions and verify_coinglass_acceptance(target_url=target_url):
+        logger.info("[%s] WARP proxy already reachable with accepted egress %s", context, old_ip)
+        return old_ip
+    if reason in _WARP_RATE_LIMIT_REASONS:
+        _RECENT_BANNED_IPS[old_ip] = time.time()
+
+    state.update(last_attempt_time=time.time(), last_attempt_ok=False, last_attempt_reason=reason)
+    atomic_json(WARP_ROTATION_FILE, state)
+    proxy_reachable = False
     try:
-        with FileMutex(str(LOCK_DIR / "order_execution_inflight.lock"), timeout=0.0):
-            pass
-    except (WriterLockTimeout, TimeoutError):
-        raise RuntimeError("WARP rotation blocked: Delta order execution in flight")
-    try:
-        with FileMutex(str(LOCK_DIR / "warp_execution.lock"), timeout=35.0) as mutex:
-            # Re-read cooldown under the cross-process execution mutex.
-            now = time.time()
-            elapsed = now - _get_last_rotation_time()
-            min_cooldown = 10.0 if (force or reason in {"HTTP_429", "RATE_LIMIT_BANNER", "CHALLENGE"}) else MIN_ROTATION_INTERVAL_SECS
-            if elapsed < min_cooldown:
-                current_ip = get_current_ip(via_proxy=True)
-                if current_ip and current_ip != "unknown" and verify_coinglass_acceptance(via_proxy=True):
-                    logger.info("[%s] WARP recently rotated (%.1fs ago) to verified healthy IP %s; reusing.", context, elapsed, current_ip)
-                    return current_ip
-                raise RuntimeError(f"WARP rotation cooldown active: {elapsed:.0f}s (required {min_cooldown:.0f}s)")
-            if not WARP_CLI.exists():
-                raise RuntimeError(f"WARP CLI unavailable: {WARP_CLI}")
-            ensure_warp_proxy_mode(WARP_PROXY_PORT)
-            old_ip = get_current_ip()
-            if reason in {"HTTP_429", "RATE_LIMIT_BANNER", "CHALLENGE"} and old_ip and old_ip != "unknown":
-                _RECENT_BANNED_IPS[old_ip] = time.time()
-                logger.info("[%s] Blacklisted rate-limited IP %s in memory cache", context, old_ip)
+        _warp_command("disconnect")
+        if not configured:
+            _configure_warp_proxy_port(WARP_PROXY_PORT)
+        ensure_delta_split_tunnel_exclusions()
+        _warp_command("connect")
+        stable, candidate = verify_network_stabilization("" if recovery else old_ip)
+        proxy_reachable = candidate != "unknown"
+        if not stable:
+            if candidate == old_ip and proxy_reachable:
+                raise RuntimeError(f"WARP reconnected with unchanged egress {old_ip}")
+            raise RuntimeError(f"WARP SOCKS5 proxy {WARP_PROXY_URL} did not provide egress after reconnect")
+        if not recovery and time.time() - _RECENT_BANNED_IPS.get(candidate, 0.0) < 600.0:
+            raise RuntimeError(f"WARP reconnected with recently rejected egress {candidate}")
+        if not verify_coinglass_acceptance(target_url=target_url):
+            _RECENT_BANNED_IPS[candidate] = time.time()
+            raise RuntimeError(f"WARP reconnected but CoinGlass rejected {target_url}")
+        state["last_attempt_ok"] = True
+        if recovery:
+            logger.info("[%s] WARP proxy recovered with accepted egress %s", context, candidate)
+        else:
+            state.update(last_rotation_time=time.time(), last_ip=candidate, reason=reason)
+            logger.info("[%s] WARP rotation verified for %s (new IP: %s)", context, reason, candidate)
+        return candidate
+    except Exception:
+        if not proxy_reachable:
             try:
-                new_ip = None
-                for attempt in range(6):
-                    _warp_command("disconnect")
-                    ensure_delta_split_tunnel_exclusions()
-                    try:
-                        _warp_command("registration", "delete")
-                    except Exception:
-                        pass
-                    time.sleep(1.0)
-                    for _ in range(5):
-                        try:
-                            _warp_command("registration", "new")
-                            break
-                        except Exception:
-                            try:
-                                _warp_command("registration", "delete")
-                            except Exception:
-                                pass
-                            time.sleep(1.0)
-                    ensure_delta_split_tunnel_exclusions()
-                    _warp_command("connect")
-                    stable, cand_ip = verify_network_stabilization(old_ip, max_timeout=15.0)
-                    if stable and cand_ip != old_ip and cand_ip != "unknown":
-                        banned_ts = _RECENT_BANNED_IPS.get(cand_ip, 0.0)
-                        if (time.time() - banned_ts) < 600.0:
-                            logger.warning("[%s] Candidate IP %s was banned %.0fs ago; re-rolling WARP...", context, cand_ip, time.time() - banned_ts)
-                            continue
-                        if not verify_coinglass_acceptance(via_proxy=True):
-                            logger.warning("[%s] Candidate IP %s rejected by CoinGlass preflight check; re-rolling WARP...", context, cand_ip)
-                            _RECENT_BANNED_IPS[cand_ip] = time.time()
-                            continue
-                        new_ip = cand_ip
-                        break
-                    time.sleep(1.0)
-                if not new_ip:
-                    raise RuntimeError(f"WARP egress did not change from {old_ip}")
-                _set_last_rotation_time(time.time(), new_ip, reason)
-                logger.info("[%s] Reactive WARP rotation complete: %s (new IP: %s)", context, reason, new_ip)
-                return new_ip
-            except Exception:
-                # Best-effort restore connectivity; never report a failed reset as success.
-                try:
-                    _warp_command("connect")
-                    ensure_warp_proxy_mode(WARP_PROXY_PORT)
-                    # Do not mutate routes while connected: some clients disconnect per host add.
-                    dump = ""
-                    try:
-                        dump = _warp_command("tunnel", "dump")
-                    except RuntimeError as e:
-                        if "WARP is not connected" in str(e):
-                            dump = "Split tunnel mode: exclude"
-                        else:
-                            raise
-                    listed = _warp_command("tunnel", "host", "list")
-                    hosts = {line.replace("(CLI exclude)", "").strip().lower() for line in listed.splitlines()}
-                    is_ex = bool(re.search(r"Split tunnel mode:\s*exclude", dump, re.I) or ("Excluded:" in dump))
-                    missing_h = [h for h in DELTA_EXCLUSION_HOSTS if not any(h in line for line in hosts)]
-                    if not is_ex or missing_h:
-                        raise RuntimeError("Connectivity restored but Delta exclusions require administrator repair")
-                except Exception as restore_error:
-                    logger.critical("[%s] WARP connectivity restore failed: %s", context, restore_error)
-                raise
-    except (WriterLockTimeout, TimeoutError):
-        raise RuntimeError("WARP rotation already in progress")
+                if not _warp_proxy_matches(WARP_PROXY_PORT) or _missing_delta_exclusions():
+                    raise RuntimeError("WARP proxy mode and Delta exclusions must be verified before reconnecting")
+                _warp_command("connect")
+                stable, _ = verify_network_stabilization(max_timeout=5.0)
+                if not stable:
+                    raise RuntimeError(f"No reachable egress at WARP SOCKS5 {WARP_PROXY_URL}")
+            except Exception as restore_error:
+                logger.error("[%s] WARP connectivity restore failed: %s", context, restore_error)
+        raise
+    finally:
+        state["last_attempt_time"] = time.time()
+        try:
+            atomic_json(WARP_ROTATION_FILE, state)
+        except OSError as exc:
+            logger.error("Could not persist the WARP attempt outcome: %s", exc)
+
+
+def rotate_warp_ip(
+    context: str = "Collector", reason: str = "NORMAL", force: bool = False, target_url: str = COINGLASS_PROBE_URL
+) -> str:
+    """Rotate to a changed, accepted egress, or reconnect for PROXY_UNAVAILABLE."""
+    # Check if Tor is available for instant zero-friction rotation
+    if TOR_EXE.exists():
+        try:
+            ensure_tor_daemon()
+            tor_ip = rotate_tor_ip(context=context)
+            if tor_ip and tor_ip != "unknown":
+                return tor_ip
+        except Exception as tor_err:
+            logger.warning("[%s] Tor rotation attempted, falling back to WARP: %s", context, tor_err)
+
+    if reason not in _WARP_RATE_LIMIT_REASONS | {"CYCLE_AGE_CEILING", "PROXY_UNAVAILABLE"}:
+        raise ValueError(f"Unsupported WARP rotation reason: {reason}")
+    if os.environ.get("OFFLINE_MODE", "").lower() in ("true", "1"):
+        raise RuntimeError("WARP changes are disabled in offline mode")
+    try:
+        with FileMutex(LOCK_DIR / "warp_execution.lock", timeout=35.0):
+            state = _read_warp_rotation_state()
+            last_attempt = float(state.get("last_attempt_time", state.get("last_rotation_time", 0.0)))
+            if not math.isfinite(last_attempt):
+                raise RuntimeError("WARP rotation state contains an invalid attempt timestamp")
+            elapsed = time.time() - last_attempt
+            min_cooldown = MIN_ROTATION_INTERVAL_SECS
+            if state.get("last_attempt_ok") is not False:
+                if reason == "PROXY_UNAVAILABLE":
+                    min_cooldown = 0.0
+                elif force or reason in _WARP_RATE_LIMIT_REASONS:
+                    min_cooldown = 10.0
+            if elapsed < min_cooldown:
+                raise WarpRotationDeferred(f"WARP rotation cooldown active for {min_cooldown - elapsed:.1f}s")
+            try:
+                with FileMutex(LOCK_DIR / "order_execution_inflight.lock", timeout=0.0):
+                    return _change_warp_egress(context, reason, target_url, state)
+            except WriterLockTimeout as exc:
+                raise RuntimeError("WARP change blocked: Delta order execution in flight") from exc
+    except WriterLockTimeout as exc:
+        raise RuntimeError("WARP rotation already in progress") from exc
 
 
 
