@@ -61,7 +61,10 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 try:
-    from coinglass_common import writer_lock, atomic_parquet, verify_parquet, cdp_eval, bot_tab_url, is_process_bot_tab, calculate_wall_decay_weight
+    from coinglass_common import (
+        writer_lock, atomic_parquet, verify_parquet, cdp_eval, bot_tab_url,
+        is_process_bot_tab, calculate_wall_decay_weight, rotate_warp_ip
+    )
 except ImportError:
     writer_lock = None
     atomic_parquet = None
@@ -70,6 +73,7 @@ except ImportError:
     cdp_eval = None
     bot_tab_url = None
     is_process_bot_tab = None
+    rotate_warp_ip = None
 
 logging.basicConfig(
     level=logging.INFO,
@@ -535,7 +539,8 @@ class CDPWhaleAdapter:
         expression = f"({WHALE_EXTRACTION_JS})({json.dumps(symbol.upper())})"
         val = await cdp_eval(ws, expression, timeout=30.0)
         if not val or not val.get("success") or not val.get("complete"):
-            raise RuntimeError(f"Whale extraction rejected: {val}")
+            err_reason = val.get("rateReason") or val.get("error") if isinstance(val, dict) else "unknown"
+            raise RuntimeError(f"WHALE_RATE_SIGNAL:{err_reason}: Whale extraction rejected: {val}")
         now_utc = datetime.now(timezone.utc)
         orders = []
         now_ms = int(now_utc.timestamp() * 1000)
@@ -563,6 +568,20 @@ class CDPWhaleAdapter:
         return WhaleDataset(symbol.upper(), float(val.get("mark_price") or 0), now_utc.isoformat(),
                             orders[0].snapshot_time_ist, orders, len(orders), len(asks), len(bids),
                             sum(o.raw_remaining_usd for o in asks), sum(o.raw_remaining_usd for o in bids))
+
+    async def get_or_create_warm_tab(self, initial_symbol: str = "BTC") -> Tuple[Optional[str], Optional[str]]:
+        return await self.open_whale_tab(initial_symbol)
+
+    async def harvest_symbol_orders_on_ws(self, ws, symbol: str) -> WhaleDataset:
+        clean_sym = AUTHORIZED_MT5_WHITELIST.get(symbol.upper(), symbol.upper())
+        target_url = bot_tab_url(f"https://www.coinglass.com/large-orderbook-statistics/{clean_sym}", "whales_api")
+        try:
+            curr_path = await cdp_eval(ws, "window.location.pathname", timeout=5)
+        except Exception:
+            curr_path = ""
+        if not curr_path or not str(curr_path).upper().endswith(f"/{clean_sym}"):
+            await cdp_eval(ws, f"window.location.href={json.dumps(target_url)}", timeout=5)
+        return await self.extract_on_ws(ws, clean_sym)
 
     async def harvest_symbol_orders(self, symbol: str, max_retries: int = 3) -> WhaleDataset:
         clean_sym = AUTHORIZED_MT5_WHITELIST.get(symbol.upper(), symbol.upper())

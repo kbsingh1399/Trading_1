@@ -56,7 +56,8 @@ from coinglass_common import (
     rotate_warp_ip,
     get_current_ip,
     acquire_singleton,
-    LOCK_DIR
+    LOCK_DIR,
+    cdp_eval
 )
 from active_assets_manager import load_active_assets, ACTIVE_ASSETS_FILE
 
@@ -185,14 +186,33 @@ async def harvest_footprint_chunk(symbols: List[str], chunk_idx: int, rate_signa
                 for meta in dumps.values():
                     verify_parquet(Path(meta["parquet"]), EXCEL_SPEC_COLUMNS)
                 count += len(dumps)
+                await asyncio.sleep(1.0)
             except Exception as exc:
+                err_text = str(exc)
+                is_rate_limit = any(k in err_text for k in ("CHALLENGE", "RATE_LIMIT_BANNER", "HTTP_429", "rate_limited"))
+                if is_rate_limit:
+                    logger.warning("[FP][%s] HTTP_429 / Rate limit hit! Rotating WARP IP immediately on the spot...", sym)
+                    if rate_signals is not None:
+                        matched = next((r for r in ("CHALLENGE", "RATE_LIMIT_BANNER", "HTTP_429") if r in err_text), "HTTP_429")
+                        rate_signals.add(matched)
+                    try:
+                        await asyncio.to_thread(rotate_warp_ip, f"FP_{sym}", "HTTP_429")
+                    except Exception as rot_err:
+                        logger.error("[FP][%s] Immediate WARP rotation failed: %s", sym, rot_err)
+                    try:
+                        await cdp_adapter.hook_terminal(ws_url)
+                        raw = await cdp_adapter.fetch_footprint_data(sym, ws_url=ws_url)
+                        datasets = await asyncio.to_thread(FootprintDomainService.build_datasets, raw, sym)
+                        dumps = await asyncio.to_thread(FootprintDumpAdapter.dump_three_datasets, datasets, FP_DUMP_DIR)
+                        for meta in dumps.values():
+                            verify_parquet(Path(meta["parquet"]), EXCEL_SPEC_COLUMNS)
+                        count += len(dumps)
+                        logger.info("[FP][%s] Successfully harvested on fresh IP after immediate rotation!", sym)
+                        continue
+                    except Exception as retry_exc:
+                        logger.error("[FP][%s] Immediate retry failed on fresh IP: %s", sym, retry_exc)
                 if failed_symbols is not None:
                     failed_symbols.add(sym)
-                if rate_signals is not None:
-                    matched = next((r for r in ("CHALLENGE", "RATE_LIMIT_BANNER", "HTTP_429") if r in str(exc)), None)
-                    if matched:
-                        rate_signals.add(matched)
-                        logger.warning("[FP][%s] Rate limit observed (%s); continuing remaining symbols in chunk", sym, matched)
                 logger.error("[FP][%s] Harvest failed: %s", sym, exc)
     finally:
         if tab_id:
@@ -204,28 +224,56 @@ async def harvest_whale_chunk(symbols: List[str], chunk_idx: int, rate_signals: 
     from standalone_coinglass_whales_api import (
         CDPWhaleAdapter, ParquetWhaleRepository
     )
+    import websockets
     adapter = CDPWhaleAdapter()
     equity = get_equity_symbols()
     display_repo = ParquetWhaleRepository(WHALE_DUMP_DIR)
     quant_repo = ParquetWhaleRepository(PIPELINE_OPEN_DIR)
+    tab_id, ws_url = None, None
     count = 0
-    for sym in symbols:
-        try:
-            dataset = await adapter.harvest_symbol_orders(sym)
-            display_only = sym.upper() not in equity
-            await asyncio.to_thread(display_repo.persist_dataset, dataset, display_only)
-            await asyncio.to_thread(quant_repo.persist_dataset, dataset, False)
-            count += 1
-        except Exception as exc:
-            if failed_symbols is not None:
-                failed_symbols.add(sym)
-            text = str(exc)
-            if rate_signals is not None:
-                matched = next((r for r in ("CHALLENGE", "RATE_LIMIT_BANNER", "HTTP_429") if r in text), None)
-                if matched:
-                    rate_signals.add(matched)
-                    logger.warning("[WHALE][%s] Rate limit observed (%s); continuing remaining symbols in chunk", sym, matched)
-            logger.error("[WHALE][%s] Harvest failed: %s", sym, exc)
+    try:
+        tab_id, ws_url = await adapter.get_or_create_warm_tab(symbols[0])
+        if not ws_url:
+            raise ConnectionError("Owned whale tab has no CDP WebSocket")
+        async with websockets.connect(ws_url, max_size=50*1024*1024, open_timeout=10, close_timeout=5, ping_interval=None) as ws:
+            for sym in symbols:
+                try:
+                    dataset = await adapter.harvest_symbol_orders_on_ws(ws, sym)
+                    display_only = sym.upper() not in equity
+                    await asyncio.to_thread(display_repo.persist_dataset, dataset, display_only)
+                    await asyncio.to_thread(quant_repo.persist_dataset, dataset, False)
+                    count += 1
+                    await asyncio.sleep(1.0)
+                except Exception as exc:
+                    err_text = str(exc)
+                    is_rate_limit = any(k in err_text for k in ("HTTP_429", "RATE_LIMIT_BANNER", "CHALLENGE", "empty_unverified", "rate_limited", "WHALE_RATE_SIGNAL"))
+                    if is_rate_limit:
+                        logger.warning("[WHALE][%s] HTTP_429 / Rate limit detected! Rotating WARP IP immediately on the spot...", sym)
+                        if rate_signals is not None:
+                            matched = next((r for r in ("CHALLENGE", "RATE_LIMIT_BANNER", "HTTP_429") if r in err_text), "HTTP_429")
+                            rate_signals.add(matched)
+                        try:
+                            await asyncio.to_thread(rotate_warp_ip, f"Whale_{sym}", "HTTP_429")
+                        except Exception as rot_err:
+                            logger.error("[WHALE][%s] Immediate WARP rotation failed: %s", sym, rot_err)
+                        try:
+                            await cdp_eval(ws, "window.location.reload()", timeout=5)
+                            await asyncio.sleep(4.0)
+                            dataset = await adapter.harvest_symbol_orders_on_ws(ws, sym)
+                            display_only = sym.upper() not in equity
+                            await asyncio.to_thread(display_repo.persist_dataset, dataset, display_only)
+                            await asyncio.to_thread(quant_repo.persist_dataset, dataset, False)
+                            count += 1
+                            logger.info("[WHALE][%s] Successfully harvested on fresh IP after immediate rotation!", sym)
+                            continue
+                        except Exception as retry_exc:
+                            logger.error("[WHALE][%s] Retry on fresh IP failed: %s", sym, retry_exc)
+                    if failed_symbols is not None:
+                        failed_symbols.add(sym)
+                    logger.error("[WHALE][%s] Harvest failed: %s", sym, exc)
+    finally:
+        if tab_id:
+            await adapter.close_tab(tab_id)
     return count
 
 
@@ -251,12 +299,30 @@ async def harvest_liquidation_chunk(symbols: List[str], chunk_idx: int, rate_sig
                         raise ValueError("Liquidation read-back completeness failed")
                     await asyncio.sleep(1.0)
                 except Exception as exc:
+                    err_text = str(exc)
+                    is_rate_limit = any(k in err_text for k in ("LIQUIDATION_RATE_SIGNAL", "HTTP_429", "RATE_LIMIT_BANNER", "CHALLENGE"))
+                    if is_rate_limit:
+                        logger.warning("[LIQ][%s] Rate limit encountered (%s). Rotating IP immediately on the spot...", sym, err_text)
+                        if rate_signals is not None:
+                            matched = next((r for r in ("CHALLENGE", "RATE_LIMIT_BANNER", "HTTP_429") if r in err_text), "HTTP_429")
+                            rate_signals.add(matched)
+                        try:
+                            await asyncio.to_thread(rotate_warp_ip, f"Liq_{sym}", "HTTP_429")
+                        except Exception as rot_err:
+                            logger.error("[LIQ][%s] Immediate WARP rotation failed: %s", sym, rot_err)
+                        try:
+                            await cdp_eval(ws, "window.location.reload()", timeout=5)
+                            await asyncio.sleep(4.0)
+                            data, _ = await harvest_symbol_liquidation(ws, sym)
+                            count += await asyncio.to_thread(persist_asset_liquidation, sym, data)
+                            if not await asyncio.to_thread(is_asset_dump_complete, sym):
+                                raise ValueError("Liquidation completeness failed after retry")
+                            logger.info("[LIQ][%s] Successfully harvested on fresh IP after immediate rotation!", sym)
+                            continue
+                        except Exception as retry_exc:
+                            logger.error("[LIQ][%s] Retry on fresh IP failed: %s", sym, retry_exc)
                     if failed_symbols is not None:
                         failed_symbols.add(sym)
-                    if "LIQUIDATION_RATE_SIGNAL:" in str(exc) and rate_signals is not None:
-                        sig = str(exc).split("LIQUIDATION_RATE_SIGNAL:", 1)[1].strip()
-                        rate_signals.add(sig)
-                        logger.warning("[LIQ][%s] Rate limit observed (%s); continuing remaining symbols in chunk", sym, sig)
                     logger.error("[LIQ][%s] Harvest failed: %s", sym, exc)
     finally:
         if tab_id:
